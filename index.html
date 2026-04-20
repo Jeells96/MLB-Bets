@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ · Prop Intelligence</title>
+<title>Diamond IQ v2 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -282,7 +282,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · Live API</div>
+      <div class="bsub">Prop Intelligence · v2 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -572,7 +572,8 @@ function extractLineup(players,team,opp){
       id:p.person.id,
       name:p.person.fullName,
       order:parseInt(String(p.battingOrder)[0])||null,
-      bats:p.batSide?.code||'R',
+      // batSide can live on the player entry OR on person.batSide — try both, then null to fetch later
+      bats:p.batSide?.code||p.person?.batSide?.code||null,
       pos:p.position?.abbreviation||'',
       team,opp
     }))
@@ -980,23 +981,25 @@ async function loadAll(){
       if(g.aSP?.id)pitcherIds.add(g.aSP.id);
     });
     
-    // Step 7: Fetch batter stats (with concurrency limit)
+    // Step 7: Fetch batter stats + handedness (with concurrency limit)
     const batArr=Array.from(batterIds);
     progress(6,10,`Batter stats (${batArr.length})…`);
     await batchFetch(batArr,async (id,i)=>{
-      const stats=await fetchBatterStats(id,SEASON);
+      const [stats,hand]=await Promise.all([
+        fetchBatterStats(id,SEASON),
+        fetchPersonHand(id)
+      ]);
       // If no season data yet (early season), try previous season
       if(!stats.overall.pa||stats.overall.pa<30){
         const prev=await fetchBatterStats(id,PREV_SEASON);
         if(prev.overall.pa){
-          // Use prev but flag
           prev.isPrevSeason=true;
-          STATE.players[id]={...stats,prev};
+          STATE.players[id]={...stats,prev,batHand:hand.batHand};
         }else{
-          STATE.players[id]=stats;
+          STATE.players[id]={...stats,batHand:hand.batHand};
         }
       }else{
-        STATE.players[id]=stats;
+        STATE.players[id]={...stats,batHand:hand.batHand};
       }
       progress(6+(i/batArr.length)*2,10,'Batters…');
     },6);
@@ -1449,10 +1452,14 @@ function estimateTeamRuns(lineup,opposingPitcher,pHand,park,wx,venue){
 function buildAllMatchups(){
   STATE.matchups=[];
   
-  // Tag bats on stats object for all batters (needed for switch-hitter logic)
+  // Backfill b.bats from the person endpoint handedness we fetched during stats load,
+  // and tag bats on stats object for switch-hitter logic
   STATE.games.forEach(g=>{
     [...g.hLineup,...g.aLineup].forEach(b=>{
       const p=STATE.players[b.id];
+      // If lineup didn't carry handedness, use the person-endpoint value we fetched alongside stats
+      if(!b.bats&&p?.batHand)b.bats=p.batHand;
+      if(!b.bats)b.bats='R'; // absolute last resort
       if(p)p._bats=b.bats;
     });
   });
@@ -2590,13 +2597,14 @@ function renderExplainK(m){
 }
 
 
-function renderBatterCard(batterId,pitcherId){
-  const p=STATE.players[batterId];
+function renderBatterCard(batterId,pitcherId,propType){
+  const bid=String(batterId),pid=String(pitcherId);
+  const p=STATE.players[bid]||STATE.players[batterId];
   if(!p)return '<div class="empty">Batter not found</div>';
   
-  // Find relevant matchup
-  const m=STATE.matchups.find(mm=>mm.kind==='batter'&&mm.batterId===batterId&&mm.pitcherId===pitcherId)
-        ||STATE.matchups.find(mm=>mm.kind==='batter'&&mm.batterId===batterId);
+  // Find relevant matchup (string-safe ID compare)
+  const m=STATE.matchups.find(mm=>mm.kind==='batter'&&String(mm.batterId)===bid&&String(mm.pitcherId)===pid)
+        ||STATE.matchups.find(mm=>mm.kind==='batter'&&String(mm.batterId)===bid);
   if(!m)return '<div class="empty">No matchup for this batter</div>';
   
   const pit=STATE.pitchers[m.pitcherId];
@@ -2627,9 +2635,10 @@ function renderBatterCard(batterId,pitcherId){
       ${pb('Hit Grade',m.hitGrade?.grade,getRat(m.hitGrade?.grade))}
     </div>
     
-    ${renderExplain(m,'hit')}
-    ${renderExplain(m,'tb')}
-    ${renderExplain(m,'hr')}
+    ${(()=>{
+      const order=propType==='hr'?['hr','hit','tb']:propType==='tb'?['tb','hit','hr']:['hit','tb','hr'];
+      return order.map(t=>renderExplain(m,t)).join('');
+    })()}
     <div class="conf-bar">
       <div class="conf-top"><span>Data Confidence</span><span>${conf}%</span></div>
       <div class="conf-track"><div class="conf-fill" style="width:${conf}%;background:${conf>=70?'var(--gn)':conf>=50?'var(--gd)':'var(--rd)'}"></div></div>
@@ -2781,14 +2790,15 @@ function renderPitcherCard(pitcherId){
 function openBatterMo(batterId,pitcherId,propType){
   const mh=document.getElementById('mh');
   const mb=document.getElementById('mb');
-  const m=STATE.matchups.find(mm=>mm.kind==='batter'&&mm.batterId===batterId&&mm.pitcherId===pitcherId);
-  if(!m){return;}
+  const bid=String(batterId),pid=String(pitcherId);
+  const m=STATE.matchups.find(mm=>mm.kind==='batter'&&String(mm.batterId)===bid&&String(mm.pitcherId)===pid);
+  if(!m){console.warn('[DIQ] openBatterMo: no matchup for',bid,pid);return;}
   mh.innerHTML=`<div>
     <div style="font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px">${m.batterName}</div>
     <div style="font-size:.58rem;color:var(--mt2);margin-top:2px">${m.bats==='L'?'LHB':m.bats==='S'?'SHB':'RHB'} · #${m.order} · ${m.team.abbr||m.team.name} · vs <span style="color:${hc(m.pHand)}">${m.pHand}HP</span> ${m.pitcherName}</div>
   </div>
   <button class="mc" onclick="closeMo()">✕</button>`;
-  mb.innerHTML=renderBatterCard(batterId,pitcherId);
+  mb.innerHTML=renderBatterCard(batterId,pitcherId,propType);
   document.getElementById('mo').classList.add('open');
   document.body.style.overflow='hidden';
 }
@@ -2796,8 +2806,9 @@ function openBatterMo(batterId,pitcherId,propType){
 function openPitcherMo(pitcherId){
   const mh=document.getElementById('mh');
   const mb=document.getElementById('mb');
-  const m=STATE.matchups.find(mm=>mm.kind==='pitcher'&&mm.pitcherId===pitcherId);
-  if(!m){return;}
+  const pid=String(pitcherId);
+  const m=STATE.matchups.find(mm=>mm.kind==='pitcher'&&String(mm.pitcherId)===pid);
+  if(!m){console.warn('[DIQ] openPitcherMo: no matchup for',pid);return;}
   mh.innerHTML=`<div>
     <div style="font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px">${m.pitcherName}</div>
     <div style="font-size:.58rem;color:var(--mt2);margin-top:2px"><span style="color:${hc(m.pHand)}">${m.pHand}HP</span> · ${m.team.abbr||m.team.name} vs ${m.opp.abbr||m.opp.name}</div>
