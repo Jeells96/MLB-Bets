@@ -192,6 +192,47 @@ tbody td.l{text-align:left}
 .cb2{height:4px;background:var(–bdr);border-radius:2px;margin-top:4px;overflow:hidden}
 .cf2{height:100%;border-radius:2px;background:var(–ac);transition:width .3s}
 
+/* ============ WHY EXPLANATION ============ */
+.why-box{background:var(–s0);border:1px solid var(–bdr);border-radius:10px;padding:11px 12px;margin-bottom:10px}
+.why-title{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.76rem;letter-spacing:.11em;text-transform:uppercase;color:var(–ac);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.why-math{background:var(–s2);border:1px solid var(–bdr2);border-radius:7px;padding:8px 10px;margin-bottom:10px;font-size:.64rem}
+.why-math-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;gap:8px}
+.why-math-lbl{color:var(–mt2);flex:0 0 auto}
+.why-math-val{font-family:‘Barlow Condensed’,sans-serif;font-weight:800;font-size:.95rem}
+.why-math-bar{flex:1;height:3px;background:var(–bdr);border-radius:2px;min-width:40px;max-width:120px;margin:0 6px}
+.why-math-fill{height:100%;border-radius:2px;transition:width .3s}
+.why-math-eq{border-top:1px dashed var(–bdr2);margin-top:6px;padding-top:6px;font-family:‘DM Mono’,monospace;font-size:.56rem;color:var(–mt2);text-align:center;line-height:1.5}
+.why-math-eq b{color:var(–tx);font-family:‘Barlow Condensed’,sans-serif;font-weight:800;font-size:.82rem}
+
+.why-section{margin-top:9px}
+.why-section-h{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(–mt2);margin-bottom:5px;display:flex;align-items:center;gap:5px;padding-bottom:3px;border-bottom:1px solid var(–bdr)}
+.why-row{display:grid;grid-template-columns:1fr auto;gap:3px 8px;padding:4px 0;border-bottom:1px solid rgba(30,45,69,.3);font-size:.64rem;align-items:center}
+.why-row:last-child{border-bottom:none}
+.why-row-top{display:flex;justify-content:space-between;align-items:baseline;gap:6px;min-width:0}
+.why-row-lbl{color:var(–tx);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.why-row-val{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.78rem;color:var(–tx2);flex:0 0 auto}
+.why-row-avg{font-size:.55rem;color:var(–mt);margin-left:4px;font-weight:400}
+.why-row-bar{grid-column:1/-1;height:3px;background:var(–bdr);border-radius:2px;margin-top:2px}
+.why-row-fill{height:100%;border-radius:2px;transition:width .3s}
+.why-row-meta{display:flex;align-items:center;gap:5px;font-size:.55rem;color:var(–mt2);white-space:nowrap}
+.why-row-score{font-family:‘Barlow Condensed’,sans-serif;font-weight:800;font-size:.75rem;min-width:24px;text-align:right}
+.why-row-weight{color:var(–mt);font-size:.55rem}
+
+.why-pos{border-left:2px solid var(–gn);padding-left:8px;margin-left:-10px;padding-right:0}
+.why-neg{border-left:2px solid var(–rd);padding-left:8px;margin-left:-10px;padding-right:0}
+.why-neu{border-left:2px solid var(–bdr);padding-left:8px;margin-left:-10px;padding-right:0}
+
+.why-mod{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:.64rem;border-bottom:1px solid rgba(30,45,69,.3)}
+.why-mod:last-child{border-bottom:none}
+.why-mod-x{font-family:‘Barlow Condensed’,sans-serif;font-weight:800;font-size:.82rem;padding:0 8px}
+
+.why-k-table{width:100%;font-size:.58rem;border-collapse:collapse}
+.why-k-table th{text-align:right;padding:4px 5px;font-family:‘Barlow Condensed’,sans-serif;font-size:.52rem;letter-spacing:.08em;text-transform:uppercase;color:var(–mt);border-bottom:1px solid var(–bdr);font-weight:700}
+.why-k-table th.l{text-align:left}
+.why-k-table td{padding:4px 5px;text-align:right;border-bottom:1px solid rgba(30,45,69,.25)}
+.why-k-table td.l{text-align:left}
+.why-k-table tfoot td{border-top:1px solid var(–bdr2);font-family:‘Barlow Condensed’,sans-serif;font-weight:800;font-size:.72rem;padding-top:5px}
+
 /* ============ WEATHER CARD ============ */
 .wx{display:flex;align-items:center;gap:8px;font-size:.64rem;padding:6px 10px;background:var(–s2);border:1px solid var(–bdr);border-radius:8px;margin-top:6px;flex-wrap:wrap}
 .wx-lbl{color:var(–mt);font-size:.54rem;text-transform:uppercase;letter-spacing:.08em}
@@ -257,6 +298,7 @@ details summary:hover{color:var(–tx)}
     <div class="tab active" id="t-dash" onclick="sw('dash')">📊 Dashboard</div>
     <div class="tab" id="t-hits" onclick="sw('hits')">🎯 Hits <span class="tab-ct" id="c-hits">–</span></div>
     <div class="tab" id="t-hr" onclick="sw('hr')">💥 HR</div>
+    <div class="tab" id="t-tb" onclick="sw('tb')">🏟️ TB</div>
     <div class="tab" id="t-k" onclick="sw('k')">⚡ Ks</div>
     <div class="tab" id="t-tot" onclick="sw('tot')">🎲 Totals</div>
     <div class="tab" id="t-srch" onclick="sw('srch')">🔍 Player</div>
@@ -352,6 +394,7 @@ const UI={
   tab:'dash',
   hitsSort:{c:'sc',d:-1},
   hrSort:{c:'sc',d:-1},
+  tbSort:{c:'sc',d:-1},
   kSort:{c:'sc',d:-1},
   totSort:{c:'total',d:-1},
   filt:{hits:'',hr:'',k:''},
@@ -1087,13 +1130,13 @@ function blendStat(sp,ov,key,nStab=50){
 }
 
 // === BATTER HIT GRADE (0-100, higher = more likely to get a hit) ===
+// Returns {grade, components:[{label,value,avg,z,weight,contribution,good}]}
 function batterHitGrade(p,pHand){
   if(!p||!p.overall.pa)return null;
   const L=STATE.leagueAvg;
   const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
   const sp=batterSplit(p.prev?.isPrevSeason?p.prev:p,pHand);
   
-  // Blend split + overall
   const xBA=blendStat(sp,ov,'xBA',60)??ov.xBA;
   const avg=blendStat(sp,ov,'avg',80)??ov.avg;
   const obp=blendStat(sp,ov,'obp',60)??ov.obp;
@@ -1101,29 +1144,46 @@ function batterHitGrade(p,pHand){
   const kr=blendStat(sp,ov,'k_rate',100)??ov.k_rate;
   const babip=blendStat(sp,ov,'babip',150)??ov.babip;
   const hardHit=ov.hardHit;
-  
-  // Recent form blend (last 15 games)
   const rec=p.recent||{};
   const recAvg=rec.avg;
   const recWeight=rec.pa&&rec.pa>=40?0.15:0;
   
-  // Build components
-  const c1=scale(xBA,L.b_xBA,L.b_xBA*1.22);             // expected BA
-  const c2=scale(avg,L.b_avg,L.b_avg*1.22);             // actual BA
-  const c3=scale(obp,L.b_obp,L.b_obp*1.22);             // OBP
-  const c4=scale(xwOBA,L.b_xwOBA,L.b_xwOBA*1.22);       // xwOBA
-  const c5=100-scale(kr,L.b_k,L.b_k*1.45);              // low K% = good
-  const c6=scale(babip||L.b_avg*1.2,0.280,0.360);       // BABIP (luck)
-  const c7=hardHit!=null?scale(hardHit,L.b_hardHit||38,(L.b_hardHit||38)*1.32):50;
-  const c8=recAvg!=null?scale(recAvg,L.b_avg,L.b_avg*1.3):50;
+  // Build component list with metadata
+  const comps=[
+    {label:'xBA (expected BA)',raw:xBA,avg:L.b_xBA,elite:L.b_xBA*1.22,weight:0.22,good:'high',fmt:'3'},
+    {label:'wOBA overall',raw:avg,avg:L.b_avg,elite:L.b_avg*1.22,weight:0.12,good:'high',fmt:'3'},
+    {label:'OBP blended',raw:obp,avg:L.b_obp,elite:L.b_obp*1.22,weight:0.12,good:'high',fmt:'3'},
+    {label:'xwOBA blended',raw:xwOBA,avg:L.b_xwOBA,elite:L.b_xwOBA*1.22,weight:0.18,good:'high',fmt:'3'},
+    {label:'K% (inverse)',raw:kr,avg:L.b_k,elite:L.b_k*1.45,weight:0.12,good:'low',fmt:'%'},
+    {label:'BABIP (luck)',raw:babip||L.b_avg*1.2,avg:0.300,elite:0.360,weight:0.05,good:'high',fmt:'3'},
+    {label:'Hard Hit%',raw:hardHit,avg:L.b_hardHit||38,elite:(L.b_hardHit||38)*1.32,weight:0.10,good:'high',fmt:'1%'},
+    {label:`Last 15G AVG`,raw:recAvg,avg:L.b_avg,elite:L.b_avg*1.3,weight:recWeight,good:'high',fmt:'3',note:rec.pa?rec.pa+' PA':'small sample'}
+  ];
   
-  // Sample weight (regress to 50 if very limited PA)
+  // Compute each component's scaled score + contribution
+  let rawTotal=0;
+  comps.forEach(c=>{
+    if(c.raw==null){c.scaled=50;c.contribution=50*c.weight;rawTotal+=c.contribution;return;}
+    let s=scale(c.raw,c.avg,c.elite);
+    if(c.good==='low')s=100-s;
+    c.scaled=s;
+    c.contribution=s*c.weight;
+    rawTotal+=c.contribution;
+  });
+  // Fill dead weight from empty recent
+  if(recWeight===0){rawTotal+=50*(0.09-recWeight);}
+  
   const pa=ov.pa||0;
   const sampleW=clamp(pa/80,0.4,1);
+  const grade=50+(rawTotal-50)*sampleW;
   
-  const raw=c1*0.22+c2*0.12+c3*0.12+c4*0.18+c5*0.12+c6*0.05+c7*0.10+c8*recWeight+50*(0.09-recWeight);
-  const grade=50+(raw-50)*sampleW;
-  return Math.round(grade*10)/10;
+  return {
+    grade:Math.round(grade*10)/10,
+    rawTotal:Math.round(rawTotal*10)/10,
+    sampleW:Math.round(sampleW*100)/100,
+    components:comps,
+    notes:sampleW<1?`Regressed ${Math.round((1-sampleW)*100)}% toward 50 (small sample: ${pa} PA)`:null
+  };
 }
 
 // === BATTER HR GRADE (0-100, higher = more likely to hit HR) ===
@@ -1139,39 +1199,137 @@ function batterHRGrade(p,pHand,park,wx,venue){
   const hrRate=blendStat(sp,ov,'hr_rate',150)??ov.hr_rate;
   const xISO=ov.xISO;
   const hardHit=ov.hardHit;
-  
-  const c1=scale(xSLG,L.b_xSLG,L.b_xSLG*1.35);
-  const c2=scale(slg,L.b_slg,L.b_slg*1.35);
-  const c3=scale(iso,L.b_iso,L.b_iso*1.6);
-  const c4=scale(hrRate,L.b_hr,L.b_hr*2.0);
-  const c5=xISO!=null?scale(xISO,0.160,0.280):50;
-  const c6=hardHit!=null?scale(hardHit,L.b_hardHit||38,(L.b_hardHit||38)*1.35):50;
-  
-  // Recent HR spike bonus
   const rec=p.recent||{};
   const recHrPerG=rec.g&&rec.hr?rec.hr/rec.g:null;
-  const c7=recHrPerG!=null?scale(recHrPerG,0.08,0.30):50;
+  
+  const comps=[
+    {label:'xSLG (expected SLG)',raw:xSLG,avg:L.b_xSLG,elite:L.b_xSLG*1.35,weight:0.22,good:'high',fmt:'3'},
+    {label:'SLG blended',raw:slg,avg:L.b_slg,elite:L.b_slg*1.35,weight:0.10,good:'high',fmt:'3'},
+    {label:'ISO (power)',raw:iso,avg:L.b_iso,elite:L.b_iso*1.6,weight:0.14,good:'high',fmt:'3'},
+    {label:'HR rate',raw:hrRate,avg:L.b_hr,elite:L.b_hr*2.0,weight:0.15,good:'high',fmt:'3'},
+    {label:'xISO',raw:xISO,avg:0.160,elite:0.280,weight:0.10,good:'high',fmt:'3'},
+    {label:'Hard Hit%',raw:hardHit,avg:L.b_hardHit||38,elite:(L.b_hardHit||38)*1.35,weight:0.20,good:'high',fmt:'1%'},
+    {label:`Recent HR/G (last 15)`,raw:recHrPerG,avg:0.08,elite:0.30,weight:0.09,good:'high',fmt:'2',note:rec.g?`${rec.hr} HR in ${rec.g}G`:'—'}
+  ];
+  
+  let rawTotal=0;
+  comps.forEach(c=>{
+    if(c.raw==null){c.scaled=50;c.contribution=50*c.weight;rawTotal+=c.contribution;return;}
+    let s=scale(c.raw,c.avg,c.elite);
+    if(c.good==='low')s=100-s;
+    c.scaled=s;
+    c.contribution=s*c.weight;
+    rawTotal+=c.contribution;
+  });
   
   const pa=ov.pa||0;
   const sampleW=clamp(pa/100,0.4,1);
+  let grade=50+(rawTotal-50)*sampleW;
   
-  let raw=c1*0.22+c2*0.10+c3*0.14+c4*0.15+c5*0.10+c6*0.20+c7*0.09;
-  let grade=50+(raw-50)*sampleW;
-  
-  // Apply park and weather multipliers on top
+  // External factors (park + weather) — capture for display
+  const factors=[];
+  let parkAdj=0,wxAdj=0;
   if(park&&park.hr){
-    // park factor 1.2 -> +10% to grade delta from 50
-    const parkAdj=(park.hr-1)*50;
-    grade+=parkAdj*0.4;
+    parkAdj=(park.hr-1)*50*0.4;
+    grade+=parkAdj;
+    factors.push({label:`Park HR factor`,value:park.hr.toFixed(2),adj:parkAdj,note:park.hr>1?'hitter-friendly':park.hr<1?'pitcher-friendly':'neutral'});
   }
   if(wx&&!DOMED.has(venue)){
     const windF=windHRFactor(venue,wx);
     const tempF=tempHRFactor(wx.temp);
-    const wxAdj=((windF*tempF)-1)*50;
-    grade+=wxAdj*0.5;
+    wxAdj=((windF*tempF)-1)*50*0.5;
+    grade+=wxAdj;
+    factors.push({label:`Wind→HR`,value:windF.toFixed(2),adj:(windF-1)*25,note:`${Math.round(wx.windSpeed||0)}mph`});
+    factors.push({label:`Temp carry`,value:tempF.toFixed(2),adj:(tempF-1)*25,note:`${Math.round(wx.temp||0)}°F`});
+  }else if(DOMED.has(venue)){
+    factors.push({label:`Dome`,value:'—',adj:0,note:'weather neutral'});
   }
   
-  return Math.round(clamp(grade,0,100)*10)/10;
+  return {
+    grade:Math.round(clamp(grade,0,100)*10)/10,
+    rawTotal:Math.round(rawTotal*10)/10,
+    sampleW:Math.round(sampleW*100)/100,
+    components:comps,
+    factors,
+    notes:sampleW<1?`Regressed ${Math.round((1-sampleW)*100)}% toward 50 (${pa} PA)`:null
+  };
+}
+
+// === BATTER TOTAL BASES GRADE (0-100) ===
+// TB blends hit probability with power — at 1.5 line you need either frequent singles or occasional XBH
+// Weights sit between Hit and HR models
+function batterTBGrade(p,pHand,park,wx,venue){
+  if(!p||!p.overall.pa)return null;
+  const L=STATE.leagueAvg;
+  const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
+  const sp=batterSplit(p.prev?.isPrevSeason?p.prev:p,pHand);
+  
+  const xSLG=blendStat(sp,ov,'xSLG',60)??ov.xSLG;
+  const slg=blendStat(sp,ov,'slg',60)??ov.slg;
+  const xBA=blendStat(sp,ov,'xBA',60)??ov.xBA;
+  const avg=blendStat(sp,ov,'avg',80)??ov.avg;
+  const iso=blendStat(sp,ov,'iso',60)??ov.iso;
+  const xwOBA=blendStat(sp,ov,'xwOBA',60)??ov.xwOBA;
+  const kr=blendStat(sp,ov,'k_rate',100)??ov.k_rate;
+  const hardHit=ov.hardHit;
+  const rec=p.recent||{};
+  const recSLG=rec.slg;
+  
+  // TB per PA ≈ SLG × AB/PA ≈ SLG × 0.9. Elite is ~0.55 TB/PA (Judge-tier)
+  const comps=[
+    {label:'xSLG (expected SLG)',raw:xSLG,avg:L.b_xSLG,elite:L.b_xSLG*1.32,weight:0.25,good:'high',fmt:'3'},
+    {label:'SLG blended',raw:slg,avg:L.b_slg,elite:L.b_slg*1.32,weight:0.15,good:'high',fmt:'3'},
+    {label:'xBA (hit probability)',raw:xBA,avg:L.b_xBA,elite:L.b_xBA*1.22,weight:0.15,good:'high',fmt:'3'},
+    {label:'AVG blended',raw:avg,avg:L.b_avg,elite:L.b_avg*1.22,weight:0.08,good:'high',fmt:'3'},
+    {label:'ISO (XBH rate)',raw:iso,avg:L.b_iso,elite:L.b_iso*1.5,weight:0.12,good:'high',fmt:'3'},
+    {label:'xwOBA',raw:xwOBA,avg:L.b_xwOBA,elite:L.b_xwOBA*1.22,weight:0.08,good:'high',fmt:'3'},
+    {label:'K% (inverse)',raw:kr,avg:L.b_k,elite:L.b_k*1.4,weight:0.05,good:'low',fmt:'%'},
+    {label:'Hard Hit%',raw:hardHit,avg:L.b_hardHit||38,elite:(L.b_hardHit||38)*1.3,weight:0.07,good:'high',fmt:'1%'},
+    {label:`Last 15G SLG`,raw:recSLG,avg:L.b_slg,elite:L.b_slg*1.25,weight:0.05,good:'high',fmt:'3',note:rec.pa?rec.pa+' PA':'—'}
+  ];
+  
+  let rawTotal=0;
+  comps.forEach(c=>{
+    if(c.raw==null){c.scaled=50;c.contribution=50*c.weight;rawTotal+=c.contribution;return;}
+    let s=scale(c.raw,c.avg,c.elite);
+    if(c.good==='low')s=100-s;
+    c.scaled=s;
+    c.contribution=s*c.weight;
+    rawTotal+=c.contribution;
+  });
+  
+  const pa=ov.pa||0;
+  const sampleW=clamp(pa/90,0.4,1);
+  let grade=50+(rawTotal-50)*sampleW;
+  
+  // Park + weather lite (TB still benefits from HR factor but less than pure HR prop)
+  const factors=[];
+  if(park&&park.hr){
+    // Blend park HR and park H factors
+    const parkCombined=(park.hr*0.6+park.h*0.4);
+    const parkAdj=(parkCombined-1)*50*0.3;
+    grade+=parkAdj;
+    factors.push({label:`Park (HR × hits)`,value:parkCombined.toFixed(2),adj:parkAdj,note:parkCombined>1?'hitter-friendly':'pitcher-friendly'});
+  }
+  if(wx&&!DOMED.has(venue)){
+    const windF=windHRFactor(venue,wx);
+    const tempF=tempHRFactor(wx.temp);
+    const wxAdj=((windF*tempF)-1)*50*0.3;
+    grade+=wxAdj;
+    factors.push({label:`Wind→HR`,value:windF.toFixed(2),adj:(windF-1)*15,note:`${Math.round(wx.windSpeed||0)}mph`});
+    factors.push({label:`Temp carry`,value:tempF.toFixed(2),adj:(tempF-1)*15,note:`${Math.round(wx.temp||0)}°F`});
+  }else if(DOMED.has(venue)){
+    factors.push({label:`Dome`,value:'—',adj:0,note:'weather neutral'});
+  }
+  
+  return {
+    grade:Math.round(clamp(grade,0,100)*10)/10,
+    rawTotal:Math.round(rawTotal*10)/10,
+    sampleW:Math.round(sampleW*100)/100,
+    components:comps,
+    factors,
+    notes:sampleW<1?`Regressed ${Math.round((1-sampleW)*100)}% toward 50 (${pa} PA)`:null
+  };
 }
 
 // === PITCHER K GRADE for a specific pitcher vs lineup ===
@@ -1310,25 +1468,25 @@ function buildAllMatchups(){
       const sp=STATE.pitchers[g.aSP?.id];
       if(!p)return;
       const pHand=g.aSPHand||'R';
-      const hitG=batterHitGrade(p,pHand);
-      const hrG=batterHRGrade(p,pHand,park,wx,venue);
+      const hitGObj=batterHitGrade(p,pHand);
+      const hrGObj=batterHRGrade(p,pHand,park,wx,venue);
+      const tbGObj=batterTBGrade(p,pHand,park,wx,venue);
       const pitG=pitcherHitSuppressG(sp,b.bats);
       const pitHRSupG=pitcherHRSuppressG(sp,b.bats);
       const pitKProneG=pitcherKGenG(sp,b.bats);
       
-      // Combine batter vs pitcher grades -> final matchup score
-      const hitScore=combineMatchup(hitG,pitG,b.order);
-      const hrScore=combineMatchup(hrG,pitHRSupG,b.order);
-      // Batter K prop not typical but we can estimate if user wants
+      const hitScore=combineMatchup(hitGObj?.grade,pitG,b.order);
+      const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
+      const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       
       STATE.matchups.push({
         kind:'batter',
         game:g,team:g.home,opp:g.away,park,wx,venue,
         batterId:b.id,batterName:b.name,bats:b.bats,order:b.order,unconfirmed:b.unconfirmed,
         pitcherId:g.aSP?.id,pitcherName:g.aSP?.name||'TBD',pHand,
-        hitGrade:hitG,hrGrade:hrG,
+        hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,
+        hitScore,hrScore,tbScore,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -1339,23 +1497,25 @@ function buildAllMatchups(){
       const sp=STATE.pitchers[g.hSP?.id];
       if(!p)return;
       const pHand=g.hSPHand||'R';
-      const hitG=batterHitGrade(p,pHand);
-      const hrG=batterHRGrade(p,pHand,park,wx,venue);
+      const hitGObj=batterHitGrade(p,pHand);
+      const hrGObj=batterHRGrade(p,pHand,park,wx,venue);
+      const tbGObj=batterTBGrade(p,pHand,park,wx,venue);
       const pitG=pitcherHitSuppressG(sp,b.bats);
       const pitHRSupG=pitcherHRSuppressG(sp,b.bats);
       const pitKProneG=pitcherKGenG(sp,b.bats);
       
-      const hitScore=combineMatchup(hitG,pitG,b.order);
-      const hrScore=combineMatchup(hrG,pitHRSupG,b.order);
+      const hitScore=combineMatchup(hitGObj?.grade,pitG,b.order);
+      const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
+      const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       
       STATE.matchups.push({
         kind:'batter',
         game:g,team:g.away,opp:g.home,park,wx,venue,
         batterId:b.id,batterName:b.name,bats:b.bats,order:b.order,unconfirmed:b.unconfirmed,
         pitcherId:g.hSP?.id,pitcherName:g.hSP?.name||'TBD',pHand,
-        hitGrade:hitG,hrGrade:hrG,
+        hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,
+        hitScore,hrScore,tbScore,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -1512,6 +1672,7 @@ function renderTab(){
     case 'dash':renderDashboard();break;
     case 'hits':renderHits();break;
     case 'hr':renderHRs();break;
+    case 'tb':renderTB();break;
     case 'k':renderKs();break;
     case 'tot':renderTotals();break;
     case 'srch':renderSrch();break;
@@ -1534,6 +1695,7 @@ function renderDashboard(){
   
   const topHits=STATE.matchups.filter(m=>m.kind==='batter'&&m.hitScore!=null).sort((a,b)=>b.hitScore-a.hitScore).slice(0,6);
   const topHRs=STATE.matchups.filter(m=>m.kind==='batter'&&m.hrScore!=null).sort((a,b)=>b.hrScore-a.hrScore).slice(0,6);
+  const topTBs=STATE.matchups.filter(m=>m.kind==='batter'&&m.tbScore!=null).sort((a,b)=>b.tbScore-a.tbScore).slice(0,6);
   const topKs=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).sort((a,b)=>b.kGrade-a.kGrade).slice(0,6);
   const topTots=[...STATE.totals].filter(t=>t.total!=null).sort((a,b)=>b.total-a.total).slice(0,6);
   
@@ -1565,6 +1727,13 @@ function renderDashboard(){
     `openBatterMo('${m.batterId}','${m.pitcherId}','hr')`
   )).join('');
   
+  const tbsHTML=topTBs.map(m=>row(
+    m.batterName,
+    `${m.team.abbr||m.team.name} · #${m.order} · vs ${m.pitcherName}`,
+    m.tbScore,
+    `openBatterMo('${m.batterId}','${m.pitcherId}','tb')`
+  )).join('');
+  
   const ksHTML=topKs.map(m=>row(
     m.pitcherName,
     `${m.team.abbr||m.team.name} · ~${m.expectedK} Ks (${m.expectedIP} IP) vs ${m.opp.abbr||m.opp.name}`,
@@ -1591,6 +1760,10 @@ function renderDashboard(){
       <div class="dash-tile">
         <div class="dash-t-h"><div class="dash-t-l">💥 Top HR Plays</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('hr')">all →</button></div>
         ${hrsHTML||'<div class="info">No qualifying batters</div>'}
+      </div>
+      <div class="dash-tile">
+        <div class="dash-t-h"><div class="dash-t-l">🏟️ Top TB Plays</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('tb')">all →</button></div>
+        ${tbsHTML||'<div class="info">No qualifying batters</div>'}
       </div>
       <div class="dash-tile">
         <div class="dash-t-h"><div class="dash-t-l">⚡ Top K Plays</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('k')">all →</button></div>
@@ -1753,6 +1926,78 @@ function renderHRs(){
   `);
 }
 function sortHR(c){if(UI.hrSort.c===c)UI.hrSort.d*=-1;else{UI.hrSort.c=c;UI.hrSort.d=c==='n'?1:-1;}renderHRs();}
+
+/* ---------- TOTAL BASES TAB ---------- */
+function renderTB(){
+  const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.tbScore!=null);
+  if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
+  
+  const sortKey={sc:'tbScore',n:'batterName',ord:'order'}[UI.tbSort.c]||'tbScore';
+  data.sort((a,b)=>{
+    if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.tbSort.d;
+    return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.tbSort.d;
+  });
+  
+  const lk=data.filter(m=>m.tbScore>=72).length;
+  const ht=data.filter(m=>m.tbScore>=62&&m.tbScore<72).length;
+  const ln=data.filter(m=>m.tbScore>=52&&m.tbScore<62).length;
+  
+  const rows=data.map(m=>{
+    const r=getRat(m.tbScore);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const p=STATE.players[m.batterId];
+    const ov=p?.overall||{};
+    const sp=p?batterSplit(p,m.pHand,m.bats):{};
+    const windFactor=m.wx&&!DOMED.has(m.venue)?windHRFactor(m.venue,m.wx):1;
+    const windFStr=windFactor!==1?(windFactor>1?'↑':'↓')+((Math.abs(windFactor-1)*100).toFixed(0))+'%':'';
+    const windC=windFactor>1.03?'var(--gn)':windFactor<0.97?'var(--rd)':'var(--mt)';
+    
+    return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','tb')">
+      <td>${sbar(m.tbScore)}</td>
+      <td>${bdg(r)}</td>
+      <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
+      <td style="color:var(--mt2)">${m.team.abbr||''}</td>
+      <td style="color:var(--mt2)">${m.order||''}</td>
+      <td><span style="color:${hc(m.bats)}">${m.bats}</span>→<span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
+      <td class="l" style="max-width:100px;overflow:hidden;text-overflow:ellipsis">${m.pitcherName}</td>
+      <td>${fmt(sp?.xSLG??ov.xSLG,3)}</td>
+      <td>${fmt(sp?.xBA??ov.xBA,3)}</td>
+      <td>${fmt(sp?.slg??ov.slg,3)}</td>
+      <td>${fmt(sp?.avg??ov.avg,3)}</td>
+      <td>${fmt(sp?.iso??ov.iso,3)}</td>
+      <td>${ov.hardHit!=null?ov.hardHit.toFixed(1)+'%':'—'}</td>
+      <td>${m.park?.hr!=null?m.park.hr.toFixed(2):'—'}</td>
+      <td style="color:${windC};font-size:.62rem">${windFStr||'—'}</td>
+    </tr>`;
+  }).join('');
+  
+  setMain(`
+    <div class="cb">
+      <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter name…" oninput="filtTbl(this.value,'tbTb')"></div>
+    </div>
+    <div class="info" style="font-size:.6rem;margin-bottom:10px">Total Bases prop: blends hit probability (xBA, AVG) with extra-base power (xSLG, ISO, HardHit%). Typical line 1.5. Park HR factor + wind apply at reduced weight vs. pure HR model.</div>
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
+      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
+      <div class="pill ln"><span class="pn">${ln}</span>⚡ Lean</div>
+      <div class="pill"><span class="pn">${data.length}</span>Batters</div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th onclick="sortTB('sc')">TB Score${UI.tbSort.c==='sc'?' '+(UI.tbSort.d>0?'↑':'↓'):''}</th>
+        <th>Rating</th>
+        <th class="l" onclick="sortTB('n')">Batter</th>
+        <th>Team</th>
+        <th onclick="sortTB('ord')">#</th>
+        <th>Matchup</th>
+        <th class="l">Pitcher</th>
+        <th>xSLG/H</th><th>xBA/H</th><th>SLG/H</th><th>AVG/H</th><th>ISO/H</th><th>HH%</th><th>Park HR</th><th>Wind</th>
+      </tr></thead>
+      <tbody id="tbTb">${rows}</tbody>
+    </table></div>
+  `);
+}
+function sortTB(c){if(UI.tbSort.c===c)UI.tbSort.d*=-1;else{UI.tbSort.c=c;UI.tbSort.d=c==='n'?1:-1;}renderTB();}
 
 /* ---------- K TAB ---------- */
 function renderKs(){
@@ -1969,6 +2214,7 @@ function renderSettings(){
         <div style="font-size:.62rem;color:var(--mt2);line-height:1.55">
           <b>Hit Grade</b>: xBA(22%) + xwOBA(18%) + AVG(12%) + OBP(12%) + K%(12%) + HardHit(10%) + Recent(9%) + BABIP(5%) — blended with vs-hand splits, regressed by sample<br><br>
           <b>HR Grade</b>: xSLG(22%) + HardHit(20%) + HR rate(15%) + ISO(14%) + SLG(10%) + xISO(10%) + Recent(9%) — multiplied by park.hr × wind × temp<br><br>
+          <b>Total Bases</b>: xSLG(25%) + SLG(15%) + xBA(15%) + ISO(12%) + AVG(8%) + xwOBA(8%) + HardHit(7%) + K% inv(5%) + Recent SLG(5%) — park & weather at reduced weight vs pure HR<br><br>
           <b>K Grade (P)</b>: Log5 combine of pitcher K% vs each batter's K% (weighted by lineup spot + PA expectation), converted to xK vs ~6K baseline<br><br>
           <b>Run Total</b>: Team xwOBA vs pitcher xwOBA + park R factor + wind HR factor + temp carry + precip suppression
         </div>
@@ -2012,6 +2258,338 @@ function pb(lbl,score,rat){
   return `<div class="pred-b"><div class="pred-l">${lbl}</div><div class="pred-v" style="color:${c}">${score??'—'}</div><div class="pred-s">${bdg(rat)}</div></div>`;
 }
 
+/* ===================================================================
+   WHY-THIS-RATING EXPLAINERS
+   =================================================================== */
+
+// Verdict from a 0-100 component score
+function verd(sc){
+  if(sc==null||isNaN(sc))return {cls:'neu',lbl:'—',col:'var(--mt)',sym:''};
+  if(sc>=78)return {cls:'pos',lbl:'Elite',col:'var(--gn)',sym:'▲▲'};
+  if(sc>=62)return {cls:'pos',lbl:'Good',col:'var(--gn)',sym:'▲'};
+  if(sc>=48)return {cls:'neu',lbl:'Avg',col:'var(--mt2)',sym:'•'};
+  if(sc>=32)return {cls:'neg',lbl:'Below',col:'var(--gd)',sym:'▼'};
+  return {cls:'neg',lbl:'Poor',col:'var(--rd)',sym:'▼▼'};
+}
+
+// Render a single component row
+function compRow(label,valueDisplay,lgAvgDisplay,score,weight){
+  const v=verd(score);
+  const scInt=Math.round(score);
+  return `<div class="why-row why-${v.cls}">
+    <div class="why-row-top">
+      <span class="why-row-lbl">${label} <span class="why-row-avg">(lg ${lgAvgDisplay})</span></span>
+      <span class="why-row-val">${valueDisplay}</span>
+    </div>
+    <div class="why-row-meta">
+      <span class="why-row-score" style="color:${v.col}">${v.sym} ${scInt}</span>
+      <span class="why-row-weight">×${weight}%</span>
+    </div>
+    <div class="why-row-bar"><div class="why-row-fill" style="width:${Math.min(100,Math.max(0,score))}%;background:${v.col}"></div></div>
+  </div>`;
+}
+
+// Unified component builder — reads batter side from grade object's .components
+// and derives pitcher-side + modifiers from matchup context.
+function batterComponents(m,type){
+  const p=STATE.players[m.batterId];
+  if(!p)return null;
+  const L=STATE.leagueAvg;
+  
+  // Grade object holds the batter-side components with all the fields we need
+  const gradeObj=type==='hit'?m.hitGrade:type==='hr'?m.hrGrade:m.tbGrade;
+  if(!gradeObj||!gradeObj.components)return null;
+  
+  // Map grade object's components to compRow's expected shape
+  const batter=gradeObj.components.map(c=>{
+    const valDisp=c.raw==null?'—':(
+      c.fmt==='3'?fmt(c.raw,3)
+      :c.fmt==='2'?fmt(c.raw,2)
+      :c.fmt==='%'?pct(c.raw,1)
+      :c.fmt==='1%'?(c.raw.toFixed(1)+'%')
+      :String(c.raw)
+    );
+    const avgDisp=c.avg==null?'—':(
+      c.fmt==='3'?fmt(c.avg,3)
+      :c.fmt==='2'?fmt(c.avg,2)
+      :c.fmt==='%'?pct(c.avg,1)
+      :c.fmt==='1%'?c.avg.toFixed(1)+'%'
+      :String(c.avg)
+    );
+    return {
+      label:c.label+(c.note?' · '+c.note:''),
+      val:valDisp,
+      avg:avgDisp,
+      score:c.scaled??50,
+      weight:Math.round((c.weight||0)*100)
+    };
+  });
+  
+  // Pitcher side — derive from the pitcher suppression context for this prop type
+  let pitcher=[];
+  if(m.pitcherId&&STATE.pitchers[m.pitcherId]){
+    const pit=STATE.pitchers[m.pitcherId];
+    const pOv=pit.prev?.isPrevSeason?pit.prev.overall:pit.overall;
+    const pSp=pitcherSplit(pit,m.bats);
+    
+    if(type==='hit'){
+      const pxBA=blendStat(pSp,pOv,'xBA',100)??pOv.xBA;
+      const pxwOBA=blendStat(pSp,pOv,'xwOBA',100)??pOv.xwOBA;
+      const pWhip=pOv.whip;
+      const pKr=blendStat(pSp,pOv,'k_rate',150)??pOv.k_rate;
+      const pAvg=blendStat(pSp,pOv,'avg',80)??pOv.avg;
+      pitcher=[
+        {label:'Pitcher xBA allowed',val:fmt(pxBA,3),avg:fmt(L.p_xBA,3),score:100-scale(pxBA,L.p_xBA,L.p_xBA*1.22),weight:30},
+        {label:'Pitcher xwOBA allowed',val:fmt(pxwOBA,3),avg:fmt(L.p_xwOBA,3),score:100-scale(pxwOBA,L.p_xwOBA,L.p_xwOBA*1.22),weight:25},
+        {label:'Pitcher K% (inverse)',val:pct(pKr,1),avg:pct(L.p_k,1),score:scale(pKr,L.p_k,L.p_k*1.35),weight:15},
+        {label:'Pitcher WHIP',val:fmt(pWhip,2),avg:fmt(L.p_whip,2),score:pWhip!=null?100-scale(pWhip,L.p_whip,L.p_whip*1.3):50,weight:15},
+        {label:'Pitcher AVG allowed',val:fmt(pAvg,3),avg:fmt(L.p_xBA,3),score:100-scale(pAvg,L.p_xBA,L.p_xBA*1.22),weight:15}
+      ];
+    }else if(type==='hr'){
+      const pHrRate=blendStat(pSp,pOv,'hr_rate',200)??pOv.hr_rate;
+      const pxSLG=blendStat(pSp,pOv,'xSLG',100)??pOv.xSLG;
+      pitcher=[
+        {label:'Pitcher HR rate allowed',val:pHrRate!=null?(pHrRate*100).toFixed(2)+'%':'—',avg:(L.p_hr*100).toFixed(2)+'%',score:100-scale(pHrRate,L.p_hr,L.p_hr*1.8),weight:30},
+        {label:'Pitcher xSLG allowed',val:fmt(pxSLG,3),avg:fmt(L.p_xSLG,3),score:100-scale(pxSLG,L.p_xSLG,L.p_xSLG*1.3),weight:25},
+        {label:'Pitcher HR/9',val:fmt(pOv.hr9,2),avg:'1.25',score:pOv.hr9!=null?100-scale(pOv.hr9,1.2,2.0):50,weight:15},
+        {label:'Pitcher FIP',val:fmt(pOv.fip,2),avg:fmt(L.p_fip,2),score:pOv.fip!=null?100-scale(pOv.fip,L.p_fip,L.p_fip*1.3):50,weight:15},
+        {label:'Pitcher HardHit% allowed',val:pOv.hardHit!=null?pOv.hardHit.toFixed(1)+'%':'—',avg:(L.p_hardHit||38).toFixed(0)+'%',score:pOv.hardHit!=null?100-scale(pOv.hardHit,L.p_hardHit,L.p_hardHit*1.25):50,weight:15}
+      ];
+    }else if(type==='tb'){
+      // Total bases pitcher side — hybrid of hit + HR suppression
+      const pxBA=blendStat(pSp,pOv,'xBA',100)??pOv.xBA;
+      const pxSLG=blendStat(pSp,pOv,'xSLG',100)??pOv.xSLG;
+      const pxwOBA=blendStat(pSp,pOv,'xwOBA',100)??pOv.xwOBA;
+      const pHrRate=blendStat(pSp,pOv,'hr_rate',200)??pOv.hr_rate;
+      pitcher=[
+        {label:'Pitcher xSLG allowed',val:fmt(pxSLG,3),avg:fmt(L.p_xSLG,3),score:100-scale(pxSLG,L.p_xSLG,L.p_xSLG*1.3),weight:28},
+        {label:'Pitcher xBA allowed',val:fmt(pxBA,3),avg:fmt(L.p_xBA,3),score:100-scale(pxBA,L.p_xBA,L.p_xBA*1.22),weight:22},
+        {label:'Pitcher xwOBA allowed',val:fmt(pxwOBA,3),avg:fmt(L.p_xwOBA,3),score:100-scale(pxwOBA,L.p_xwOBA,L.p_xwOBA*1.22),weight:20},
+        {label:'Pitcher HR rate',val:pHrRate!=null?(pHrRate*100).toFixed(2)+'%':'—',avg:(L.p_hr*100).toFixed(2)+'%',score:100-scale(pHrRate,L.p_hr,L.p_hr*1.8),weight:15},
+        {label:'Pitcher HardHit% allowed',val:pOv.hardHit!=null?pOv.hardHit.toFixed(1)+'%':'—',avg:(L.p_hardHit||38).toFixed(0)+'%',score:pOv.hardHit!=null?100-scale(pOv.hardHit,L.p_hardHit,L.p_hardHit*1.25):50,weight:15}
+      ];
+    }
+  }
+  
+  // External factors (park/weather) — for HR and TB only
+  const modifiers=[];
+  if((type==='hr'||type==='tb')&&m.park){
+    const parkVal=type==='hr'?m.park.hr:(m.park.hr*0.6+m.park.h*0.4);
+    modifiers.push({label:type==='hr'?'Park HR factor':'Park combined (HR × hits)',venue:m.venue,factor:parkVal,note:parkVal>1.05?'🚀 Hitter-friendly':parkVal<0.95?'🧊 Pitcher-friendly':'Neutral'});
+  }
+  if((type==='hr'||type==='tb')&&m.wx&&!DOMED.has(m.venue)){
+    const wf=windHRFactor(m.venue,m.wx);
+    const tf=tempHRFactor(m.wx.temp);
+    modifiers.push({label:'Wind',venue:`${Math.round(m.wx.windSpeed||0)}mph`,factor:wf,note:wf>1.03?'🍃 Blowing out':wf<0.97?'💨 Blowing in':'Crosswind'});
+    modifiers.push({label:'Temperature',venue:`${Math.round(m.wx.temp||0)}°F`,factor:tf,note:tf>1.02?'🔥 Ball carries':tf<0.98?'🧊 Dead air':'Mild'});
+  }
+  
+  return {batter,pitcher,modifiers,gradeObj};
+}
+
+// Backward-compat shims so old callers keep working if anything still references them
+function hitComponents(m){return batterComponents(m,'hit');}
+function hrComponents(m){return batterComponents(m,'hr');}
+function tbComponents(m){return batterComponents(m,'tb');}
+function renderExplain(m,type){
+  const comps=batterComponents(m,type);
+  if(!comps)return '';
+  const score=type==='hit'?m.hitScore:type==='hr'?m.hrScore:m.tbScore;
+  // Grade objects now — extract .grade
+  const gradeObj=type==='hit'?m.hitGrade:type==='hr'?m.hrGrade:m.tbGrade;
+  const bG=gradeObj?.grade;
+  const pG=type==='hit'?m.pitHitSup:type==='hr'?m.pitHRSup:(m.pitHitSup*0.6+m.pitHRSup*0.4);
+  const paF=paFactor(m.order);
+  const rat=getRat(score);
+  const ratC=rat.c==='lock'?'var(--rd)':rat.c==='hot'?'var(--gd)':rat.c==='lean'?'var(--ac)':'var(--mt)';
+  
+  // Top positives + negatives from combined list, ignore zero-weight components
+  const all=[...comps.batter.filter(c=>c.weight>0),...comps.pitcher.map(c=>({...c,isPit:true}))];
+  const sorted=[...all].sort((a,b)=>b.score-a.score);
+  const pos=sorted.filter(c=>c.score>=58).slice(0,5);
+  const neg=[...sorted].reverse().filter(c=>c.score<=42).slice(0,4);
+  
+  const bGrd=bG??50;
+  const pGrd=pG??50;
+  const label=type==='hit'?'Hit Score':type==='hr'?'HR Score':'TB Score';
+  const emoji=type==='hit'?'🎯':type==='hr'?'💥':'🏟️';
+  
+  // Modifiers section (HR only)
+  let modHTML='';
+  if(comps.modifiers&&comps.modifiers.length){
+    const totalMod=comps.modifiers.reduce((a,c)=>a*c.factor,1);
+    modHTML=`<div class="why-section">
+      <div class="why-section-h">🏟️ Park & Weather Modifiers</div>
+      ${comps.modifiers.map(mod=>{
+        const up=mod.factor>1.01;
+        const dn=mod.factor<0.99;
+        const col=up?'var(--gn)':dn?'var(--rd)':'var(--mt2)';
+        return `<div class="why-mod">
+          <div><span style="color:var(--tx2)">${mod.label}</span> <span style="color:var(--mt);font-size:.58rem">${mod.venue}</span> <span style="color:var(--mt2);font-size:.58rem">— ${mod.note}</span></div>
+          <div class="why-mod-x" style="color:${col}">×${mod.factor.toFixed(3)}</div>
+        </div>`;
+      }).join('')}
+      <div class="why-math-eq" style="border-top:1px dashed var(--bdr2);margin-top:5px;padding-top:5px">Combined multiplier on score delta: <b style="color:${totalMod>1?'var(--gn)':'var(--rd)'}">×${totalMod.toFixed(3)}</b></div>
+    </div>`;
+  }
+  
+  return `<div class="why-box">
+    <div class="why-title">${emoji} Why this ${label}?</div>
+    
+    <div class="why-math">
+      <div class="why-math-row">
+        <span class="why-math-lbl">🏏 Batter Grade</span>
+        <div class="why-math-bar"><div class="why-math-fill" style="width:${bGrd}%;background:var(--ac)"></div></div>
+        <span class="why-math-val" style="color:var(--ac)">${bGrd.toFixed(1)}</span>
+      </div>
+      <div class="why-math-row">
+        <span class="why-math-lbl">⚾ Pitcher Grade</span>
+        <div class="why-math-bar"><div class="why-math-fill" style="width:${pGrd}%;background:var(--rd)"></div></div>
+        <span class="why-math-val" style="color:var(--rd)">${pGrd.toFixed(1)}</span>
+      </div>
+      <div class="why-math-row">
+        <span class="why-math-lbl">📊 PA factor (order #${m.order||'?'})</span>
+        <span style="flex:1"></span>
+        <span class="why-math-val" style="color:var(--tx2)">×${paF.toFixed(2)}</span>
+      </div>
+      <div class="why-math-eq">
+        50 + (${bGrd.toFixed(1)} − ${pGrd.toFixed(1)}) ÷ 2 × ${paF.toFixed(2)}${comps.modifiers?.length?' × mods':''} &nbsp;=&nbsp; <b style="color:${ratC}">${score??'—'} ${label}</b>
+      </div>
+    </div>
+    
+    ${pos.length?`<div class="why-section">
+      <div class="why-section-h">▲ Top Positive Drivers</div>
+      ${pos.map(c=>compRow(c.label,c.val,c.avg,c.score,c.weight)).join('')}
+    </div>`:''}
+    
+    ${neg.length?`<div class="why-section">
+      <div class="why-section-h">▼ Hurting the Score</div>
+      ${neg.map(c=>compRow(c.label,c.val,c.avg,c.score,c.weight)).join('')}
+    </div>`:''}
+    
+    ${modHTML}
+    
+    <details style="margin-top:9px;margin-bottom:0">
+      <summary style="font-size:.58rem">View all ${comps.batter.length+comps.pitcher.length} component scores</summary>
+      <div class="why-section" style="margin-top:6px">
+        <div class="why-section-h">🏏 Batter Components</div>
+        ${comps.batter.filter(c=>c.weight>0).map(c=>compRow(c.label,c.val,c.avg,c.score,c.weight)).join('')}
+      </div>
+      ${comps.pitcher.length?`<div class="why-section">
+        <div class="why-section-h">⚾ Pitcher Components (batter perspective)</div>
+        ${comps.pitcher.map(c=>compRow(c.label,c.val,c.avg,c.score,c.weight)).join('')}
+      </div>`:''}
+    </details>
+  </div>`;
+}
+
+// Render the K expectation breakdown
+function renderExplainK(m){
+  const pit=STATE.pitchers[m.pitcherId];
+  if(!pit)return '';
+  const L=STATE.leagueAvg;
+  const pOv=pit.prev?.isPrevSeason?pit.prev.overall:pit.overall;
+  const rat=getRat(m.kGrade);
+  const ratC=rat.c==='lock'?'var(--rd)':rat.c==='hot'?'var(--gd)':rat.c==='lean'?'var(--ac)':'var(--mt)';
+  
+  // Per-batter K projection using log5
+  const expectedIP=m.expectedIP;
+  const rows=m.oppLineup.map(b=>{
+    const bObj=STATE.players[b.id];
+    const paF=paFactor(b.order);
+    const pSp=pitcherSplit(pit,b.bats);
+    const pKr=blendStat(pSp,pOv,'k_rate',150)??pOv.k_rate??L.p_k;
+    let bKr=L.b_k;
+    let bPa=0;
+    if(bObj){
+      const bOv=bObj.prev?.isPrevSeason?bObj.prev.overall:bObj.overall;
+      const bSp=batterSplit(bObj.prev?.isPrevSeason?bObj.prev:bObj,m.pHand,b.bats);
+      bKr=blendStat(bSp,bOv,'k_rate',80)??bOv.k_rate??L.b_k;
+      bPa=bOv.pa||0;
+    }
+    const combined=combineRates(pKr,bKr,L.p_k);
+    const pa=expectedIP*4.2/9*paF;
+    const xK=combined*pa;
+    return {order:b.order,name:b.name,bats:b.bats,bKr,combined,pa,xK,bPa};
+  });
+  const totalK=rows.reduce((s,r)=>s+r.xK,0);
+  
+  // Pitcher components
+  const components=[
+    {label:'Season K%',val:pct(pOv.k_rate,1),avg:pct(L.p_k,1),score:scale(pOv.k_rate,L.p_k*0.85,L.p_k*1.4),weight:35},
+    {label:'K/9',val:fmt(pOv.k9,2),avg:fmt(L.p_k9,2),score:pOv.k9!=null?scale(pOv.k9,L.p_k9*0.85,L.p_k9*1.35):50,weight:25},
+    {label:'BB% (inverted)',val:pct(pOv.bb_rate,1),avg:pct(L.p_bb,1),score:100-scale(pOv.bb_rate,L.p_bb*0.7,L.p_bb*1.5),weight:15},
+    {label:'xBA allowed (inverted)',val:fmt(pOv.xBA,3),avg:fmt(L.p_xBA,3),score:100-scale(pOv.xBA,L.p_xBA*0.8,L.p_xBA*1.2),weight:15},
+    {label:'Avg IP per start',val:fmt(pOv.avgIP,1),avg:fmt(L.p_avgIP,1),score:pOv.avgIP!=null?scale(pOv.avgIP,L.p_avgIP*0.7,L.p_avgIP*1.2):50,weight:10}
+  ];
+  // Opposing lineup K tendency as context
+  const avgOppK=rows.length?rows.reduce((s,r)=>s+r.bKr,0)/rows.length:L.b_k;
+  const oppContext={
+    label:'Opposing lineup K%',
+    val:pct(avgOppK,1),
+    avg:pct(L.b_k,1),
+    score:scale(avgOppK,L.b_k*0.85,L.b_k*1.35),
+    weight:'—'
+  };
+  
+  return `<div class="why-box">
+    <div class="why-title">🔍 Why this K projection?</div>
+    
+    <div class="why-math">
+      <div class="why-math-row">
+        <span class="why-math-lbl">Pitcher K rate (blended)</span>
+        <div class="why-math-bar"><div class="why-math-fill" style="width:${Math.min(100,nn(pOv.k_rate)*300)}%;background:var(--ac)"></div></div>
+        <span class="why-math-val" style="color:var(--ac)">${pct(pOv.k_rate,1)}</span>
+      </div>
+      <div class="why-math-row">
+        <span class="why-math-lbl">Opp lineup K%</span>
+        <div class="why-math-bar"><div class="why-math-fill" style="width:${Math.min(100,avgOppK*300)}%;background:var(--gd)"></div></div>
+        <span class="why-math-val" style="color:var(--gd)">${pct(avgOppK,1)}</span>
+      </div>
+      <div class="why-math-row">
+        <span class="why-math-lbl">Expected IP (career avg)</span>
+        <span style="flex:1"></span>
+        <span class="why-math-val" style="color:var(--tx2)">${expectedIP} IP</span>
+      </div>
+      <div class="why-math-eq">
+        Log5 per-batter K rate × expected PA = <b style="color:${ratC}">${totalK.toFixed(1)} xK</b> · SP baseline ≈ <b>${m.avgBaseline.toFixed(1)}</b>
+      </div>
+    </div>
+    
+    <div class="why-section">
+      <div class="why-section-h">⚾ Pitcher Components</div>
+      ${components.map(c=>compRow(c.label,c.val,c.avg,c.score,c.weight)).join('')}
+      ${compRow(oppContext.label,oppContext.val,oppContext.avg,oppContext.score,oppContext.weight)}
+    </div>
+    
+    <div class="why-section">
+      <div class="why-section-h">🎯 Per-Batter K Projection (log5)</div>
+      <div style="overflow-x:auto"><table class="why-k-table">
+        <thead><tr>
+          <th>#</th><th class="l">Batter</th><th>B</th><th>K%/H</th><th>Combined</th><th>xPA</th><th>xK</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r=>`<tr>
+            <td style="color:var(--mt2)">${r.order}</td>
+            <td class="l">${r.name}</td>
+            <td style="color:${hc(r.bats)}">${r.bats}</td>
+            <td>${pct(r.bKr,1)}</td>
+            <td style="color:var(--ac)">${pct(r.combined,1)}</td>
+            <td style="color:var(--mt2)">${r.pa.toFixed(1)}</td>
+            <td style="color:var(--tx2)"><strong>${r.xK.toFixed(2)}</strong></td>
+          </tr>`).join('')}
+        </tbody>
+        <tfoot><tr>
+          <td colspan="6" class="l" style="color:var(--mt2)">Total Expected Ks</td>
+          <td style="color:${ratC};font-size:.95rem">${totalK.toFixed(1)}</td>
+        </tr></tfoot>
+      </table></div>
+      <div style="font-size:.54rem;color:var(--mt);margin-top:5px;line-height:1.4">Log5 formula combines pitcher K% and batter K% against a league baseline (${pct(L.p_k,1)}) to estimate the actual K probability per PA. Each batter's expected PA is scaled by lineup spot and pitcher's expected IP.</div>
+    </div>
+  </div>`;
+}
+
+
 function renderBatterCard(batterId,pitcherId){
   const p=STATE.players[batterId];
   if(!p)return '<div class="empty">Batter not found</div>';
@@ -2040,14 +2618,18 @@ function renderBatterCard(batterId,pitcherId){
         <div class="pcn">${m.batterName}</div>
         <div class="pcm">${m.bats==='L'?'LHB':m.bats==='S'?'SHB':'RHB'} · #${m.order||'?'} · ${m.team.abbr||m.team.name} @ ${m.venue.replace(/(Stadium|Park|Field)/i,'').trim()} · vs <span style="color:${hc(m.pHand)}">${m.pHand}HP</span> ${m.pitcherName}</div>
       </div>
-      ${bdg(getRat(Math.max(m.hitScore||0,m.hrScore||0)))}
+      ${bdg(getRat(Math.max(m.hitScore||0,m.hrScore||0,m.tbScore||0)))}
     </div>
     <div class="pred-g">
-      ${pb('Hit Score',m.hitScore,getRat(m.hitScore))}
-      ${pb('HR Score',m.hrScore,getRat(m.hrScore))}
-      ${pb('Hit Grade',m.hitGrade,getRat(m.hitGrade))}
-      ${pb('HR Grade',m.hrGrade,getRat(m.hrGrade))}
+      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore))}
+      ${pb('💥 HR',m.hrScore,getRat(m.hrScore))}
+      ${pb('🏟️ Total Bases',m.tbScore,getRat(m.tbScore))}
+      ${pb('Hit Grade',m.hitGrade?.grade,getRat(m.hitGrade?.grade))}
     </div>
+    
+    ${renderExplain(m,'hit')}
+    ${renderExplain(m,'tb')}
+    ${renderExplain(m,'hr')}
     <div class="conf-bar">
       <div class="conf-top"><span>Data Confidence</span><span>${conf}%</span></div>
       <div class="conf-track"><div class="conf-fill" style="width:${conf}%;background:${conf>=70?'var(--gn)':conf>=50?'var(--gd)':'var(--rd)'}"></div></div>
@@ -2160,6 +2742,8 @@ function renderPitcherCard(pitcherId){
       <div class="pred-b"><div class="pred-l">Expected K</div><div class="pred-v" style="color:var(--ac)">${m.expectedK}</div><div class="pred-s">over ${m.expectedIP} IP</div></div>
       <div class="pred-b"><div class="pred-l">Baseline</div><div class="pred-v" style="color:var(--mt)">${m.avgBaseline}</div><div class="pred-s">league avg SP</div></div>
     </div>
+    
+    ${renderExplainK(m)}
     <div class="conf-bar">
       <div class="conf-top"><span>Data Confidence</span><span>${conf}%</span></div>
       <div class="conf-track"><div class="conf-fill" style="width:${conf}%;background:${conf>=70?'var(--gn)':conf>=50?'var(--gd)':'var(--rd)'}"></div></div>
@@ -2242,6 +2826,7 @@ function openGameMo(gamePk){
   const gameBatters=STATE.matchups.filter(m=>m.kind==='batter'&&m.game.gamePk===g.gamePk);
   const topHit=[...gameBatters].sort((a,b)=>(b.hitScore??0)-(a.hitScore??0)).slice(0,5);
   const topHR=[...gameBatters].sort((a,b)=>(b.hrScore??0)-(a.hrScore??0)).slice(0,3);
+  const topTB=[...gameBatters].sort((a,b)=>(b.tbScore??0)-(a.tbScore??0)).slice(0,5);
   const pitchers=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.game.gamePk===g.gamePk);
   
   mh.innerHTML=`<div>
@@ -2300,6 +2885,20 @@ function openGameMo(gamePk){
           <td class="l"><strong>${m.batterName}</strong></td>
           <td style="color:var(--mt2)">${m.team.abbr||''}</td>
           <td>${fmt(p?.overall?.xSLG,3)}</td>
+        </tr>`;}).join('')}
+      </tbody>
+    </table></div>
+    
+    <div class="slbl" style="margin-top:10px">🏟️ Top Total Bases Plays</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Score</th><th class="l">Batter</th><th>Team</th><th>xSLG</th><th>xBA</th></tr></thead>
+      <tbody>
+        ${topTB.map(m=>{const p=STATE.players[m.batterId];return `<tr onclick="closeMo();openBatterMo('${m.batterId}','${m.pitcherId}','tb')">
+          <td>${sbar(m.tbScore)}</td>
+          <td class="l"><strong>${m.batterName}</strong></td>
+          <td style="color:var(--mt2)">${m.team.abbr||''}</td>
+          <td>${fmt(p?.overall?.xSLG,3)}</td>
+          <td>${fmt(p?.overall?.xBA,3)}</td>
         </tr>`;}).join('')}
       </tbody>
     </table></div>
