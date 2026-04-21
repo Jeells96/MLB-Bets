@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v2 · Prop Intelligence</title>
+<title>Diamond IQ · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -282,7 +282,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v2 · Live API</div>
+      <div class="bsub">Prop Intelligence · v2.1 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -582,23 +582,39 @@ function extractLineup(players,team,opp){
 }
 
 // Yesterday fallback for missing lineups
+// Look back up to N days for the team's most recent game with a lineup
+async function recentLineup(teamName,dateStr,teamObj,oppObj,maxDaysBack=7){
+  for(let back=1;back<=maxDaysBack;back++){
+    const d=new Date(dateStr+'T12:00:00');
+    d.setDate(d.getDate()-back);
+    const yd=d.toISOString().split('T')[0];
+    const url=`${MLB}/api/v1/schedule?sportId=1&date=${yd}&hydrate=team`;
+    const data=await fetchJSON(url);
+    if(!data||!data.dates?.length)continue;
+    const games=data.dates[0].games||[];
+    const g=games.find(g=>g.teams?.home?.team?.name===teamName||g.teams?.away?.team?.name===teamName);
+    if(!g)continue;
+    // Only completed games have lineups in the boxscore
+    const status=g.status?.abstractGameCode;
+    if(status!=='F'&&status!=='L')continue; // Final or Live
+    const feed=await fetchGameFeed(g.gamePk);
+    if(!feed)continue;
+    const isHome=feed.gameData?.teams?.home?.name===teamName;
+    const players=isHome?feed.liveData?.boxscore?.teams?.home?.players:feed.liveData?.boxscore?.teams?.away?.players;
+    const oppNameFeed=isHome?feed.gameData?.teams?.away?.name:feed.gameData?.teams?.home?.name;
+    // Use the real team/opp objects for today, not yesterday's opponent
+    const lineup=extractLineup(players||{},teamObj||{name:teamName},oppObj||{name:oppNameFeed||'?'});
+    if(lineup.length>=8){
+      // Tag every spot as unconfirmed + record how old the lineup is
+      return lineup.map(p=>({...p,unconfirmed:true,lineupAge:back,lineupDate:yd}));
+    }
+  }
+  return [];
+}
+
+// Keep old name as alias for backwards compat
 async function yesterdayLineup(teamName,dateStr){
-  const d=new Date(dateStr+'T12:00:00');
-  d.setDate(d.getDate()-1);
-  const yd=d.toISOString().split('T')[0];
-  const url=`${MLB}/api/v1/schedule?sportId=1&date=${yd}&hydrate=team`;
-  const data=await fetchJSON(url);
-  if(!data||!data.dates?.length)return [];
-  const games=data.dates[0].games||[];
-  const g=games.find(g=>g.teams?.home?.team?.name===teamName||g.teams?.away?.team?.name===teamName);
-  if(!g)return [];
-  const feed=await fetchGameFeed(g.gamePk);
-  if(!feed)return [];
-  const isHome=feed.gameData?.teams?.home?.name===teamName;
-  const players=isHome?feed.liveData?.boxscore?.teams?.home?.players:feed.liveData?.boxscore?.teams?.away?.players;
-  const oppName=isHome?feed.gameData?.teams?.away?.name:feed.gameData?.teams?.home?.name;
-  const teamObj={name:teamName},oppObj={name:oppName||'?'};
-  return extractLineup(players||{},teamObj,oppObj).map(p=>({...p,unconfirmed:true}));
+  return recentLineup(teamName,dateStr,{name:teamName},null,7);
 }
 
 
@@ -938,15 +954,15 @@ async function loadAll(){
       progress(1+(i/sched.length)*2,10,'Game feeds…');
     },4);
     
-    // Step 3: Yesterday fallback for missing lineups
+    // Step 3: Recent-lineup fallback for missing lineups (looks back up to 7 days)
     progress(3,10,'Filling missing lineups…');
     await Promise.all(games.map(async g=>{
       if(!g.hLineup.length&&g.home.name){
-        g.hLineup=await yesterdayLineup(g.home.name,date);
+        g.hLineup=await recentLineup(g.home.name,date,g.home,g.away,7);
         g.hLineupConfirmed=false;
       }
       if(!g.aLineup.length&&g.away.name){
-        g.aLineup=await yesterdayLineup(g.away.name,date);
+        g.aLineup=await recentLineup(g.away.name,date,g.away,g.home,7);
         g.aLineupConfirmed=false;
       }
     }));
@@ -1790,11 +1806,14 @@ function gamesStrip(){
     const venue=g.venue;
     const wx=g.weather;
     const wxStr=wx?`${Math.round(wx.temp||0)}°F · ${Math.round(wx.windSpeed||0)}mph · ${wx.precipProb||0}% precip`:'No weather';
+    // Lineup status per side
+    const aStatus=g.aLineup.length?(g.aLineupConfirmed?'<span style="color:var(--gn)">✓ confirmed</span>':`<span style="color:var(--gd)">⚠ ${g.aLineup[0]?.lineupAge||'?'}d old</span>`):'<span style="color:var(--rd)">✗ no lineup</span>';
+    const hStatus=g.hLineup.length?(g.hLineupConfirmed?'<span style="color:var(--gn)">✓ confirmed</span>':`<span style="color:var(--gd)">⚠ ${g.hLineup[0]?.lineupAge||'?'}d old</span>`):'<span style="color:var(--rd)">✗ no lineup</span>';
     return `<div class="gc" onclick="openGameMo('${g.gamePk}')">
       <div class="gm">${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</div>
       <div class="gp">
-        <span style="color:${hc(g.aSPHand)}">${g.aSPHand||'?'}HP</span> ${g.aSP?.name||'TBD'}<br>
-        <span style="color:${hc(g.hSPHand)}">${g.hSPHand||'?'}HP</span> ${g.hSP?.name||'TBD'}
+        <span style="color:${hc(g.aSPHand)}">${g.aSPHand||'?'}HP</span> ${g.aSP?.name||'TBD'} · ${aStatus}<br>
+        <span style="color:${hc(g.hSPHand)}">${g.hSPHand||'?'}HP</span> ${g.hSP?.name||'TBD'} · ${hStatus}
       </div>
       <div class="gs">${venue} · ${wxStr}</div>
     </div>`;
