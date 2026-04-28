@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v4 · Prop Intelligence</title>
+<title>Diamond IQ v5 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -156,6 +156,37 @@ tbody td.l{text-align:left}
 .dash-row-s{display:flex;align-items:center;gap:6px}
 .dr-sc{font-family:‘Barlow Condensed’,sans-serif;font-weight:800;font-size:.85rem}
 
+/* ============ HOME — CATEGORY CHOOSER ============ */
+.home-status{font-family:‘DM Mono’,monospace;font-size:.6rem;letter-spacing:.06em;color:var(–mt2);text-align:center;padding:6px 0 14px;text-transform:uppercase}
+.home-section-h{font-family:‘Barlow Condensed’,sans-serif;font-size:.66rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(–mt);text-align:center;margin-bottom:10px}
+.home-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:6px}
+.home-card{background:var(–s1);border:1px solid var(–bdr2);border-radius:14px;padding:22px 12px 18px;cursor:pointer;text-align:center;transition:all .2s;user-select:none;position:relative}
+.home-card:hover{border-color:var(–ac);transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,212,255,.07)}
+.home-card:active{transform:translateY(0)}
+.hc-icon{font-size:1.85rem;margin-bottom:6px;line-height:1}
+.hc-label{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.78rem;letter-spacing:.11em;text-transform:uppercase;color:var(–tx);line-height:1.2}
+.hc-batter:hover{border-color:var(–ac)}
+.hc-pitcher:hover{border-color:var(–rd)}
+.hc-game:hover{border-color:var(–gd)}
+
+.hc-props{max-height:0;overflow:hidden;transition:max-height .25s ease-out,margin .25s;margin:0;display:flex;flex-direction:column;gap:6px}
+.hc-props.open{max-height:500px;margin:12px 0 14px}
+.hc-props-h{font-family:‘Barlow Condensed’,sans-serif;font-size:.6rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(–mt);padding:0 4px 4px}
+.hc-prop{background:var(–s1);border:1px solid var(–bdr);border-radius:10px;padding:14px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;transition:all .15s;width:100%;font-family:inherit;color:inherit}
+.hc-prop:hover{border-color:var(–ac);background:var(–s2)}
+.hc-prop:active{transform:scale(.99)}
+.hc-prop-icon{font-size:1.3rem;line-height:1}
+.hc-prop-label{flex:1;font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.95rem;letter-spacing:.05em;color:var(–tx)}
+.hc-prop-arr{color:var(–mt);font-size:.9rem}
+.hc-prop:hover .hc-prop-arr{color:var(–ac)}
+
+/* ============ BACK BAR (in prop pages) ============ */
+.back-bar{display:flex;align-items:center;gap:8px;padding:6px 0 10px;font-size:.65rem;color:var(–mt2)}
+.back-btn{background:none;border:none;color:var(–ac);font-family:inherit;font-size:.7rem;font-weight:600;cursor:pointer;padding:4px 0;letter-spacing:.04em}
+.back-btn:hover{text-decoration:underline}
+.back-sep{color:var(–mt);font-size:.6rem}
+.back-cur{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;color:var(–tx)}
+
 /* ============ MISC ============ */
 .empty{text-align:center;padding:40px 20px;color:var(–mt);font-size:.75rem;background:var(–s0);border:1px dashed var(–bdr);border-radius:10px}
 .empty b{color:var(–tx2);display:block;font-size:.9rem;margin-bottom:4px;font-family:‘Barlow Condensed’,sans-serif;letter-spacing:.08em;text-transform:uppercase}
@@ -282,7 +313,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v4 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -295,12 +326,7 @@ details summary:hover{color:var(–tx)}
 
 <div class="tw">
   <div class="tabs">
-    <div class="tab active" id="t-dash" onclick="sw('dash')">📊 Dashboard</div>
-    <div class="tab" id="t-hits" onclick="sw('hits')">🎯 Hits <span class="tab-ct" id="c-hits">–</span></div>
-    <div class="tab" id="t-hr" onclick="sw('hr')">💥 HR</div>
-    <div class="tab" id="t-tb" onclick="sw('tb')">🏟️ TB</div>
-    <div class="tab" id="t-k" onclick="sw('k')">⚡ Ks</div>
-    <div class="tab" id="t-tot" onclick="sw('tot')">🎲 Totals</div>
+    <div class="tab active" id="t-dash" onclick="sw('dash')">🏠 Home</div>
     <div class="tab" id="t-res" onclick="sw('res')">📊 Results</div>
     <div class="tab" id="t-srch" onclick="sw('srch')">🔍 Player</div>
     <div class="tab" id="t-set" onclick="sw('set')">⚙️</div>
@@ -1839,7 +1865,10 @@ function todayStr(){return new Date().toISOString().split('T')[0];}
 function sw(tab){
   UI.tab=tab;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('t-'+tab)?.classList.add('active');
+  // Map sub-pages back to their parent tab in the visible nav
+  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',tot:'dash'};
+  const navTab=parentMap[tab]||tab;
+  document.getElementById('t-'+navTab)?.classList.add('active');
   renderTab();
 }
 
@@ -1873,92 +1902,87 @@ function hc(h){return h==='L'?'#60a5fa':'#f87171';}
 /* ---------- DASHBOARD ---------- */
 function renderDashboard(){
   const games=STATE.games;
-  if(!games.length){setMain(`<div class="empty"><b>No games</b></div>`);return;}
+  if(!games.length){setMain(`<div class="empty"><b>No games loaded</b>Pick a date and tap ▶ Load</div>`);return;}
   
-  const topHits=STATE.matchups.filter(m=>m.kind==='batter'&&m.hitScore!=null).sort((a,b)=>b.hitScore-a.hitScore).slice(0,6);
-  const topHRs=STATE.matchups.filter(m=>m.kind==='batter'&&m.hrScore!=null).sort((a,b)=>b.hrScore-a.hrScore).slice(0,6);
-  const topTBs=STATE.matchups.filter(m=>m.kind==='batter'&&m.tbScore!=null).sort((a,b)=>b.tbScore-a.tbScore).slice(0,6);
-  const topKs=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).sort((a,b)=>b.kGrade-a.kGrade).slice(0,6);
-  const topTots=[...STATE.totals].filter(t=>t.total!=null).sort((a,b)=>b.total-a.total).slice(0,6);
-  
-  // Update tab counts
-  document.getElementById('c-hits').textContent=STATE.matchups.filter(m=>m.kind==='batter').length;
-  
-  const statusLine=`${games.length} games · ${Object.keys(STATE.players).length} batters · ${Object.keys(STATE.pitchers).length} pitchers`;
-  
-  function row(name,sub,score,onclick,lockAt){
-    const r=getRat(score,lockAt);
-    const c=r.c==='lock'?'var(--rd)':r.c==='hot'?'var(--gd)':r.c==='lean'?'var(--ac)':'var(--mt)';
-    return `<div class="dash-row" onclick="${onclick}">
-      <div class="dash-row-n"><div>${name}</div><div style="font-size:.54rem;color:var(--mt2)">${sub}</div></div>
-      <div class="dash-row-s"><span class="dr-sc" style="color:${c}">${score??'—'}</span>${bdg(r)}</div>
-    </div>`;
-  }
-  
-  const hitsHTML=topHits.map(m=>row(
-    m.batterName,
-    `${m.team.abbr||m.team.name} · #${m.order} · vs <span style="color:${hc(m.pHand)}">${m.pHand}HP</span> ${m.pitcherName}`,
-    m.hitScore,
-    `openBatterMo('${m.batterId}','${m.pitcherId}','hit')`,
-    79.5
-  )).join('');
-  
-  const hrsHTML=topHRs.map(m=>row(
-    m.batterName,
-    `${m.team.abbr||m.team.name} · ${m.venue.replace(/Stadium|Park|Field/i,'').trim()} · vs ${m.pitcherName}`,
-    m.hrScore,
-    `openBatterMo('${m.batterId}','${m.pitcherId}','hr')`
-  )).join('');
-  
-  const tbsHTML=topTBs.map(m=>row(
-    m.batterName,
-    `${m.team.abbr||m.team.name} · #${m.order} · vs ${m.pitcherName}`,
-    m.tbScore,
-    `openBatterMo('${m.batterId}','${m.pitcherId}','tb')`
-  )).join('');
-  
-  const ksHTML=topKs.map(m=>row(
-    m.pitcherName,
-    `${m.team.abbr||m.team.name} · ~${m.expectedK} Ks (${m.expectedIP} IP) vs ${m.opp.abbr||m.opp.name}`,
-    m.kGrade,
-    `openPitcherMo('${m.pitcherId}')`
-  )).join('');
-  
-  const totsHTML=topTots.map(t=>{
-    const venue=t.game.venue.replace(/Stadium|Park|Field/i,'').trim();
-    return `<div class="dash-row" onclick="sw('tot')">
-      <div class="dash-row-n"><div>${t.game.away.abbr||t.game.away.name} @ ${t.game.home.abbr||t.game.home.name}</div><div style="font-size:.54rem;color:var(--mt2)">${venue} · ${t.awayRuns}–${t.homeRuns}</div></div>
-      <div class="dash-row-s"><span class="dr-sc" style="color:var(--gd)">${t.total}</span></div>
-    </div>`;
-  }).join('');
+  const dateStr=STATE.date?new Date(STATE.date+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'}):'';
+  const statusLine=`<div class="home-status">${dateStr.toUpperCase()} · ${games.length} games · ${Object.keys(STATE.players).length} batters · ${Object.keys(STATE.pitchers).length} pitchers · <span style="color:var(--gn)">● live</span></div>`;
   
   setMain(`
-    <div class="info">${statusLine} · <span style="color:var(--gn)">● live</span></div>
-    ${gamesStrip()}
-    <div class="dash-grid">
-      <div class="dash-tile">
-        <div class="dash-t-h"><div class="dash-t-l">🎯 Top Hit Plays</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('hits')">all →</button></div>
-        ${hitsHTML||'<div class="info">No qualifying batters</div>'}
+    ${statusLine}
+    
+    <div class="home-section-h">Pick a category</div>
+    <div class="home-cards">
+      <div class="home-card hc-batter" onclick="document.getElementById('hc-bat-props').classList.toggle('open');document.getElementById('hc-pit-props').classList.remove('open');document.getElementById('hc-game-props').classList.remove('open');">
+        <div class="hc-icon">🏏</div>
+        <div class="hc-label">Batter Bets</div>
       </div>
-      <div class="dash-tile">
-        <div class="dash-t-h"><div class="dash-t-l">💥 Top HR Plays</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('hr')">all →</button></div>
-        ${hrsHTML||'<div class="info">No qualifying batters</div>'}
+      <div class="home-card hc-pitcher" onclick="document.getElementById('hc-pit-props').classList.toggle('open');document.getElementById('hc-bat-props').classList.remove('open');document.getElementById('hc-game-props').classList.remove('open');">
+        <div class="hc-icon">⚾</div>
+        <div class="hc-label">Pitcher Bets</div>
       </div>
-      <div class="dash-tile">
-        <div class="dash-t-h"><div class="dash-t-l">🏟️ Top TB Plays</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('tb')">all →</button></div>
-        ${tbsHTML||'<div class="info">No qualifying batters</div>'}
-      </div>
-      <div class="dash-tile">
-        <div class="dash-t-h"><div class="dash-t-l">⚡ Top K Plays</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('k')">all →</button></div>
-        ${ksHTML||'<div class="info">No pitchers</div>'}
-      </div>
-      <div class="dash-tile">
-        <div class="dash-t-h"><div class="dash-t-l">🎲 Highest Totals</div><button class="btn bg" style="font-size:.6rem;padding:3px 8px" onclick="sw('tot')">all →</button></div>
-        ${totsHTML||'<div class="info">No totals</div>'}
+      <div class="home-card hc-game" onclick="document.getElementById('hc-game-props').classList.toggle('open');document.getElementById('hc-bat-props').classList.remove('open');document.getElementById('hc-pit-props').classList.remove('open');">
+        <div class="hc-icon">🎲</div>
+        <div class="hc-label">Game Bets</div>
       </div>
     </div>
+    
+    <div class="hc-props" id="hc-bat-props">
+      <div class="hc-props-h">Batter Props</div>
+      <button class="hc-prop" onclick="goToProp('hits')">
+        <span class="hc-prop-icon">🎯</span>
+        <span class="hc-prop-label">Hits</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+      <button class="hc-prop" onclick="goToProp('tb')">
+        <span class="hc-prop-icon">🏟️</span>
+        <span class="hc-prop-label">Total Bases</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+      <button class="hc-prop" onclick="goToProp('hr')">
+        <span class="hc-prop-icon">💥</span>
+        <span class="hc-prop-label">Home Runs</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+    </div>
+    
+    <div class="hc-props" id="hc-pit-props">
+      <div class="hc-props-h">Pitcher Props</div>
+      <button class="hc-prop" onclick="goToProp('k')">
+        <span class="hc-prop-icon">⚡</span>
+        <span class="hc-prop-label">Strikeouts</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+    </div>
+    
+    <div class="hc-props" id="hc-game-props">
+      <div class="hc-props-h">Game Props</div>
+      <button class="hc-prop" onclick="goToProp('tot')">
+        <span class="hc-prop-icon">🎲</span>
+        <span class="hc-prop-label">Run Totals</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+    </div>
+    
+    ${gamesStrip()}
+    
     <div class="disc">⚠️ For entertainment purposes only. Stats from MLB Stats API · Weather from Open-Meteo · Park factors public.</div>
   `);
+}
+
+// Navigate to a prop tab and force hottest-first sort
+function goToProp(prop){
+  // Reset sort to score descending so user always lands on hottest plays
+  if(prop==='hits')UI.hitsSort={c:'sc',d:-1};
+  else if(prop==='hr')UI.hrSort={c:'sc',d:-1};
+  else if(prop==='tb')UI.tbSort={c:'sc',d:-1};
+  else if(prop==='k')UI.kSort={c:'sc',d:-1};
+  else if(prop==='tot')UI.totSort={c:'total',d:-1};
+  sw(prop);
+}
+
+
+function backBar(label){
+  return `<div class="back-bar"><button class="back-btn" onclick="sw('dash')">← Home</button><span class="back-sep">·</span><span class="back-cur">${label}</span></div>`;
 }
 
 function gamesStrip(){
@@ -2021,6 +2045,7 @@ function renderHits(){
   }).join('');
   
   setMain(`
+    ${backBar('🎯 Hits')}
     <div class="cb">
       <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter name…" oninput="filtTbl(this.value,'hitsTb')"></div>
     </div>
@@ -2089,6 +2114,7 @@ function renderHRs(){
   }).join('');
   
   setMain(`
+    ${backBar('💥 Home Runs')}
     <div class="cb">
       <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter name…" oninput="filtTbl(this.value,'hrTb')"></div>
     </div>
@@ -2158,6 +2184,7 @@ function renderTB(){
   }).join('');
   
   setMain(`
+    ${backBar('🏟️ Total Bases')}
     <div class="cb">
       <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter name…" oninput="filtTbl(this.value,'tbTb')"></div>
     </div>
@@ -2226,6 +2253,7 @@ function renderKs(){
   }).join('');
   
   setMain(`
+    ${backBar('⚡ Strikeouts')}
     <div class="cb">
       <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter pitcher…" oninput="filtTbl(this.value,'kTb')"></div>
     </div>
@@ -2318,6 +2346,7 @@ function renderTotals(){
   }).join('');
   
   setMain(`
+    ${backBar('🎲 Run Totals')}
     <div class="sum">
       <div class="pill"><span class="pn">${avg.toFixed(1)}</span>Avg Total</div>
       <div class="pill ht"><span class="pn">${high}</span>9+ Totals</div>
