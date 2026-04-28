@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5 · Prop Intelligence</title>
+<title>Diamond IQ v5.1 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -172,13 +172,20 @@ tbody td.l{text-align:left}
 .hc-props{max-height:0;overflow:hidden;transition:max-height .25s ease-out,margin .25s;margin:0;display:flex;flex-direction:column;gap:6px}
 .hc-props.open{max-height:500px;margin:12px 0 14px}
 .hc-props-h{font-family:‘Barlow Condensed’,sans-serif;font-size:.6rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(–mt);padding:0 4px 4px}
-.hc-prop{background:var(–s1);border:1px solid var(–bdr);border-radius:10px;padding:14px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;transition:all .15s;width:100%;font-family:inherit;color:inherit}
-.hc-prop:hover{border-color:var(–ac);background:var(–s2)}
+.hc-prop{background:var(–s1)!important;border:1px solid var(–bdr);border-radius:10px;padding:14px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;transition:all .15s;width:100%;font-family:inherit;color:var(–tx);-webkit-appearance:none;appearance:none}
+.hc-prop:hover{border-color:var(–ac);background:var(–s2)!important}
 .hc-prop:active{transform:scale(.99)}
 .hc-prop-icon{font-size:1.3rem;line-height:1}
 .hc-prop-label{flex:1;font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.95rem;letter-spacing:.05em;color:var(–tx)}
 .hc-prop-arr{color:var(–mt);font-size:.9rem}
 .hc-prop:hover .hc-prop-arr{color:var(–ac)}
+
+/* ============ FACT CHECK PROP PILLS ============ */
+.fc-pills{display:flex;gap:5px;overflow-x:auto;padding:6px 2px 12px;scrollbar-width:none}
+.fc-pills::-webkit-scrollbar{display:none}
+.fc-pill{flex-shrink:0;background:var(–s1);border:1px solid var(–bdr2);color:var(–tx2);font-family:‘Barlow Condensed’,sans-serif;font-size:.7rem;font-weight:600;letter-spacing:.06em;border-radius:8px;padding:7px 12px;cursor:pointer;transition:all .15s;-webkit-appearance:none;appearance:none}
+.fc-pill:hover{border-color:var(–ac);color:var(–ac)}
+.fc-pill.active{background:var(–ac);border-color:var(–ac);color:#000;font-weight:700}
 
 /* ============ BACK BAR (in prop pages) ============ */
 .back-bar{display:flex;align-items:center;gap:8px;padding:6px 0 10px;font-size:.65rem;color:var(–mt2)}
@@ -313,7 +320,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5.1 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -327,7 +334,7 @@ details summary:hover{color:var(–tx)}
 <div class="tw">
   <div class="tabs">
     <div class="tab active" id="t-dash" onclick="sw('dash')">🏠 Home</div>
-    <div class="tab" id="t-res" onclick="sw('res')">📊 Results</div>
+    <div class="tab" id="t-res" onclick="sw('res')">📊 Fact Check</div>
     <div class="tab" id="t-srch" onclick="sw('srch')">🔍 Player</div>
     <div class="tab" id="t-set" onclick="sw('set')">⚙️</div>
   </div>
@@ -465,7 +472,9 @@ function predSnapshot(){
     bats:m.bats,
     pHand:m.pHand,
     pitcherName:m.pitcherName,
-    score:m.hitScore
+    score:m.hitScore,
+    hrScore:m.hrScore,
+    tbScore:m.tbScore
   }));
   const pitchers=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).map(m=>({
     id:String(m.pitcherId),
@@ -478,7 +487,16 @@ function predSnapshot(){
     lowK:m.lowK,
     highK:m.highK
   }));
-  PRED.byDate[STATE.date]={batters,pitchers,savedAt:Date.now()};
+  const totals=(STATE.totals||[]).filter(t=>t.total!=null).map(t=>({
+    gamePk:String(t.game.gamePk),
+    home:t.game.home.abbr||t.game.home.name,
+    away:t.game.away.abbr||t.game.away.name,
+    total:t.total,
+    homeRuns:t.homeRuns,
+    awayRuns:t.awayRuns,
+    venue:t.game.venue
+  }));
+  PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now()};
   predSave();
 }
 
@@ -487,8 +505,10 @@ const RESULTS={
   date:null,
   loaded:false,
   loading:false,
-  batters:[],   // [{...prediction, actualHits, actualAB, gotHit, played}]
+  prop:'hits',  // active filter: hits | tb | hr | k | tot
+  batters:[],   // [{...prediction, actualHits, actualAB, gotHit, played, actualHR, actualTB}]
   pitchers:[],  // [{...prediction, actualKs, actualIP, gameFinal}]
+  totals:[],    // [{...prediction, actualTotal, actualHome, actualAway, gameFinal}]
   error:null
 };
 
@@ -2439,7 +2459,7 @@ async function loadResults(date){
     // Fetch all final boxscores for that date and build batter/pitcher result maps
     const sched=await fetchJSON(`${MLB}/api/v1/schedule?sportId=1&date=${date}`);
     const games=sched?.dates?.[0]?.games||[];
-    const batterResults={},pitcherResults={};
+    const batterResults={},pitcherResults={},gameTotals={};
     let gameStatus={final:0,inProgress:0,scheduled:0,total:games.length};
     
     await batchFetch(games,async (g)=>{
@@ -2451,6 +2471,14 @@ async function loadResults(date){
       const feed=await fetchGameFeed(g.gamePk);
       if(!feed)return;
       const teams=feed.liveData?.boxscore?.teams||{};
+      // Capture final score for run-totals fact-check
+      const homeRunsFinal=nn(feed.liveData?.linescore?.teams?.home?.runs);
+      const awayRunsFinal=nn(feed.liveData?.linescore?.teams?.away?.runs);
+      gameTotals[String(g.gamePk)]={
+        homeRuns:homeRunsFinal,
+        awayRuns:awayRunsFinal,
+        total:homeRunsFinal+awayRunsFinal
+      };
       ['home','away'].forEach(side=>{
         const players=teams[side]?.players||{};
         Object.values(players).forEach(p=>{
@@ -2506,6 +2534,16 @@ async function loadResults(date){
         actualBF:r?.bf??null
       };
     });
+    RESULTS.totals=(pred.totals||[]).map(t=>{
+      const r=gameTotals[t.gamePk];
+      return {
+        ...t,
+        played:!!r,
+        actualTotal:r?.total??null,
+        actualHome:r?.homeRuns??null,
+        actualAway:r?.awayRuns??null
+      };
+    });
     
     RESULTS.gameStatus=gameStatus;
     RESULTS.loading=false;
@@ -2522,9 +2560,7 @@ async function loadResults(date){
 }
 
 function renderResults(){
-  // Date picker for which day to analyze
   const candidateDate=RESULTS.date||defaultResultsDate();
-  // List of dates we have predictions for
   const savedDates=Object.keys(PRED.byDate).sort().reverse();
   
   if(RESULTS.loading){
@@ -2533,7 +2569,7 @@ function renderResults(){
         <select class="ms" id="resDateSel" onchange="loadResults(this.value)">
           ${savedDates.map(d=>`<option value="${d}" ${d===candidateDate?'selected':''}>${d}</option>`).join('')}
         </select>
-        <span style="font-size:.62rem;color:var(--mt2)">${savedDates.length} day(s) of saved predictions</span>
+        <span style="font-size:.62rem;color:var(--mt2)">${savedDates.length} day(s) saved</span>
       </div>
       <div class="empty"><b>Loading…</b><div class="spin"></div> Fetching final box scores from MLB API</div>
     `);
@@ -2541,12 +2577,11 @@ function renderResults(){
   }
   
   if(!RESULTS.loaded){
-    // Fresh state — show big load button
     if(!savedDates.length){
       setMain(`
         <div class="empty">
           <b>No saved predictions yet</b>
-          Predictions are saved each time you tap ▶ Load on the main screen.<br>
+          Predictions are saved each time you tap ▶ Reload on Home.<br>
           Once you've loaded at least one slate, come back here the next day to see if it was right.
         </div>
       `);
@@ -2559,20 +2594,19 @@ function renderResults(){
         </select>
         <button class="btn bp" onclick="loadResults(document.getElementById('resDateSel').value)">▶ Load Results</button>
       </div>
-      <div class="info" style="font-size:.6rem;margin-bottom:10px">Results aren't loaded automatically — pick a date you previously ran predictions for, then tap Load. Only games that have ended (Final) get checked.</div>
+      <div class="info" style="font-size:.6rem;margin-bottom:10px">Pick a date you previously ran predictions for, then tap Load. Only games that have ended (Final) get checked.</div>
       <div class="empty">
         <b>Tap Load Results</b>
-        Compare yesterday's hit predictions and pitcher K projections against actual boxscore outcomes.
+        Compare predictions against actual outcomes for any saved date.
       </div>
     `);
     return;
   }
   
-  // Loaded state — show the results
   if(RESULTS.error){
     setMain(`
       <div class="cb">
-        <select class="ms" id="resDateSel" onchange="loadResults(this.value)">
+        <select class="ms" onchange="loadResults(this.value)">
           ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
         </select>
         <button class="btn bg" onclick="RESULTS.loaded=false;renderResults()">↺ Reset</button>
@@ -2582,65 +2616,133 @@ function renderResults(){
     return;
   }
   
-  // ── Batter accuracy summary ──
-  const playedB=RESULTS.batters.filter(b=>b.played);
-  const hits=playedB.filter(b=>b.gotHit===true).length;
-  const noHits=playedB.filter(b=>b.gotHit===false).length;
-  const hitRate=playedB.length?(hits/playedB.length*100).toFixed(1):'—';
-  // By score bucket
-  const lockHit=playedB.filter(b=>b.score>=79.5);
-  const lockHitRate=lockHit.length?(lockHit.filter(b=>b.gotHit).length/lockHit.length*100).toFixed(0):null;
-  const strongHit=playedB.filter(b=>b.score>=62&&b.score<79.5);
-  const strongHitRate=strongHit.length?(strongHit.filter(b=>b.gotHit).length/strongHit.length*100).toFixed(0):null;
+  // Prop pills
+  const props=[
+    {id:'hits',label:'🎯 Hits',count:RESULTS.batters.length},
+    {id:'tb',label:'🏟️ Total Bases',count:RESULTS.batters.length},
+    {id:'hr',label:'💥 Home Runs',count:RESULTS.batters.length},
+    {id:'k',label:'⚡ Strikeouts',count:RESULTS.pitchers.length},
+    {id:'tot',label:'🎲 Run Totals',count:RESULTS.totals.length}
+  ];
+  const pillsHTML=props.map(p=>`
+    <button class="fc-pill ${RESULTS.prop===p.id?'active':''}" onclick="RESULTS.prop='${p.id}';renderResults()">${p.label}</button>
+  `).join('');
   
-  // ── Pitcher accuracy summary ──
-  const playedP=RESULTS.pitchers.filter(p=>p.played);
-  const totalDiff=playedP.reduce((s,p)=>s+Math.abs(p.actualKs-p.xK),0);
-  const meanError=playedP.length?(totalDiff/playedP.length).toFixed(2):'—';
-  const inRange=playedP.filter(p=>p.lowK!=null&&p.actualKs>=p.lowK&&p.actualKs<=p.highK).length;
-  const rangeRate=playedP.length?(inRange/playedP.length*100).toFixed(0):'—';
+  // Header strip
+  const headerHTML=`
+    <div class="cb">
+      <select class="ms" onchange="RESULTS.loaded=false;loadResults(this.value)">
+        ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
+      </select>
+      <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻ Reload</button>
+      <span style="font-size:.58rem;color:var(--mt2)">${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} final</span>
+    </div>
+    <div class="fc-pills">${pillsHTML}</div>
+  `;
   
-  // ── Sort batters by predicted score (same as Hits tab) ──
-  const sortedBatters=[...RESULTS.batters].sort((a,b)=>b.score-a.score);
-  // ── Sort pitchers by predicted xK (same as K tab — by grade descending) ──
-  const sortedPitchers=[...RESULTS.pitchers].sort((a,b)=>b.xK-a.xK);
+  // Body changes per prop
+  const body=renderFactCheckBody(RESULTS.prop);
   
-  function batRow(b){
-    const r=getRat(b.score,79.5);
-    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
-    let outcomeIcon='',outcomeColor='var(--mt)',outcomeText='';
-    if(!b.played){
-      outcomeIcon='—';outcomeColor='var(--mt)';outcomeText='Did not play';
-    }else if(b.gotHit===true){
-      outcomeIcon='✓';outcomeColor='var(--gn)';outcomeText=`${b.actualHits}-for-${b.actualAB}`;
-    }else if(b.gotHit===false){
-      outcomeIcon='✗';outcomeColor='var(--rd)';outcomeText=`0-for-${b.actualAB}`;
+  setMain(headerHTML+body+`<div class="disc">📜 Predictions auto-saved on each load · 14 days kept on this device</div>`);
+}
+
+function renderFactCheckBody(prop){
+  if(prop==='hits')return renderFCBatters('hit');
+  if(prop==='tb')return renderFCBatters('tb');
+  if(prop==='hr')return renderFCBatters('hr');
+  if(prop==='k')return renderFCPitchers();
+  if(prop==='tot')return renderFCTotals();
+  return '';
+}
+
+function renderFCBatters(type){
+  const scoreKey=type==='hit'?'score':type==='tb'?'tbScore':'hrScore';
+  const lockAt=type==='hit'?79.5:72;
+  const propLabel=type==='hit'?'🎯 Hit Score':type==='tb'?'🏟️ TB Score':'💥 HR Score';
+  
+  const sorted=[...RESULTS.batters]
+    .filter(b=>b[scoreKey]!=null)
+    .sort((a,b)=>b[scoreKey]-a[scoreKey]);
+  
+  const played=sorted.filter(b=>b.played);
+  // Outcome logic per prop type
+  function outcome(b){
+    if(!b.played)return {icon:'—',col:'var(--mt)',txt:'Did not play',hit:null};
+    if(type==='hit'){
+      const hit=b.actualHits>0;
+      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHits}-for-${b.actualAB}`,hit};
     }
+    if(type==='tb'){
+      // Treat 2+ TB as the "over" outcome (typical line is 1.5)
+      const hit=b.actualTB>=2;
+      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualTB||0} TB`,hit};
+    }
+    if(type==='hr'){
+      const hit=b.actualHR>0;
+      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHR||0} HR`,hit};
+    }
+  }
+  
+  const outcomes=played.map(outcome).filter(o=>o.hit!==null);
+  const hitCount=outcomes.filter(o=>o.hit).length;
+  const hitRate=outcomes.length?(hitCount/outcomes.length*100).toFixed(1)+'%':'—';
+  const lockSet=played.filter(b=>b[scoreKey]>=lockAt);
+  const lockOutcomes=lockSet.map(outcome).filter(o=>o.hit!==null);
+  const lockRate=lockOutcomes.length?(lockOutcomes.filter(o=>o.hit).length/lockOutcomes.length*100).toFixed(0)+'%':null;
+  const strongSet=played.filter(b=>b[scoreKey]>=62&&b[scoreKey]<lockAt);
+  const strongOutcomes=strongSet.map(outcome).filter(o=>o.hit!==null);
+  const strongRate=strongOutcomes.length?(strongOutcomes.filter(o=>o.hit).length/strongOutcomes.length*100).toFixed(0)+'%':null;
+  
+  const rows=sorted.map(b=>{
+    const r=getRat(b[scoreKey],lockAt);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const o=outcome(b);
     return `<tr class="${rc}">
-      <td>${sbar(b.score,79.5)}</td>
+      <td>${sbar(b[scoreKey],lockAt)}</td>
       <td>${bdg(r)}</td>
       <td class="l"><strong>${b.name}</strong></td>
       <td style="color:var(--mt2)">${b.team}</td>
       <td style="color:var(--mt2)">${b.order||''}</td>
       <td class="l" style="max-width:90px;overflow:hidden;text-overflow:ellipsis;color:var(--mt2)">${b.pitcherName||''}</td>
-      <td style="color:${outcomeColor};font-weight:700;font-size:1rem">${outcomeIcon}</td>
-      <td style="color:${outcomeColor};font-size:.62rem">${outcomeText}</td>
-      <td style="color:var(--mt2);font-size:.6rem">${b.actualHR>0?'💥 '+b.actualHR+' HR':''}${b.actualTB>0?(b.actualHR>0?' · ':'')+b.actualTB+' TB':''}</td>
+      <td style="color:${o.col};font-weight:700;font-size:1rem">${o.icon}</td>
+      <td style="color:${o.col};font-size:.62rem">${o.txt}</td>
     </tr>`;
-  }
+  }).join('');
   
-  function pitRow(p){
+  return `
+    <div class="sum">
+      <div class="pill"><span class="pn">${hitRate}</span>Overall hit rate</div>
+      ${lockRate?`<div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock (${lockSet.length})</div>`:''}
+      ${strongRate?`<div class="pill ht"><span class="pn">${strongRate}</span>🔥 Strong (${strongSet.length})</div>`:''}
+      <div class="pill"><span class="pn">${sorted.length}</span>Predicted</div>
+    </div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'≥2 total bases':'hit a HR'} · ✗ = no · — = didn't play.</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>${propLabel}</th><th>Rating</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th></th><th>Result</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
+}
+
+function renderFCPitchers(){
+  const sorted=[...RESULTS.pitchers].sort((a,b)=>b.xK-a.xK);
+  const played=sorted.filter(p=>p.played);
+  const meanError=played.length?(played.reduce((s,p)=>s+Math.abs(p.actualKs-p.xK),0)/played.length).toFixed(2):'—';
+  const inRange=played.filter(p=>p.lowK!=null&&p.actualKs>=p.lowK&&p.actualKs<=p.highK).length;
+  const rangeRate=played.length?(inRange/played.length*100).toFixed(0)+'%':'—';
+  
+  const rows=sorted.map(p=>{
     const r=getRat(p.grade);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
-    let outcomeIcon='',outcomeColor='var(--mt)',outcomeText='',diffStr='';
-    if(!p.played){
-      outcomeIcon='—';outcomeColor='var(--mt)';outcomeText='No final stats';
-    }else{
+    let icon='—',col='var(--mt)',txt='No final stats',diffStr='';
+    if(p.played){
       const diff=p.actualKs-p.xK;
       const inR=p.lowK!=null&&p.actualKs>=p.lowK&&p.actualKs<=p.highK;
-      outcomeIcon=inR?'✓':'✗';
-      outcomeColor=inR?'var(--gn)':Math.abs(diff)<=1.5?'var(--gd)':'var(--rd)';
-      outcomeText=`${p.actualKs} K · ${p.actualIP} IP`;
+      icon=inR?'✓':'✗';
+      col=inR?'var(--gn)':Math.abs(diff)<=1.5?'var(--gd)':'var(--rd)';
+      txt=`${p.actualKs} K · ${p.actualIP} IP`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
     return `<tr class="${rc}">
@@ -2651,53 +2753,70 @@ function renderResults(){
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
       <td><strong style="color:var(--ac)">${p.xK}</strong></td>
       <td style="color:var(--mt2);font-size:.62rem">${p.lowK!=null?p.lowK+'–'+p.highK:'—'}</td>
-      <td style="color:${outcomeColor};font-weight:700;font-size:1rem">${outcomeIcon}</td>
-      <td style="color:${outcomeColor};font-size:.62rem">${outcomeText}</td>
-      <td style="color:${outcomeColor};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
+      <td style="color:${col};font-size:.62rem">${txt}</td>
+      <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
     </tr>`;
-  }
+  }).join('');
   
-  setMain(`
-    <div class="cb">
-      <select class="ms" id="resDateSel" onchange="RESULTS.loaded=false;loadResults(this.value)">
-        ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
-      </select>
-      <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻ Reload</button>
-      <span style="font-size:.58rem;color:var(--mt2)">${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} games final</span>
-    </div>
-    
+  return `
     <div class="sum">
-      <div class="pill"><span class="pn">${hitRate}%</span>Overall hit rate</div>
-      ${lockHitRate!=null?`<div class="pill lk"><span class="pn">${lockHitRate}%</span>🔒 Lock hit rate (${lockHit.length})</div>`:''}
-      ${strongHitRate!=null?`<div class="pill ht"><span class="pn">${strongHitRate}%</span>🔥 Strong hit rate (${strongHit.length})</div>`:''}
-      <div class="pill ln"><span class="pn">${meanError}</span>Avg K error (${playedP.length}p)</div>
-      <div class="pill"><span class="pn">${rangeRate}%</span>Ks in range</div>
+      <div class="pill ln"><span class="pn">${meanError}</span>Avg K error</div>
+      <div class="pill"><span class="pn">${rangeRate}</span>Ks in range</div>
+      <div class="pill"><span class="pn">${sorted.length}</span>Pitchers</div>
     </div>
-    
-    <details open style="margin-bottom:10px">
-      <summary style="font-size:.7rem;color:var(--ac);font-weight:700">🎯 Hit Predictions vs Actual (${RESULTS.batters.length} batters)</summary>
-      <div class="info" style="font-size:.58rem;margin-top:6px">Sorted by predicted Hit Score (same order as Hits tab). ✓ = got hit · ✗ = no hit · — = didn't play (game not final, scratched, etc).</div>
-      <div class="tbl-wrap" style="margin-top:6px"><table>
-        <thead><tr>
-          <th>Score</th><th>Rating</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th></th><th>Result</th><th>Extra</th>
-        </tr></thead>
-        <tbody>${sortedBatters.map(batRow).join('')}</tbody>
-      </table></div>
-    </details>
-    
-    <details open>
-      <summary style="font-size:.7rem;color:var(--ac);font-weight:700">⚡ K Predictions vs Actual (${RESULTS.pitchers.length} pitchers)</summary>
-      <div class="info" style="font-size:.58rem;margin-top:6px">Sorted by predicted xK (same order as Ks tab). ✓ = actual Ks landed inside the predicted ±1σ range · ✗ = outside range. Diff column shows actual − predicted.</div>
-      <div class="tbl-wrap" style="margin-top:6px"><table>
-        <thead><tr>
-          <th>Grade</th><th>Rating</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th>Range</th><th></th><th>Actual</th><th>Diff</th>
-        </tr></thead>
-        <tbody>${sortedPitchers.map(pitRow).join('')}</tbody>
-      </table></div>
-    </details>
-    
-    <div class="disc">📜 Predictions auto-saved on each load. Up to 14 days kept locally on this device. Wipe by clearing browser site data.</div>
-  `);
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. ✓ = actual Ks landed inside ±1σ range · ✗ = outside range. Diff = actual − predicted.</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Grade</th><th>Rating</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th>Range</th><th></th><th>Actual</th><th>Diff</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
+}
+
+function renderFCTotals(){
+  const sorted=[...RESULTS.totals].sort((a,b)=>b.total-a.total);
+  const played=sorted.filter(t=>t.played);
+  const meanError=played.length?(played.reduce((s,t)=>s+Math.abs(t.actualTotal-t.total),0)/played.length).toFixed(2):'—';
+  const within2=played.filter(t=>Math.abs(t.actualTotal-t.total)<=2).length;
+  const within2Rate=played.length?(within2/played.length*100).toFixed(0)+'%':'—';
+  
+  const rows=sorted.map(t=>{
+    let icon='—',col='var(--mt)',txt='Game not final',diffStr='';
+    if(t.played){
+      const diff=t.actualTotal-t.total;
+      const close=Math.abs(diff)<=2;
+      icon=close?'✓':'✗';
+      col=close?'var(--gn)':Math.abs(diff)<=3?'var(--gd)':'var(--rd)';
+      txt=`${t.actualTotal} (${t.actualAway}-${t.actualHome})`;
+      diffStr=(diff>=0?'+':'')+diff.toFixed(1);
+    }
+    return `<tr>
+      <td><strong style="color:var(--gd);font-size:1.1rem">${t.total}</strong></td>
+      <td class="l"><strong>${t.away} @ ${t.home}</strong></td>
+      <td class="l" style="color:var(--mt2);font-size:.6rem">${t.venue?.replace(/(Stadium|Park|Field)/i,'').trim()||''}</td>
+      <td style="color:var(--mt2);font-size:.62rem">${t.awayRuns}-${t.homeRuns}</td>
+      <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
+      <td style="color:${col};font-size:.62rem">${txt}</td>
+      <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+    </tr>`;
+  }).join('');
+  
+  return `
+    <div class="sum">
+      <div class="pill ln"><span class="pn">${meanError}</span>Avg run error</div>
+      <div class="pill"><span class="pn">${within2Rate}</span>Within 2 runs</div>
+      <div class="pill"><span class="pn">${sorted.length}</span>Games</div>
+    </div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. ✓ = within 2 runs · ✗ = off by 3+. Diff = actual − predicted.</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>xR</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th><th></th><th>Actual</th><th>Diff</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
 }
 
 
