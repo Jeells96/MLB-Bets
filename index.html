@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v3.1 · Prop Intelligence</title>
+<title>Diamond IQ v4 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -282,7 +282,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v3.1 · Live API</div>
+      <div class="bsub">Prop Intelligence · v4 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -301,6 +301,7 @@ details summary:hover{color:var(–tx)}
     <div class="tab" id="t-tb" onclick="sw('tb')">🏟️ TB</div>
     <div class="tab" id="t-k" onclick="sw('k')">⚡ Ks</div>
     <div class="tab" id="t-tot" onclick="sw('tot')">🎲 Totals</div>
+    <div class="tab" id="t-res" onclick="sw('res')">📊 Results</div>
     <div class="tab" id="t-srch" onclick="sw('srch')">🔍 Player</div>
     <div class="tab" id="t-set" onclick="sw('set')">⚙️</div>
   </div>
@@ -402,6 +403,68 @@ const UI={
 
 // Qualification thresholds
 const Q={bPA:40,bSp:15,pIP:10,pTBF:25};
+
+/* ============ PREDICTIONS PERSISTENCE (Results tab) ============ */
+// Lightweight: save each load's hit + K predictions to localStorage so the Results tab
+// can fetch yesterday's box scores and compare. NOT a learning loop — just historical record.
+const PRED_KEY='diq_predictions_v1';
+const PRED={byDate:{}};  // { 'YYYY-MM-DD': { batters:[{id,name,team,score,grade,order}], pitchers:[{id,name,team,opp,xK,grade}] } }
+
+function predLoad(){
+  try{
+    const raw=localStorage.getItem(PRED_KEY);
+    if(!raw)return;
+    const d=JSON.parse(raw);
+    PRED.byDate=d.byDate||{};
+  }catch(e){console.warn('[DIQ] predLoad failed:',e.message);}
+}
+function predSave(){
+  try{
+    // Cap to last 14 days to stay under storage limits
+    const dates=Object.keys(PRED.byDate).sort();
+    if(dates.length>14){
+      dates.slice(0,dates.length-14).forEach(d=>delete PRED.byDate[d]);
+    }
+    localStorage.setItem(PRED_KEY,JSON.stringify({byDate:PRED.byDate}));
+  }catch(e){console.warn('[DIQ] predSave failed:',e.message);}
+}
+function predSnapshot(){
+  if(!STATE.date||!STATE.matchups.length)return;
+  const batters=STATE.matchups.filter(m=>m.kind==='batter'&&m.hitScore!=null).map(m=>({
+    id:String(m.batterId),
+    name:m.batterName,
+    team:m.team.abbr||m.team.name,
+    opp:m.opp.abbr||m.opp.name,
+    order:m.order,
+    bats:m.bats,
+    pHand:m.pHand,
+    pitcherName:m.pitcherName,
+    score:m.hitScore
+  }));
+  const pitchers=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).map(m=>({
+    id:String(m.pitcherId),
+    name:m.pitcherName,
+    team:m.team.abbr||m.team.name,
+    opp:m.opp.abbr||m.opp.name,
+    pHand:m.pHand,
+    xK:m.expectedK,
+    grade:m.kGrade,
+    lowK:m.lowK,
+    highK:m.highK
+  }));
+  PRED.byDate[STATE.date]={batters,pitchers,savedAt:Date.now()};
+  predSave();
+}
+
+// Results state (separate from STATE so it doesn't bloat main load)
+const RESULTS={
+  date:null,
+  loaded:false,
+  loading:false,
+  batters:[],   // [{...prediction, actualHits, actualAB, gotHit, played}]
+  pitchers:[],  // [{...prediction, actualKs, actualIP, gameFinal}]
+  error:null
+};
 
 /* ============ HELPERS ============ */
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
@@ -663,11 +726,9 @@ function normalizeBatter(pid,seasonD,expD,saberD,splitsD,recentD,year){
   out.overall.xISO=out.overall.xSLG&&out.overall.xBA?out.overall.xSLG-out.overall.xBA:null;
   out.overall.hardHit=sf(expStat.hardHitPercentage);
   
-  // Sabermetrics (wOBA, wRC+, wRAA). Field casing varies; try multiple.
+  // Sabermetrics: only wOBA is used downstream
   const saberStat=saberD?.stats?.[0]?.splits?.[0]?.stat||{};
   out.overall.wOBA=sf(saberStat.woba)??sf(saberStat.wOba)??sf(saberStat.wOBA);
-  out.overall.wRAA=sf(saberStat.wRaa)??sf(saberStat.wraa)??sf(saberStat.wRAA);
-  out.overall.wRCPlus=sf(saberStat.wrcPlus)??sf(saberStat.wRcPlus)??sf(saberStat.wRCPlus);
   
   // Splits vs L/R
   const splits=splitsD?.stats?.[0]?.splits||[];
@@ -763,7 +824,7 @@ function normalizePitcher(pid,seasonD,expD,saberD,splitsD,recentD,year){
   
   const saberStat=saberD?.stats?.[0]?.splits?.[0]?.stat||{};
   out.overall.fip=sf(saberStat.fip)??sf(saberStat.FIP);
-  out.overall.xfip=sf(saberStat.xfip)??sf(saberStat.xFip)??sf(saberStat.xFIP);
+  out.overall.xfip=sf(saberStat.xfip)??sf(saberStat.xFip)??sf(saberStat.xFIP); // kept for future use
   out.overall.wOBA=sf(saberStat.woba)??sf(saberStat.wOba)??sf(saberStat.wOBA);
   
   const splits=splitsD?.stats?.[0]?.splits||[];
@@ -1034,6 +1095,7 @@ async function loadAll(){
     progress(9.8,10,'Scoring matchups…');
     buildAllMatchups();
     buildRunTotals();
+    predSnapshot();
     
     STATE.ready=true;
     progress(10,10,'Done');
@@ -1340,24 +1402,82 @@ function batterTBGrade(p,pHand,park,wx,venue){
 
 // === PITCHER K GRADE for a specific pitcher vs lineup ===
 // Returns expected Ks and a 0-100 grade vs typical total
-function pitcherKExpectation(pitcher,oppLineup,pHand){
+function pitcherKExpectation(pitcher,oppLineup,pHand,park,wx){
   if(!pitcher||!pitcher.overall.ip)return null;
   const L=STATE.leagueAvg;
   const ov=pitcher.prev?.isPrevSeason?pitcher.prev.overall:pitcher.overall;
+  const rec=pitcher.recent||{};
   
-  // Expected batters faced = avgIP * ~4.3 + some for relief (cap estimate at starter workload)
-  const avgIP=ov.avgIP||L.p_avgIP;
-  const expectedIP=clamp(avgIP,3.5,7.5);
+  // ── 1. RECENT FORM BLEND ──────────────────────────────────────────────
+  // Recent K% gets 35% weight when we have ≥3 starts and ≥10 IP
+  let effectiveKRate=ov.k_rate;
+  let recentKRate=null,recentBlendUsed=0;
+  if(rec.g>=3&&rec.ip>=10&&rec.k!=null){
+    // K rate from recent = strikeouts / (IP × ~4.2 batters/inning approximation)
+    // More accurate: recent K / (IP × 4.2). But better still — use BF if we had it.
+    // Using IP as a proxy: 1 inning ≈ 4.3 PAs faced
+    const recentBFEst=rec.ip*4.3;
+    recentKRate=recentBFEst>0?rec.k/recentBFEst:null;
+    if(recentKRate!=null){
+      // Cap recent at +/- 35% from season K to limit volatility from a single dominant start
+      const capped=clamp(recentKRate,ov.k_rate*0.65,ov.k_rate*1.50);
+      effectiveKRate=ov.k_rate*0.65+capped*0.35;
+      recentBlendUsed=0.35;
+    }
+  }
   
-  // K% baseline: blend overall K% with split K% vs each batter's hand (by lineup spot)
-  let kPA=0,totalPA=0,ovrKPA=0;
+  // ── 2. OPPONENT-ADJUSTED EXPECTED IP ──────────────────────────────────
+  // Base IP from season avg. Adjust for opponent contact quality (high-OBP lineups
+  // shorten outings) and park K-friendliness (more Ks = more outs per pitch = longer)
+  const baseIP=ov.avgIP||L.p_avgIP;
+  let oppOBPAvg=0,oppCount=0;
+  oppLineup.forEach(b=>{
+    const bObj=STATE.players[b.id];
+    if(!bObj)return;
+    const bOv=bObj.prev?.isPrevSeason?bObj.prev.overall:bObj.overall;
+    const obp=bOv.obp;
+    if(obp!=null){oppOBPAvg+=obp;oppCount++;}
+  });
+  oppOBPAvg=oppCount>0?oppOBPAvg/oppCount:L.b_obp;
+  // Opponent OBP factor: league avg OBP=.320 → 1.00; .350 OBP → 0.93 (gets pulled earlier);
+  // .290 OBP → 1.06 (pitches deeper)
+  const oppIPMult=clamp(1-((oppOBPAvg-L.b_obp)/L.b_obp)*0.6,0.85,1.12);
+  // Park K factor: more Ks = quicker innings → can pitch longer
+  const parkKMult=park?.k?clamp(1+(park.k-1)*0.4,0.92,1.08):1.0;
+  const expectedIP=clamp(baseIP*oppIPMult*parkKMult,3.5,7.5);
+  
+  // ── 3. TIMES-THROUGH-THE-ORDER PENALTY ────────────────────────────────
+  // First TTO: K% × 1.04 (pitcher fresh, hitters guessing)
+  // Second TTO: K% × 1.00 (baseline)
+  // Third TTO: K% × 0.92 (familiarity penalty, well-documented in saber research)
+  // Fourth+ TTO: × 0.85 (rare — only for elite starters going deep)
+  function ttoMult(timeThrough){
+    if(timeThrough<=1)return 1.04;
+    if(timeThrough===2)return 1.00;
+    if(timeThrough===3)return 0.92;
+    return 0.85;
+  }
+  
+  // ── 4. PA DISTRIBUTION ACROSS LINEUP ──────────────────────────────────
+  // Expected total batters faced = IP × 4.2 (slightly inflated by baserunners but fine)
+  const totalBF=expectedIP*4.2;
+  // For each batter in the lineup, compute how many times they'll face the pitcher
+  // PA[i] = totalBF * (lineup spot's share). With 9 hitters, leadoff sees more PAs.
+  // Approx distribution: spots 1-2 get ~1.10 share, 3-5 ~1.04, 6-7 ~0.96, 8-9 ~0.86
+  // Then split into TTO buckets: hitter sees pitcher 1x, 2x, 3x... based on TTO
+  
+  // ── 5. K RATE COMPUTATION PER BATTER PER TIME-THROUGH ────────────────
+  let totalExpectedK=0,baselineK=0;
+  let kComponentsForVariance=[];
   oppLineup.forEach(b=>{
     const bObj=STATE.players[b.id];
     const paF=paFactor(b.order);
-    const bHand=bObj?.prev?.isPrevSeason?(STATE.players[b.id]?.overall?.pa||0):b.bats;
+    
     // Pitcher split vs batter hand
     const pSp=pitcherSplit(pitcher,b.bats);
-    const pKr=blendStat(pSp,ov,'k_rate',150)??ov.k_rate??L.p_k;
+    const pSplitKr=blendStat(pSp,ov,'k_rate',150)??ov.k_rate??L.p_k;
+    // Apply recent-blend on top of split
+    const pKr=effectiveKRate?(pSplitKr*0.7+effectiveKRate*0.3):pSplitKr;
     
     // Batter's K% vs pitcher hand (blended)
     let bKr=L.b_k;
@@ -1367,27 +1487,68 @@ function pitcherKExpectation(pitcher,oppLineup,pHand){
       bKr=blendStat(bSp,bOv,'k_rate',80)??bOv.k_rate??L.b_k;
     }
     
-    // Combined K rate using log5-style formula
-    const combined=combineRates(pKr,bKr,L.p_k); // league K baseline
+    // Combined K rate using log5
+    const baseCombined=combineRates(pKr,bKr,L.p_k);
     
-    // Estimated PA for this batter
-    const pa=expectedIP*4.2/9*paF;
-    kPA+=combined*pa;
-    totalPA+=pa;
-    ovrKPA+=pKr*pa;
+    // PAs for this batter
+    const pa=totalBF/9*paF;
+    
+    // Distribute across TTO: if pa=2.7, this batter sees pitcher 1x at TTO=1, 1x at TTO=2,
+    // and 0.7x at TTO=3
+    let remaining=pa;
+    let tto=1;
+    let kForBatter=0;
+    while(remaining>0&&tto<=4){
+      const slice=Math.min(remaining,1);
+      const adjK=baseCombined*ttoMult(tto);
+      // Apply park K factor: parks like Petco tend to inflate K rates by ~3%, Coors deflates
+      const parkAdjK=park?.k?adjK*(1+(park.k-1)*0.5):adjK;
+      kForBatter+=parkAdjK*slice;
+      remaining-=slice;
+      tto++;
+    }
+    
+    totalExpectedK+=kForBatter;
+    baselineK+=L.p_k*pa;
+    kComponentsForVariance.push(kForBatter);
   });
   
-  const expectedK=kPA;
-  // Grade vs expected baseline (6 Ks = avg starter)
+  // ── 6. UNCERTAINTY RANGE ──────────────────────────────────────────────
+  // Standard deviation: per-PA Bernoulli σ = sqrt(p(1-p)). Sum of independent PAs
+  // gives total σ ≈ sqrt(Σ p_i(1-p_i)). For ~24 PAs with mean K rate 0.24, σ ≈ 2.1 Ks.
+  let varianceSum=0;
+  let totalPAcount=totalBF;
+  // Use mean K rate to approximate variance (good enough for display)
+  const meanRate=totalExpectedK/totalPAcount;
+  varianceSum=totalPAcount*meanRate*(1-meanRate);
+  const stdDev=Math.sqrt(varianceSum);
+  // 1-sigma range. Roughly the "central 68%" of outcomes.
+  const lowK=Math.max(0,totalExpectedK-stdDev);
+  const highK=totalExpectedK+stdDev;
+  
+  // ── 7. GRADE ──────────────────────────────────────────────────────────
+  // Grade vs typical baseline (a starter's "expected" K total at league rate)
   const avgBaseline=expectedIP*L.p_k*4.2;
-  const grade=scale(expectedK,avgBaseline*0.75,avgBaseline*1.4);
+  const grade=scale(totalExpectedK,avgBaseline*0.75,avgBaseline*1.4);
   
   return {
-    expectedK:Math.round(expectedK*10)/10,
+    expectedK:Math.round(totalExpectedK*10)/10,
     expectedIP:Math.round(expectedIP*10)/10,
     grade:Math.round(grade*10)/10,
     kRate:ov.k_rate,
-    avgBaseline:Math.round(avgBaseline*10)/10
+    avgBaseline:Math.round(avgBaseline*10)/10,
+    // Diagnostic / display fields
+    lowK:Math.round(lowK*10)/10,
+    highK:Math.round(highK*10)/10,
+    stdDev:Math.round(stdDev*10)/10,
+    recentBlendUsed,
+    recentKRate:recentKRate!=null?Math.round(recentKRate*1000)/1000:null,
+    seasonKRate:Math.round(ov.k_rate*1000)/1000,
+    effectiveKRate:Math.round(effectiveKRate*1000)/1000,
+    oppOBP:Math.round(oppOBPAvg*1000)/1000,
+    oppIPMult:Math.round(oppIPMult*100)/100,
+    parkKMult:Math.round(parkKMult*100)/100,
+    parkK:park?.k||1.0
   };
 }
 
@@ -1532,7 +1693,7 @@ function buildAllMatchups(){
     
     // Pitcher K matchups (both SPs)
     if(g.hSP?.id&&STATE.pitchers[g.hSP.id]){
-      const k=pitcherKExpectation(STATE.pitchers[g.hSP.id],g.aLineup,g.hSPHand||'R');
+      const k=pitcherKExpectation(STATE.pitchers[g.hSP.id],g.aLineup,g.hSPHand||'R',park,wx);
       if(k){
         STATE.matchups.push({
           kind:'pitcher',
@@ -1540,12 +1701,16 @@ function buildAllMatchups(){
           pitcherId:g.hSP.id,pitcherName:g.hSP.name,pHand:g.hSPHand||'R',
           oppLineup:g.aLineup,
           expectedK:k.expectedK,expectedIP:k.expectedIP,kGrade:k.grade,
-          kRate:k.kRate,avgBaseline:k.avgBaseline
+          kRate:k.kRate,avgBaseline:k.avgBaseline,
+          lowK:k.lowK,highK:k.highK,stdDev:k.stdDev,
+          recentBlendUsed:k.recentBlendUsed,recentKRate:k.recentKRate,seasonKRate:k.seasonKRate,
+          effectiveKRate:k.effectiveKRate,oppOBP:k.oppOBP,oppIPMult:k.oppIPMult,
+          parkKMult:k.parkKMult,parkK:k.parkK
         });
       }
     }
     if(g.aSP?.id&&STATE.pitchers[g.aSP.id]){
-      const k=pitcherKExpectation(STATE.pitchers[g.aSP.id],g.hLineup,g.aSPHand||'R');
+      const k=pitcherKExpectation(STATE.pitchers[g.aSP.id],g.hLineup,g.aSPHand||'R',park,wx);
       if(k){
         STATE.matchups.push({
           kind:'pitcher',
@@ -1553,7 +1718,11 @@ function buildAllMatchups(){
           pitcherId:g.aSP.id,pitcherName:g.aSP.name,pHand:g.aSPHand||'R',
           oppLineup:g.hLineup,
           expectedK:k.expectedK,expectedIP:k.expectedIP,kGrade:k.grade,
-          kRate:k.kRate,avgBaseline:k.avgBaseline
+          kRate:k.kRate,avgBaseline:k.avgBaseline,
+          lowK:k.lowK,highK:k.highK,stdDev:k.stdDev,
+          recentBlendUsed:k.recentBlendUsed,recentKRate:k.recentKRate,seasonKRate:k.seasonKRate,
+          effectiveKRate:k.effectiveKRate,oppOBP:k.oppOBP,oppIPMult:k.oppIPMult,
+          parkKMult:k.parkKMult,parkK:k.parkK
         });
       }
     }
@@ -1675,7 +1844,7 @@ function sw(tab){
 }
 
 function renderTab(){
-  if(!STATE.ready&&UI.tab!=='set'){
+  if(!STATE.ready&&UI.tab!=='set'&&UI.tab!=='res'){
     setMain(`<div class="empty"><b>Not loaded</b>Pick a date and tap ▶ Load</div>`);
     return;
   }
@@ -1686,6 +1855,7 @@ function renderTab(){
     case 'tb':renderTB();break;
     case 'k':renderKs();break;
     case 'tot':renderTotals();break;
+    case 'res':renderResults();break;
     case 'srch':renderSrch();break;
     case 'set':renderSettings();break;
   }
@@ -2045,6 +2215,7 @@ function renderKs(){
       <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${m.opp.abbr||m.opp.name}</td>
       <td><strong style="color:var(--ac)">${m.expectedK}</strong></td>
+      <td style="color:var(--mt2);font-size:.62rem">${m.lowK!=null?m.lowK+'–'+m.highK:'—'}</td>
       <td>${m.expectedIP}</td>
       <td>${pct(ov.k_rate,1)}</td>
       <td>${fmt(ov.k9,1)}</td>
@@ -2058,6 +2229,7 @@ function renderKs(){
     <div class="cb">
       <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter pitcher…" oninput="filtTbl(this.value,'kTb')"></div>
     </div>
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">xK = projected strikeouts · Range = ±1σ (≈68% likelihood) · Includes recent form, park K factor, opponent OBP-adjusted IP, and times-through-the-order penalty</div>
     <div class="sum">
       <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
       <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
@@ -2071,6 +2243,7 @@ function renderKs(){
         <th>Hand</th>
         <th class="l">Opp</th>
         <th onclick="sortK('eK')">xK</th>
+        <th>Range</th>
         <th>xIP</th>
         <th>K%</th><th>K/9</th><th>ERA</th><th>WHIP</th><th>Opp K%</th>
       </tr></thead>
@@ -2204,6 +2377,300 @@ function selSrch(id,isB,pid){
     area.innerHTML=renderPitcherCard(id);
   }
 }
+
+/* ---------- RESULTS TAB ---------- */
+function defaultResultsDate(){
+  // Default to yesterday relative to whatever date the user is loading
+  const base=STATE.date||todayStr();
+  const d=new Date(base+'T12:00:00');
+  d.setDate(d.getDate()-1);
+  return d.toISOString().split('T')[0];
+}
+
+async function loadResults(date){
+  if(RESULTS.loading)return;
+  RESULTS.loading=true;
+  RESULTS.date=date;
+  RESULTS.error=null;
+  RESULTS.batters=[];
+  RESULTS.pitchers=[];
+  RESULTS.loaded=false;
+  renderResults();
+  
+  try{
+    const pred=PRED.byDate[date];
+    if(!pred){
+      RESULTS.error='No saved predictions for '+date+'. Predictions are saved each time you load a slate — pick a date you previously loaded.';
+      RESULTS.loading=false;
+      RESULTS.loaded=true;
+      renderResults();
+      return;
+    }
+    
+    // Fetch all final boxscores for that date and build batter/pitcher result maps
+    const sched=await fetchJSON(`${MLB}/api/v1/schedule?sportId=1&date=${date}`);
+    const games=sched?.dates?.[0]?.games||[];
+    const batterResults={},pitcherResults={};
+    let gameStatus={final:0,inProgress:0,scheduled:0,total:games.length};
+    
+    await batchFetch(games,async (g)=>{
+      const status=g.status?.abstractGameCode;
+      if(status==='F')gameStatus.final++;
+      else if(status==='L')gameStatus.inProgress++;
+      else gameStatus.scheduled++;
+      if(status!=='F')return; // Only ingest finals — partial games can mislead
+      const feed=await fetchGameFeed(g.gamePk);
+      if(!feed)return;
+      const teams=feed.liveData?.boxscore?.teams||{};
+      ['home','away'].forEach(side=>{
+        const players=teams[side]?.players||{};
+        Object.values(players).forEach(p=>{
+          const pid=String(p.person?.id||'');
+          if(!pid)return;
+          const bat=p.stats?.batting||{};
+          const pit=p.stats?.pitching||{};
+          if(bat.atBats!=null||bat.plateAppearances!=null){
+            batterResults[pid]={
+              ab:nn(bat.atBats),
+              h:nn(bat.hits),
+              hr:nn(bat.homeRuns),
+              tb:nn(bat.totalBases),
+              pa:nn(bat.plateAppearances),
+              k:nn(bat.strikeOuts)
+            };
+          }
+          if(pit.inningsPitched!=null&&nn(pit.inningsPitched)>0){
+            pitcherResults[pid]={
+              ip:nn(pit.inningsPitched),
+              k:nn(pit.strikeOuts),
+              bb:nn(pit.baseOnBalls),
+              h:nn(pit.hits),
+              er:nn(pit.earnedRuns),
+              bf:nn(pit.battersFaced)
+            };
+          }
+        });
+      });
+    },4);
+    
+    // Merge predictions with results
+    RESULTS.batters=pred.batters.map(b=>{
+      const r=batterResults[b.id];
+      return {
+        ...b,
+        played:!!r&&(r.ab>0||r.pa>0),
+        actualAB:r?.ab??null,
+        actualPA:r?.pa??null,
+        actualHits:r?.h??null,
+        actualHR:r?.hr??null,
+        actualTB:r?.tb??null,
+        gotHit:r?(r.h>0?true:(r.ab>0||r.pa>0?false:null)):null
+      };
+    });
+    RESULTS.pitchers=pred.pitchers.map(p=>{
+      const r=pitcherResults[p.id];
+      return {
+        ...p,
+        played:!!r,
+        actualKs:r?.k??null,
+        actualIP:r?.ip??null,
+        actualBF:r?.bf??null
+      };
+    });
+    
+    RESULTS.gameStatus=gameStatus;
+    RESULTS.loading=false;
+    RESULTS.loaded=true;
+    renderResults();
+    
+  }catch(err){
+    console.error(err);
+    RESULTS.error=err.message;
+    RESULTS.loading=false;
+    RESULTS.loaded=true;
+    renderResults();
+  }
+}
+
+function renderResults(){
+  // Date picker for which day to analyze
+  const candidateDate=RESULTS.date||defaultResultsDate();
+  // List of dates we have predictions for
+  const savedDates=Object.keys(PRED.byDate).sort().reverse();
+  
+  if(RESULTS.loading){
+    setMain(`
+      <div class="cb">
+        <select class="ms" id="resDateSel" onchange="loadResults(this.value)">
+          ${savedDates.map(d=>`<option value="${d}" ${d===candidateDate?'selected':''}>${d}</option>`).join('')}
+        </select>
+        <span style="font-size:.62rem;color:var(--mt2)">${savedDates.length} day(s) of saved predictions</span>
+      </div>
+      <div class="empty"><b>Loading…</b><div class="spin"></div> Fetching final box scores from MLB API</div>
+    `);
+    return;
+  }
+  
+  if(!RESULTS.loaded){
+    // Fresh state — show big load button
+    if(!savedDates.length){
+      setMain(`
+        <div class="empty">
+          <b>No saved predictions yet</b>
+          Predictions are saved each time you tap ▶ Load on the main screen.<br>
+          Once you've loaded at least one slate, come back here the next day to see if it was right.
+        </div>
+      `);
+      return;
+    }
+    setMain(`
+      <div class="cb">
+        <select class="ms" id="resDateSel">
+          ${savedDates.map(d=>`<option value="${d}" ${d===candidateDate?'selected':''}>${d}</option>`).join('')}
+        </select>
+        <button class="btn bp" onclick="loadResults(document.getElementById('resDateSel').value)">▶ Load Results</button>
+      </div>
+      <div class="info" style="font-size:.6rem;margin-bottom:10px">Results aren't loaded automatically — pick a date you previously ran predictions for, then tap Load. Only games that have ended (Final) get checked.</div>
+      <div class="empty">
+        <b>Tap Load Results</b>
+        Compare yesterday's hit predictions and pitcher K projections against actual boxscore outcomes.
+      </div>
+    `);
+    return;
+  }
+  
+  // Loaded state — show the results
+  if(RESULTS.error){
+    setMain(`
+      <div class="cb">
+        <select class="ms" id="resDateSel" onchange="loadResults(this.value)">
+          ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
+        </select>
+        <button class="btn bg" onclick="RESULTS.loaded=false;renderResults()">↺ Reset</button>
+      </div>
+      <div class="empty"><b>Error</b>${RESULTS.error}</div>
+    `);
+    return;
+  }
+  
+  // ── Batter accuracy summary ──
+  const playedB=RESULTS.batters.filter(b=>b.played);
+  const hits=playedB.filter(b=>b.gotHit===true).length;
+  const noHits=playedB.filter(b=>b.gotHit===false).length;
+  const hitRate=playedB.length?(hits/playedB.length*100).toFixed(1):'—';
+  // By score bucket
+  const lockHit=playedB.filter(b=>b.score>=79.5);
+  const lockHitRate=lockHit.length?(lockHit.filter(b=>b.gotHit).length/lockHit.length*100).toFixed(0):null;
+  const strongHit=playedB.filter(b=>b.score>=62&&b.score<79.5);
+  const strongHitRate=strongHit.length?(strongHit.filter(b=>b.gotHit).length/strongHit.length*100).toFixed(0):null;
+  
+  // ── Pitcher accuracy summary ──
+  const playedP=RESULTS.pitchers.filter(p=>p.played);
+  const totalDiff=playedP.reduce((s,p)=>s+Math.abs(p.actualKs-p.xK),0);
+  const meanError=playedP.length?(totalDiff/playedP.length).toFixed(2):'—';
+  const inRange=playedP.filter(p=>p.lowK!=null&&p.actualKs>=p.lowK&&p.actualKs<=p.highK).length;
+  const rangeRate=playedP.length?(inRange/playedP.length*100).toFixed(0):'—';
+  
+  // ── Sort batters by predicted score (same as Hits tab) ──
+  const sortedBatters=[...RESULTS.batters].sort((a,b)=>b.score-a.score);
+  // ── Sort pitchers by predicted xK (same as K tab — by grade descending) ──
+  const sortedPitchers=[...RESULTS.pitchers].sort((a,b)=>b.xK-a.xK);
+  
+  function batRow(b){
+    const r=getRat(b.score,79.5);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    let outcomeIcon='',outcomeColor='var(--mt)',outcomeText='';
+    if(!b.played){
+      outcomeIcon='—';outcomeColor='var(--mt)';outcomeText='Did not play';
+    }else if(b.gotHit===true){
+      outcomeIcon='✓';outcomeColor='var(--gn)';outcomeText=`${b.actualHits}-for-${b.actualAB}`;
+    }else if(b.gotHit===false){
+      outcomeIcon='✗';outcomeColor='var(--rd)';outcomeText=`0-for-${b.actualAB}`;
+    }
+    return `<tr class="${rc}">
+      <td>${sbar(b.score,79.5)}</td>
+      <td>${bdg(r)}</td>
+      <td class="l"><strong>${b.name}</strong></td>
+      <td style="color:var(--mt2)">${b.team}</td>
+      <td style="color:var(--mt2)">${b.order||''}</td>
+      <td class="l" style="max-width:90px;overflow:hidden;text-overflow:ellipsis;color:var(--mt2)">${b.pitcherName||''}</td>
+      <td style="color:${outcomeColor};font-weight:700;font-size:1rem">${outcomeIcon}</td>
+      <td style="color:${outcomeColor};font-size:.62rem">${outcomeText}</td>
+      <td style="color:var(--mt2);font-size:.6rem">${b.actualHR>0?'💥 '+b.actualHR+' HR':''}${b.actualTB>0?(b.actualHR>0?' · ':'')+b.actualTB+' TB':''}</td>
+    </tr>`;
+  }
+  
+  function pitRow(p){
+    const r=getRat(p.grade);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    let outcomeIcon='',outcomeColor='var(--mt)',outcomeText='',diffStr='';
+    if(!p.played){
+      outcomeIcon='—';outcomeColor='var(--mt)';outcomeText='No final stats';
+    }else{
+      const diff=p.actualKs-p.xK;
+      const inR=p.lowK!=null&&p.actualKs>=p.lowK&&p.actualKs<=p.highK;
+      outcomeIcon=inR?'✓':'✗';
+      outcomeColor=inR?'var(--gn)':Math.abs(diff)<=1.5?'var(--gd)':'var(--rd)';
+      outcomeText=`${p.actualKs} K · ${p.actualIP} IP`;
+      diffStr=(diff>=0?'+':'')+diff.toFixed(1);
+    }
+    return `<tr class="${rc}">
+      <td>${sbar(p.grade)}</td>
+      <td>${bdg(r)}</td>
+      <td class="l"><strong>${p.name}</strong></td>
+      <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
+      <td class="l" style="color:var(--mt2)">${p.opp}</td>
+      <td><strong style="color:var(--ac)">${p.xK}</strong></td>
+      <td style="color:var(--mt2);font-size:.62rem">${p.lowK!=null?p.lowK+'–'+p.highK:'—'}</td>
+      <td style="color:${outcomeColor};font-weight:700;font-size:1rem">${outcomeIcon}</td>
+      <td style="color:${outcomeColor};font-size:.62rem">${outcomeText}</td>
+      <td style="color:${outcomeColor};font-size:.62rem;font-weight:700">${diffStr}</td>
+    </tr>`;
+  }
+  
+  setMain(`
+    <div class="cb">
+      <select class="ms" id="resDateSel" onchange="RESULTS.loaded=false;loadResults(this.value)">
+        ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
+      </select>
+      <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻ Reload</button>
+      <span style="font-size:.58rem;color:var(--mt2)">${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} games final</span>
+    </div>
+    
+    <div class="sum">
+      <div class="pill"><span class="pn">${hitRate}%</span>Overall hit rate</div>
+      ${lockHitRate!=null?`<div class="pill lk"><span class="pn">${lockHitRate}%</span>🔒 Lock hit rate (${lockHit.length})</div>`:''}
+      ${strongHitRate!=null?`<div class="pill ht"><span class="pn">${strongHitRate}%</span>🔥 Strong hit rate (${strongHit.length})</div>`:''}
+      <div class="pill ln"><span class="pn">${meanError}</span>Avg K error (${playedP.length}p)</div>
+      <div class="pill"><span class="pn">${rangeRate}%</span>Ks in range</div>
+    </div>
+    
+    <details open style="margin-bottom:10px">
+      <summary style="font-size:.7rem;color:var(--ac);font-weight:700">🎯 Hit Predictions vs Actual (${RESULTS.batters.length} batters)</summary>
+      <div class="info" style="font-size:.58rem;margin-top:6px">Sorted by predicted Hit Score (same order as Hits tab). ✓ = got hit · ✗ = no hit · — = didn't play (game not final, scratched, etc).</div>
+      <div class="tbl-wrap" style="margin-top:6px"><table>
+        <thead><tr>
+          <th>Score</th><th>Rating</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th></th><th>Result</th><th>Extra</th>
+        </tr></thead>
+        <tbody>${sortedBatters.map(batRow).join('')}</tbody>
+      </table></div>
+    </details>
+    
+    <details open>
+      <summary style="font-size:.7rem;color:var(--ac);font-weight:700">⚡ K Predictions vs Actual (${RESULTS.pitchers.length} pitchers)</summary>
+      <div class="info" style="font-size:.58rem;margin-top:6px">Sorted by predicted xK (same order as Ks tab). ✓ = actual Ks landed inside the predicted ±1σ range · ✗ = outside range. Diff column shows actual − predicted.</div>
+      <div class="tbl-wrap" style="margin-top:6px"><table>
+        <thead><tr>
+          <th>Grade</th><th>Rating</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th>Range</th><th></th><th>Actual</th><th>Diff</th>
+        </tr></thead>
+        <tbody>${sortedPitchers.map(pitRow).join('')}</tbody>
+      </table></div>
+    </details>
+    
+    <div class="disc">📜 Predictions auto-saved on each load. Up to 14 days kept locally on this device. Wipe by clearing browser site data.</div>
+  `);
+}
+
 
 /* ---------- SETTINGS TAB ---------- */
 function renderSettings(){
@@ -2505,57 +2972,75 @@ function renderExplainK(m){
   if(!pit)return '';
   const L=STATE.leagueAvg;
   const pOv=pit.prev?.isPrevSeason?pit.prev.overall:pit.overall;
+  const rec=pit.recent||{};
   const rat=getRat(m.kGrade);
   const ratC=rat.c==='lock'?'var(--rd)':rat.c==='hot'?'var(--gd)':rat.c==='lean'?'var(--ac)':'var(--mt)';
   
-  // Per-batter K projection using log5
+  // Recreate the model's per-batter math with TTO + park K mult
   const expectedIP=m.expectedIP;
+  const totalBF=expectedIP*4.2;
+  const parkK=m.parkK||1.0;
+  const effectiveKRate=m.effectiveKRate||pOv.k_rate;
+  
+  function ttoMult(t){return t<=1?1.04:t===2?1.00:t===3?0.92:0.85;}
+  
   const rows=m.oppLineup.map(b=>{
     const bObj=STATE.players[b.id];
     const paF=paFactor(b.order);
     const pSp=pitcherSplit(pit,b.bats);
-    const pKr=blendStat(pSp,pOv,'k_rate',150)??pOv.k_rate??L.p_k;
-    let bKr=L.b_k;
-    let bPa=0;
+    const pSplitKr=blendStat(pSp,pOv,'k_rate',150)??pOv.k_rate??L.p_k;
+    // Apply recent-blend on top of split (same as model)
+    const pKr=effectiveKRate?(pSplitKr*0.7+effectiveKRate*0.3):pSplitKr;
+    let bKr=L.b_k,bPa=0;
     if(bObj){
       const bOv=bObj.prev?.isPrevSeason?bObj.prev.overall:bObj.overall;
       const bSp=batterSplit(bObj.prev?.isPrevSeason?bObj.prev:bObj,m.pHand,b.bats);
       bKr=blendStat(bSp,bOv,'k_rate',80)??bOv.k_rate??L.b_k;
       bPa=bOv.pa||0;
     }
-    const combined=combineRates(pKr,bKr,L.p_k);
-    const pa=expectedIP*4.2/9*paF;
-    const xK=combined*pa;
-    return {order:b.order,name:b.name,bats:b.bats,bKr,combined,pa,xK,bPa};
+    const baseCombined=combineRates(pKr,bKr,L.p_k);
+    const pa=totalBF/9*paF;
+    // Distribute across TTO buckets
+    let remaining=pa,tto=1,xK=0;
+    while(remaining>0&&tto<=4){
+      const slice=Math.min(remaining,1);
+      const adjK=baseCombined*ttoMult(tto);
+      const parkAdjK=parkK?adjK*(1+(parkK-1)*0.5):adjK;
+      xK+=parkAdjK*slice;
+      remaining-=slice;
+      tto++;
+    }
+    return {order:b.order,name:b.name,bats:b.bats,bKr,combined:baseCombined,pa,xK,bPa};
   });
   const totalK=rows.reduce((s,r)=>s+r.xK,0);
   
   // Pitcher components
   const components=[
-    {label:'Season K%',val:pct(pOv.k_rate,1),avg:pct(L.p_k,1),score:scale(pOv.k_rate,L.p_k*0.85,L.p_k*1.4),weight:35},
-    {label:'K/9',val:fmt(pOv.k9,2),avg:fmt(L.p_k9,2),score:pOv.k9!=null?scale(pOv.k9,L.p_k9*0.85,L.p_k9*1.35):50,weight:25},
+    {label:'Season K%',val:pct(pOv.k_rate,1),avg:pct(L.p_k,1),score:scale(pOv.k_rate,L.p_k*0.85,L.p_k*1.4),weight:30},
+    {label:'K/9',val:fmt(pOv.k9,2),avg:fmt(L.p_k9,2),score:pOv.k9!=null?scale(pOv.k9,L.p_k9*0.85,L.p_k9*1.35):50,weight:20},
     {label:'BB% (inverted)',val:pct(pOv.bb_rate,1),avg:pct(L.p_bb,1),score:100-scale(pOv.bb_rate,L.p_bb*0.7,L.p_bb*1.5),weight:15},
     {label:'xBA allowed (inverted)',val:fmt(pOv.xBA,3),avg:fmt(L.p_xBA,3),score:100-scale(pOv.xBA,L.p_xBA*0.8,L.p_xBA*1.2),weight:15},
-    {label:'Avg IP per start',val:fmt(pOv.avgIP,1),avg:fmt(L.p_avgIP,1),score:pOv.avgIP!=null?scale(pOv.avgIP,L.p_avgIP*0.7,L.p_avgIP*1.2):50,weight:10}
+    {label:'Avg IP per start',val:fmt(pOv.avgIP,1),avg:fmt(L.p_avgIP,1),score:pOv.avgIP!=null?scale(pOv.avgIP,L.p_avgIP*0.7,L.p_avgIP*1.2):50,weight:10},
+    {label:'FIP (lower=better)',val:fmt(pOv.fip,2),avg:fmt(L.p_fip,2),score:pOv.fip!=null?100-scale(pOv.fip,L.p_fip*0.8,L.p_fip*1.3):50,weight:10}
   ];
-  // Opposing lineup K tendency as context
   const avgOppK=rows.length?rows.reduce((s,r)=>s+r.bKr,0)/rows.length:L.b_k;
-  const oppContext={
-    label:'Opposing lineup K%',
-    val:pct(avgOppK,1),
-    avg:pct(L.b_k,1),
-    score:scale(avgOppK,L.b_k*0.85,L.b_k*1.35),
-    weight:'—'
-  };
+  const oppContext={label:'Opposing lineup K%',val:pct(avgOppK,1),avg:pct(L.b_k,1),score:scale(avgOppK,L.b_k*0.85,L.b_k*1.35),weight:'—'};
+  
+  // Adjustments box: each modifier the model applied
+  const recentDelta=m.recentBlendUsed&&m.recentKRate!=null?
+    `Season K% <b>${pct(m.seasonKRate,1)}</b> blended 65/35 with recent K% <b>${pct(m.recentKRate,1)}</b> → effective <b style="color:var(--ac)">${pct(m.effectiveKRate,1)}</b>`:
+    `<span style="color:var(--mt)">No recent blend (need 3+ starts, 10+ IP)</span>`;
+  const parkColor=parkK>1.02?'var(--gn)':parkK<0.98?'var(--rd)':'var(--mt2)';
+  const oppOBPColor=m.oppOBP>L.b_obp+0.015?'var(--rd)':m.oppOBP<L.b_obp-0.015?'var(--gn)':'var(--mt2)';
   
   return `<div class="why-box">
     <div class="why-title">🔍 Why this K projection?</div>
     
     <div class="why-math">
       <div class="why-math-row">
-        <span class="why-math-lbl">Pitcher K rate (blended)</span>
-        <div class="why-math-bar"><div class="why-math-fill" style="width:${Math.min(100,nn(pOv.k_rate)*300)}%;background:var(--ac)"></div></div>
-        <span class="why-math-val" style="color:var(--ac)">${pct(pOv.k_rate,1)}</span>
+        <span class="why-math-lbl">Pitcher K rate (effective)</span>
+        <div class="why-math-bar"><div class="why-math-fill" style="width:${Math.min(100,nn(effectiveKRate)*300)}%;background:var(--ac)"></div></div>
+        <span class="why-math-val" style="color:var(--ac)">${pct(effectiveKRate,1)}</span>
       </div>
       <div class="why-math-row">
         <span class="why-math-lbl">Opp lineup K%</span>
@@ -2563,12 +3048,23 @@ function renderExplainK(m){
         <span class="why-math-val" style="color:var(--gd)">${pct(avgOppK,1)}</span>
       </div>
       <div class="why-math-row">
-        <span class="why-math-lbl">Expected IP (career avg)</span>
+        <span class="why-math-lbl">Expected IP (opp + park adjusted)</span>
         <span style="flex:1"></span>
         <span class="why-math-val" style="color:var(--tx2)">${expectedIP} IP</span>
       </div>
       <div class="why-math-eq">
-        Log5 per-batter K rate × expected PA = <b style="color:${ratC}">${totalK.toFixed(1)} xK</b> · SP baseline ≈ <b>${m.avgBaseline.toFixed(1)}</b>
+        Σ (per-batter log5 × TTO penalty × park K) = <b style="color:${ratC}">${totalK.toFixed(1)} xK</b><br>
+        <span style="font-size:.55rem;color:var(--mt)">Range ±1σ: <b style="color:var(--tx2)">${m.lowK?.toFixed(1)}–${m.highK?.toFixed(1)}</b> · SP baseline ≈ ${m.avgBaseline?.toFixed(1)}</span>
+      </div>
+    </div>
+    
+    <div class="why-section" style="margin-top:6px">
+      <div class="why-section-h">🔧 Adjustments Applied</div>
+      <div style="font-size:.6rem;line-height:1.7;color:var(--mt2);padding:5px 0">
+        <div>📊 <b style="color:var(--tx2)">Recent form:</b> ${recentDelta}</div>
+        <div>🏟️ <b style="color:var(--tx2)">Park K factor:</b> <span style="color:${parkColor}">${parkK.toFixed(2)}×</span>${parkK>1.02?' (more Ks here)':parkK<0.98?' (fewer Ks here)':' (neutral)'}</div>
+        <div>👥 <b style="color:var(--tx2)">Opp OBP:</b> <span style="color:${oppOBPColor}">${m.oppOBP?.toFixed(3)||'—'}</span> → IP multiplier <b>${m.oppIPMult?.toFixed(2)||'—'}×</b>${m.oppIPMult>1.02?' (pitches deeper)':m.oppIPMult<0.98?' (gets pulled earlier)':' (neutral)'}</div>
+        <div>🔁 <b style="color:var(--tx2)">Times-thru-order:</b> 1st PA × 1.04, 2nd × 1.00, 3rd × 0.92 (familiarity penalty)</div>
       </div>
     </div>
     
@@ -2579,7 +3075,7 @@ function renderExplainK(m){
     </div>
     
     <div class="why-section">
-      <div class="why-section-h">🎯 Per-Batter K Projection (log5)</div>
+      <div class="why-section-h">🎯 Per-Batter K Projection (log5 + TTO + park)</div>
       <div style="overflow-x:auto"><table class="why-k-table">
         <thead><tr>
           <th>#</th><th class="l">Batter</th><th>B</th><th>K%/H</th><th>Combined</th><th>xPA</th><th>xK</th>
@@ -2600,7 +3096,7 @@ function renderExplainK(m){
           <td style="color:${ratC};font-size:.95rem">${totalK.toFixed(1)}</td>
         </tr></tfoot>
       </table></div>
-      <div style="font-size:.54rem;color:var(--mt);margin-top:5px;line-height:1.4">Log5 formula combines pitcher K% and batter K% against a league baseline (${pct(L.p_k,1)}) to estimate the actual K probability per PA. Each batter's expected PA is scaled by lineup spot and pitcher's expected IP.</div>
+      <div style="font-size:.54rem;color:var(--mt);margin-top:5px;line-height:1.4">Log5 combines pitcher × batter K rate against league baseline (${pct(L.p_k,1)}). Each PA gets a TTO penalty (1st time × 1.04, 3rd × 0.92) and a park K bump. Sum across the lineup = total xK.</div>
     </div>
   </div>`;
 }
@@ -2952,6 +3448,7 @@ function closeMo(){
    =================================================================== */
 (function init(){
   document.getElementById('dp').value=todayStr();
+  predLoad();
   // Keyboard: Escape closes modal
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
