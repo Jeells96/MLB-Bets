@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v3 · Prop Intelligence</title>
+<title>Diamond IQ v3.1 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -282,7 +282,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v3 · Live API</div>
+      <div class="bsub">Prop Intelligence · v3.1 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -402,245 +402,6 @@ const UI={
 
 // Qualification thresholds
 const Q={bPA:40,bSp:15,pIP:10,pTBF:25};
-
-/* ============ ADAPTIVE LEARNING ============ */
-// Persisted to localStorage. Tracks predictions vs actual results to calibrate the hit model.
-const LEARN={
-  enabled:false,             // master switch — default OFF
-  predictions:{},            // { 'YYYY-MM-DD': { batterId: {score, components, hit?, ab?, h?} } }
-  adjustments:[],            // log of weight adjustments [{ts, reason, before, after, undone}]
-  weightOverrides:null,      // null = use defaults; otherwise object of weight mults per component label
-  lastCheckDate:null,        // last date we successfully ingested results for
-  // Default weights for hit grade (mirror of batterHitGrade hardcoded values)
-  defaultHitWeights:{
-    'xBA (expected BA)':0.22,
-    'wOBA overall':0.12,
-    'OBP blended':0.12,
-    'xwOBA blended':0.18,
-    'K% (inverse)':0.12,
-    'BABIP (luck)':0.05,
-    'Hard Hit%':0.10,
-    'Last 15G AVG':0.09
-  }
-};
-const LEARN_KEY='diamondiq_learn_v1';
-
-function learnSave(){
-  try{
-    localStorage.setItem(LEARN_KEY,JSON.stringify({
-      enabled:LEARN.enabled,
-      predictions:LEARN.predictions,
-      adjustments:LEARN.adjustments,
-      weightOverrides:LEARN.weightOverrides,
-      lastCheckDate:LEARN.lastCheckDate
-    }));
-  }catch(e){console.warn('[DIQ] learnSave failed:',e.message);}
-}
-function learnLoad(){
-  try{
-    const raw=localStorage.getItem(LEARN_KEY);
-    if(!raw)return;
-    const d=JSON.parse(raw);
-    LEARN.enabled=!!d.enabled;
-    LEARN.predictions=d.predictions||{};
-    LEARN.adjustments=d.adjustments||[];
-    LEARN.weightOverrides=d.weightOverrides||null;
-    LEARN.lastCheckDate=d.lastCheckDate||null;
-  }catch(e){console.warn('[DIQ] learnLoad failed:',e.message);}
-}
-function learnReset(){
-  LEARN.predictions={};LEARN.adjustments=[];LEARN.weightOverrides=null;LEARN.lastCheckDate=null;
-  learnSave();
-}
-
-// Get effective weight for a component (override or default)
-function learnWeight(label){
-  if(!LEARN.enabled||!LEARN.weightOverrides)return LEARN.defaultHitWeights[label]||0;
-  return LEARN.weightOverrides[label]??(LEARN.defaultHitWeights[label]||0);
-}
-
-// Save predictions for today's slate (called after matchups built)
-function learnSavePredictions(){
-  if(!LEARN.enabled||!STATE.date||!STATE.matchups.length)return;
-  const day={};
-  STATE.matchups.filter(m=>m.kind==='batter'&&m.hitScore!=null&&m.hitGrade?.components).forEach(m=>{
-    day[m.batterId]={
-      name:m.batterName,
-      score:m.hitScore,
-      grade:m.hitGrade.grade,
-      pHand:m.pHand,
-      // Snapshot per-component scaled values + weights at prediction time
-      components:m.hitGrade.components.map(c=>({label:c.label,scaled:c.scaled,weight:c.weight}))
-    };
-  });
-  if(Object.keys(day).length){
-    LEARN.predictions[STATE.date]=day;
-    learnSave();
-  }
-}
-
-// Fetch boxscore results for past dates and merge into predictions
-async function learnIngestResults(){
-  if(!LEARN.enabled)return {checked:0,matched:0,errors:0};
-  // Find prediction dates that don't yet have results merged
-  const today=todayStr();
-  const dates=Object.keys(LEARN.predictions).filter(d=>d<today).sort();
-  let checked=0,matched=0,errors=0;
-  for(const date of dates){
-    const day=LEARN.predictions[date];
-    // Skip if all entries already have hit data
-    const needsResults=Object.values(day).some(p=>p.hit==null);
-    if(!needsResults)continue;
-    checked++;
-    try{
-      const sched=await fetchJSON(`${MLB}/api/v1/schedule?sportId=1&date=${date}`);
-      const games=sched?.dates?.[0]?.games||[];
-      // For each game, fetch boxscore and extract per-batter hits
-      for(const g of games){
-        const status=g.status?.abstractGameCode;
-        if(status!=='F')continue; // only finals
-        const feed=await fetchGameFeed(g.gamePk);
-        if(!feed)continue;
-        const teams=feed.liveData?.boxscore?.teams||{};
-        ['home','away'].forEach(side=>{
-          const players=teams[side]?.players||{};
-          Object.values(players).forEach(p=>{
-            const bid=p.person?.id;
-            if(!bid||!day[bid])return;
-            const stat=p.stats?.batting||{};
-            const ab=nn(stat.atBats);
-            const h=nn(stat.hits);
-            const pa=nn(stat.plateAppearances);
-            // Mark hit=1 if got at least 1 hit, 0 if had >=1 AB and no hit, null if didn't bat
-            day[bid].ab=ab;
-            day[bid].h=h;
-            day[bid].pa=pa;
-            day[bid].hit=ab>0?(h>0?1:0):null;
-            matched++;
-          });
-        });
-      }
-    }catch(e){errors++;console.warn('[DIQ] result ingest failed for',date,e.message);}
-  }
-  LEARN.lastCheckDate=today;
-  learnSave();
-  return {checked,matched,errors};
-}
-
-// Compute calibration: bucket predictions by score range, measure actual hit rate
-function learnCalibration(){
-  const buckets=[
-    {lo:0,hi:42,label:'≤42 (FADE)',n:0,hits:0},
-    {lo:42,hi:52,label:'42-52',n:0,hits:0},
-    {lo:52,hi:62,label:'52-62 (LEAN)',n:0,hits:0},
-    {lo:62,hi:72,label:'62-72 (STRONG)',n:0,hits:0},
-    {lo:72,hi:101,label:'72+ (LOCK)',n:0,hits:0}
-  ];
-  let total=0,hits=0;
-  Object.values(LEARN.predictions).forEach(day=>{
-    Object.values(day).forEach(p=>{
-      if(p.hit==null)return;
-      total++;hits+=p.hit;
-      const b=buckets.find(b=>p.score>=b.lo&&p.score<b.hi);
-      if(b){b.n++;b.hits+=p.hit;}
-    });
-  });
-  buckets.forEach(b=>{b.rate=b.n?b.hits/b.n:null;});
-  return {buckets,total,hits,overall:total?hits/total:null};
-}
-
-// Compute per-component performance: does this component's score correlate with actual hits?
-// Returns { label: { weight, correlation, suggestion } }
-function learnComponentAnalysis(){
-  const comps={};
-  Object.values(LEARN.predictions).forEach(day=>{
-    Object.values(day).forEach(p=>{
-      if(p.hit==null||!p.components)return;
-      p.components.forEach(c=>{
-        if(!comps[c.label]){comps[c.label]={weight:c.weight,scores:[],hits:[]};}
-        comps[c.label].scores.push(c.scaled);
-        comps[c.label].hits.push(p.hit);
-      });
-    });
-  });
-  // Pearson correlation between scaled component score and actual hit outcome
-  Object.values(comps).forEach(c=>{
-    const n=c.scores.length;
-    if(n<30){c.correlation=null;c.n=n;return;}
-    const meanX=c.scores.reduce((a,b)=>a+b,0)/n;
-    const meanY=c.hits.reduce((a,b)=>a+b,0)/n;
-    let num=0,dx=0,dy=0;
-    for(let i=0;i<n;i++){
-      const xd=c.scores[i]-meanX,yd=c.hits[i]-meanY;
-      num+=xd*yd;dx+=xd*xd;dy+=yd*yd;
-    }
-    c.correlation=(dx*dy>0)?num/Math.sqrt(dx*dy):0;
-    c.n=n;
-  });
-  return comps;
-}
-
-// Generate suggested weight adjustments based on calibration + component correlations
-// Returns array of {label, currentWeight, newWeight, reason, severity}
-function learnSuggestAdjustments(){
-  const analysis=learnComponentAnalysis();
-  const suggestions=[];
-  // Find total tracked predictions
-  const total=Object.values(LEARN.predictions).reduce((s,d)=>s+Object.values(d).filter(p=>p.hit!=null).length,0);
-  if(total<200)return {suggestions,total,reason:`Need ≥200 tracked outcomes to suggest adjustments (have ${total})`};
-  // Find correlations
-  const valid=Object.entries(analysis).filter(([,c])=>c.correlation!=null);
-  if(!valid.length)return {suggestions,total,reason:'Not enough samples per component yet'};
-  // Average correlation magnitude
-  const meanCorr=valid.reduce((s,[,c])=>s+Math.abs(c.correlation),0)/valid.length;
-  valid.forEach(([label,c])=>{
-    const ratio=Math.abs(c.correlation)/meanCorr;
-    const currentW=learnWeight(label);
-    if(currentW===0)return;
-    // Components correlating much better than average -> bump weight 10%
-    // Components correlating much worse -> trim weight 10%
-    if(ratio>=1.4&&c.correlation>0){
-      const newW=Math.min(currentW*1.10,currentW+0.03);
-      suggestions.push({label,currentWeight:currentW,newWeight:Math.round(newW*1000)/1000,reason:`Strong predictor (r=${c.correlation.toFixed(3)}, ${c.n} samples)`,severity:'boost'});
-    }else if(ratio<=0.5||c.correlation<-0.05){
-      const newW=Math.max(currentW*0.90,currentW-0.03);
-      suggestions.push({label,currentWeight:currentW,newWeight:Math.round(newW*1000)/1000,reason:`Weak predictor (r=${c.correlation.toFixed(3)}, ${c.n} samples)`,severity:'trim'});
-    }
-  });
-  return {suggestions,total,reason:null};
-}
-
-// Apply a set of weight adjustments (logs them so they can be undone)
-function learnApplyAdjustments(suggestions,note){
-  if(!suggestions.length)return;
-  const before=LEARN.weightOverrides?{...LEARN.weightOverrides}:{...LEARN.defaultHitWeights};
-  const after={...before};
-  suggestions.forEach(s=>{after[s.label]=s.newWeight;});
-  // Renormalize: weights must still sum close to ~1.00 for hit grade
-  const sum=Object.values(after).reduce((a,b)=>a+b,0);
-  if(sum>0){
-    const norm=1.0/sum;
-    Object.keys(after).forEach(k=>{after[k]=Math.round(after[k]*norm*1000)/1000;});
-  }
-  LEARN.weightOverrides=after;
-  LEARN.adjustments.push({
-    ts:new Date().toISOString(),
-    reason:note||'Auto-adjustment from calibration',
-    before,after,
-    suggestions:suggestions.map(s=>({label:s.label,from:s.currentWeight,to:s.newWeight,reason:s.reason})),
-    undone:false
-  });
-  learnSave();
-}
-
-// Undo a specific adjustment (restores its 'before' state, marking it undone)
-function learnUndoAdjustment(idx){
-  const adj=LEARN.adjustments[idx];
-  if(!adj||adj.undone)return;
-  LEARN.weightOverrides=adj.before&&Object.keys(adj.before).length?{...adj.before}:null;
-  adj.undone=true;
-  learnSave();
-}
 
 /* ============ HELPERS ============ */
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
@@ -1274,15 +1035,6 @@ async function loadAll(){
     buildAllMatchups();
     buildRunTotals();
     
-    // Adaptive learning hooks: save today's predictions, ingest past results
-    if(LEARN.enabled){
-      learnSavePredictions();
-      // Fire and forget — don't block UI
-      learnIngestResults().then(r=>{
-        if(r.matched>0)console.log('[DIQ] learn: ingested',r.matched,'results from',r.checked,'days');
-      });
-    }
-    
     STATE.ready=true;
     progress(10,10,'Done');
     document.getElementById('refreshBtn').style.display='inline-block';
@@ -1402,7 +1154,7 @@ function batterHitGrade(p,pHand){
   const recAvg=rec.avg;
   const recWeight=rec.pa&&rec.pa>=40?0.15:0;
   
-  // Build component list with metadata. If adaptive learning has overrides, use them.
+  // Build component list with metadata.
   const comps=[
     {label:'xBA (expected BA)',raw:xBA,avg:L.b_xBA,elite:L.b_xBA*1.22,weight:0.22,good:'high',fmt:'3'},
     {label:'wOBA overall',raw:avg,avg:L.b_avg,elite:L.b_avg*1.22,weight:0.12,good:'high',fmt:'3'},
@@ -1413,13 +1165,6 @@ function batterHitGrade(p,pHand){
     {label:'Hard Hit%',raw:hardHit,avg:L.b_hardHit||38,elite:(L.b_hardHit||38)*1.32,weight:0.10,good:'high',fmt:'1%'},
     {label:`Last 15G AVG`,raw:recAvg,avg:L.b_avg,elite:L.b_avg*1.3,weight:recWeight,good:'high',fmt:'3',note:rec.pa?rec.pa+' PA':'small sample'}
   ];
-  // Apply adaptive-learning weight overrides if active
-  if(LEARN.enabled&&LEARN.weightOverrides){
-    comps.forEach(c=>{
-      const w=LEARN.weightOverrides[c.label];
-      if(w!=null)c.weight=w;
-    });
-  }
   
   // Compute each component's scaled score + contribution
   let rawTotal=0;
@@ -1905,9 +1650,10 @@ function combineMatchup(batterG,pitcherG,order){
 }
 
 // Rating from score
-function getRat(s){
+function getRat(s,lockAt){
+  const lk=lockAt??72;
   if(s==null)return{l:'—',c:'neutral'};
-  if(s>=72)return{l:'🔒 LOCK',c:'lock'};
+  if(s>=lk)return{l:'🔒 LOCK',c:'lock'};
   if(s>=62)return{l:'🔥 STRONG',c:'hot'};
   if(s>=52)return{l:'⚡ LEAN',c:'lean'};
   if(s<=32)return{l:'✗ FADE',c:'fade'};
@@ -1945,9 +1691,10 @@ function renderTab(){
   }
 }
 
-function sbar(s){
+function sbar(s,lockAt){
   if(s==null)return '<span style="color:#1e3050">—</span>';
-  const c=s>=72?'var(--rd)':s>=62?'var(--gd)':s>=52?'var(--ac)':s<=32?'var(--mt)':'var(--mt2)';
+  const lk=lockAt??72;
+  const c=s>=lk?'var(--rd)':s>=62?'var(--gd)':s>=52?'var(--ac)':s<=32?'var(--mt)':'var(--mt2)';
   return `<div class="sb"><span class="sn" style="color:${c}">${s}</span><div class="st"><div class="sf" style="width:${Math.min(100,s)}%;background:${c}"></div></div></div>`;
 }
 function bdg(r){return `<span class="bdg ${r.c}">${r.l}</span>`;}
@@ -1969,8 +1716,8 @@ function renderDashboard(){
   
   const statusLine=`${games.length} games · ${Object.keys(STATE.players).length} batters · ${Object.keys(STATE.pitchers).length} pitchers`;
   
-  function row(name,sub,score,onclick){
-    const r=getRat(score);
+  function row(name,sub,score,onclick,lockAt){
+    const r=getRat(score,lockAt);
     const c=r.c==='lock'?'var(--rd)':r.c==='hot'?'var(--gd)':r.c==='lean'?'var(--ac)':'var(--mt)';
     return `<div class="dash-row" onclick="${onclick}">
       <div class="dash-row-n"><div>${name}</div><div style="font-size:.54rem;color:var(--mt2)">${sub}</div></div>
@@ -1982,7 +1729,8 @@ function renderDashboard(){
     m.batterName,
     `${m.team.abbr||m.team.name} · #${m.order} · vs <span style="color:${hc(m.pHand)}">${m.pHand}HP</span> ${m.pitcherName}`,
     m.hitScore,
-    `openBatterMo('${m.batterId}','${m.pitcherId}','hit')`
+    `openBatterMo('${m.batterId}','${m.pitcherId}','hit')`,
+    79.5
   )).join('');
   
   const hrsHTML=topHRs.map(m=>row(
@@ -2075,18 +1823,18 @@ function renderHits(){
     return (bv-av)*UI.hitsSort.d;
   });
   
-  const lk=data.filter(m=>m.hitScore>=72).length;
-  const ht=data.filter(m=>m.hitScore>=62&&m.hitScore<72).length;
+  const lk=data.filter(m=>m.hitScore>=79.5).length;
+  const ht=data.filter(m=>m.hitScore>=62&&m.hitScore<79.5).length;
   const ln=data.filter(m=>m.hitScore>=52&&m.hitScore<62).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.hitScore);
+    const r=getRat(m.hitScore,79.5);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const p=STATE.players[m.batterId];
     const ov=p?.overall||{};
     const sp=p?batterSplit(p,m.pHand):{};
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
-      <td>${sbar(m.hitScore)}</td>
+      <td>${sbar(m.hitScore,79.5)}</td>
       <td>${bdg(r)}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
@@ -2459,95 +2207,8 @@ function selSrch(id,isB,pid){
 
 /* ---------- SETTINGS TAB ---------- */
 function renderSettings(){
-  // Adaptive learning section
-  const cal=learnCalibration();
-  const sugg=learnSuggestAdjustments();
-  const totalTracked=cal.total;
-  const overall=cal.overall!=null?(cal.overall*100).toFixed(1)+'%':'—';
-  
-  // Bucket calibration table
-  const calRows=cal.buckets.map(b=>{
-    const r=b.rate!=null?(b.rate*100).toFixed(1)+'%':'—';
-    const c=b.rate==null?'var(--mt)':b.rate>=0.7?'var(--gn)':b.rate>=0.6?'var(--gd)':b.rate>=0.5?'var(--ac)':'var(--rd)';
-    return `<tr><td class="l" style="font-size:.62rem">${b.label}</td><td style="font-size:.62rem;color:var(--mt2)">${b.n}</td><td style="font-size:.62rem;color:${c};font-weight:700">${r}</td></tr>`;
-  }).join('');
-  
-  // Suggestion list
-  const suggHTML=sugg.suggestions.length?sugg.suggestions.map(s=>{
-    const dir=s.severity==='boost'?'↑':'↓';
-    const c=s.severity==='boost'?'var(--gn)':'var(--gd)';
-    return `<div style="font-size:.6rem;padding:4px 0;border-bottom:1px solid var(--bdr);display:flex;justify-content:space-between;gap:6px;align-items:center">
-      <span style="flex:1"><b style="color:var(--tx2)">${s.label}</b><br><span style="color:var(--mt2)">${s.reason}</span></span>
-      <span style="color:${c};font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:.78rem">${dir} ${(s.currentWeight*100).toFixed(1)}% → ${(s.newWeight*100).toFixed(1)}%</span>
-    </div>`;
-  }).join(''):`<div class="info" style="font-size:.62rem">${sugg.reason||'No adjustments needed — model is calibrated'}</div>`;
-  
-  // Adjustment log
-  const logHTML=LEARN.adjustments.length?LEARN.adjustments.slice().reverse().map((a,revIdx)=>{
-    const idx=LEARN.adjustments.length-1-revIdx;
-    const date=new Date(a.ts).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
-    const items=a.suggestions?a.suggestions.map(s=>`<div style="font-size:.55rem;color:var(--mt2);padding-left:8px">• ${s.label}: ${(s.from*100).toFixed(1)}% → ${(s.to*100).toFixed(1)}% (${s.reason})</div>`).join(''):'';
-    return `<div style="border:1px solid var(--bdr);border-radius:6px;padding:7px 9px;margin-bottom:5px;${a.undone?'opacity:0.45':''}">
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:.62rem">
-        <span><b style="color:var(--tx2)">${date}</b> · <span style="color:var(--mt2)">${a.reason}</span>${a.undone?' <span style="color:var(--rd)">[undone]</span>':''}</span>
-        ${a.undone?'':`<button class="btn bg" style="font-size:.55rem;padding:2px 7px" onclick="if(confirm('Undo this adjustment?')){learnUndoAdjustment(${idx});if(STATE.ready){buildAllMatchups();}renderSettings();}">↶ Undo</button>`}
-      </div>
-      ${items}
-    </div>`;
-  }).join(''):'<div class="info" style="font-size:.6rem">No adjustments yet</div>';
-  
   setMain(`
     <div class="sw-wrap">
-      <div class="sw-grp" style="border-color:${LEARN.enabled?'var(--ac)':'var(--bdr)'}">
-        <div class="sw-gt">🧠 Adaptive Learning <span style="font-size:.55rem;color:${LEARN.enabled?'var(--gn)':'var(--mt)'};font-weight:600">${LEARN.enabled?'● ON':'● OFF'}</span></div>
-        <div style="font-size:.6rem;color:var(--mt2);margin-bottom:8px;line-height:1.5">
-          When enabled, the app saves every batter's hit prediction before games start. After games end it pulls boxscores and tracks who actually got hits. With ≥200 tracked outcomes it can suggest weight adjustments. Default is OFF — turn on if you want the model to learn over time.
-        </div>
-        <div class="sw-row" style="margin-bottom:8px">
-          <span class="sw-lbl" style="font-weight:600;color:var(--tx)">Enable adaptive learning</span>
-          <label style="position:relative;display:inline-block;width:42px;height:22px;cursor:pointer">
-            <input type="checkbox" ${LEARN.enabled?'checked':''} onchange="LEARN.enabled=this.checked;learnSave();renderSettings();" style="opacity:0;width:0;height:0">
-            <span style="position:absolute;top:0;left:0;right:0;bottom:0;background:${LEARN.enabled?'var(--ac)':'var(--bdr2)'};border-radius:11px;transition:.2s">
-              <span style="position:absolute;height:16px;width:16px;left:${LEARN.enabled?'23px':'3px'};top:3px;background:#fff;border-radius:50%;transition:.2s"></span>
-            </span>
-          </label>
-        </div>
-        ${LEARN.enabled?`
-          <div style="background:var(--s2);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;margin-bottom:8px">
-            <div style="font-size:.6rem;color:var(--mt);text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Tracking</div>
-            <div style="font-size:.66rem">
-              <b style="color:var(--tx)">${totalTracked}</b> <span style="color:var(--mt2)">predictions tracked</span> · 
-              <b style="color:var(--tx)">${cal.hits}</b> <span style="color:var(--mt2)">hits</span> · 
-              Overall hit rate: <b style="color:${cal.overall>=0.6?'var(--gn)':cal.overall>=0.5?'var(--ac)':'var(--mt2)'}">${overall}</b>
-            </div>
-            <div style="font-size:.55rem;color:var(--mt);margin-top:3px">${LEARN.lastCheckDate?'Last results check: '+LEARN.lastCheckDate:'No results ingested yet — load on a date after past predictions to ingest'}</div>
-          </div>
-          
-          <details style="margin-bottom:6px"><summary style="font-size:.65rem">📊 Calibration by score bucket</summary>
-            <table style="width:100%;font-size:.62rem;margin-top:5px">
-              <thead><tr><th class="l" style="font-size:.54rem;color:var(--mt)">Score Range</th><th style="font-size:.54rem;color:var(--mt);text-align:right">N</th><th style="font-size:.54rem;color:var(--mt);text-align:right">Hit Rate</th></tr></thead>
-              <tbody>${calRows}</tbody>
-            </table>
-            <div style="font-size:.54rem;color:var(--mt);margin-top:4px;line-height:1.4">If higher buckets aren't hitting noticeably more than lower ones, the model isn't well-calibrated yet. Need ~200+ tracked outcomes for meaningful signal.</div>
-          </details>
-          
-          <details style="margin-bottom:6px"><summary style="font-size:.65rem">💡 Suggested adjustments ${sugg.suggestions.length?'<span style="color:var(--gd)">('+sugg.suggestions.length+')</span>':''}</summary>
-            <div style="margin-top:5px">${suggHTML}</div>
-            ${sugg.suggestions.length?`<button class="btn bp" style="font-size:.62rem;margin-top:7px" onclick="learnApplyAdjustments(learnSuggestAdjustments().suggestions,'Manual apply from suggestions');if(STATE.ready){buildAllMatchups();}renderSettings();">✓ Apply all suggestions</button>`:''}
-          </details>
-          
-          <details><summary style="font-size:.65rem">📜 Adjustment history (${LEARN.adjustments.length})</summary>
-            <div style="margin-top:5px">${logHTML}</div>
-          </details>
-          
-          <div style="margin-top:9px;padding-top:8px;border-top:1px solid var(--bdr);display:flex;gap:5px;flex-wrap:wrap">
-            <button class="btn bg" style="font-size:.58rem" onclick="learnIngestResults().then(r=>{alert('Ingested '+r.matched+' results from '+r.checked+' days');renderSettings();})">↻ Ingest results now</button>
-            <button class="btn bg" style="font-size:.58rem" onclick="if(confirm('Reset all weights to default? This will undo every adjustment.')){LEARN.weightOverrides=null;LEARN.adjustments.push({ts:new Date().toISOString(),reason:'Manual full reset',before:{},after:{},suggestions:[],undone:false});learnSave();if(STATE.ready){buildAllMatchups();}renderSettings();}">↺ Reset weights to default</button>
-            <button class="btn bg" style="font-size:.58rem;color:var(--rd);border-color:var(--rd)" onclick="if(confirm('Delete ALL tracked predictions and history? This cannot be undone.')){learnReset();renderSettings();}">⚠ Wipe history</button>
-          </div>
-        `:''}
-      </div>
-      
       <div class="sw-grp">
         <div class="sw-gt">🔎 Qualification Thresholds</div>
         <div class="sw-row"><span class="sw-lbl">Batter min PA (season)</span><input class="sw-n" type="number" value="${Q.bPA}" oninput="Q.bPA=+this.value||0"></div>
@@ -2755,7 +2416,7 @@ function renderExplain(m,type){
   const bG=gradeObj?.grade;
   const pG=type==='hit'?m.pitHitSup:type==='hr'?m.pitHRSup:(m.pitHitSup*0.6+m.pitHRSup*0.4);
   const paF=paFactor(m.order);
-  const rat=getRat(score);
+  const rat=getRat(score,type==='hit'?79.5:undefined);
   const ratC=rat.c==='lock'?'var(--rd)':rat.c==='hot'?'var(--gd)':rat.c==='lean'?'var(--ac)':'var(--mt)';
   
   // Top positives + negatives from combined list, ignore zero-weight components
@@ -2977,10 +2638,10 @@ function renderBatterCard(batterId,pitcherId,propType){
       ${bdg(getRat(Math.max(m.hitScore||0,m.hrScore||0,m.tbScore||0)))}
     </div>
     <div class="pred-g">
-      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore))}
+      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore,79.5))}
       ${pb('💥 HR',m.hrScore,getRat(m.hrScore))}
       ${pb('🏟️ Total Bases',m.tbScore,getRat(m.tbScore))}
-      ${pb('Hit Grade',m.hitGrade?.grade,getRat(m.hitGrade?.grade))}
+      ${pb('Hit Grade',m.hitGrade?.grade,getRat(m.hitGrade?.grade,79.5))}
     </div>
     
     ${(()=>{
@@ -3226,7 +2887,7 @@ function openGameMo(gamePk){
       <thead><tr><th>Score</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th></tr></thead>
       <tbody>
         ${topHit.map(m=>`<tr onclick="closeMo();openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
-          <td>${sbar(m.hitScore)}</td>
+          <td>${sbar(m.hitScore,79.5)}</td>
           <td class="l"><strong>${m.batterName}</strong></td>
           <td style="color:var(--mt2)">${m.team.abbr||''}</td>
           <td style="color:var(--mt2)">${m.order}</td>
@@ -3291,7 +2952,6 @@ function closeMo(){
    =================================================================== */
 (function init(){
   document.getElementById('dp').value=todayStr();
-  learnLoad();
   // Keyboard: Escape closes modal
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
