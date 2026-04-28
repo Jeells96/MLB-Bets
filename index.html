@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ · Prop Intelligence</title>
+<title>Diamond IQ v3.1 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -282,7 +282,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v2.1 · Live API</div>
+      <div class="bsub">Prop Intelligence · v3.1 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -632,7 +632,7 @@ async function fetchBatterStats(playerId,season){
     `${base}&stats=expectedStatistics`,
     `${base}&stats=sabermetrics`,
     `${base}&stats=statSplits&sitCodes=vl,vr`,
-    `${base}&stats=lastXGames&limit=15`
+    `${base}&stats=gameLog`
   ];
   const [season_,expected_,saber_,splits_,recent_]=await Promise.all(urls.map(u=>fetchJSON(u)));
   return normalizeBatter(playerId,season_,expected_,saber_,splits_,recent_,season);
@@ -687,20 +687,12 @@ function normalizeBatter(pid,seasonD,expD,saberD,splitsD,recentD,year){
     else if(code==='vr')out.vsR=normalized;
   });
   
-  // Recent form (last 15 games) — API may return one aggregated split or multiple per-game splits
-  const recSplits=recentD?.stats?.[0]?.splits||[];
-  if(recSplits.length===1){
-    const recStat=recSplits[0].stat||{};
-    out.recent={
-      g:sf(recStat.gamesPlayed),pa:sf(recStat.plateAppearances),
-      avg:sf(recStat.avg),obp:sf(recStat.obp),slg:sf(recStat.slg),ops:sf(recStat.ops),
-      k_rate:recStat.strikeOuts&&recStat.plateAppearances?sf(recStat.strikeOuts)/sf(recStat.plateAppearances):null,
-      hr:sf(recStat.homeRuns)
-    };
-  }else if(recSplits.length>1){
-    // Aggregate across game-by-game splits
+  // Recent form — gameLog returns chronological per-game splits; take last 15
+  const allGames=recentD?.stats?.[0]?.splits||[];
+  const last15=allGames.slice(-15);
+  if(last15.length){
     let g=0,pa=0,ab=0,h=0,hr=0,bb=0,so=0,tb=0;
-    recSplits.forEach(s=>{
+    last15.forEach(s=>{
       const st=s.stat||{};
       g++;
       pa+=nn(st.plateAppearances);
@@ -714,7 +706,7 @@ function normalizeBatter(pid,seasonD,expD,saberD,splitsD,recentD,year){
     out.recent={
       g,pa,
       avg:ab>0?h/ab:null,
-      obp:(pa>0)?(h+bb)/pa:null,
+      obp:pa>0?(h+bb)/pa:null,
       slg:ab>0?tb/ab:null,
       ops:(ab>0&&pa>0)?(h+bb)/pa+tb/ab:null,
       k_rate:pa>0?so/pa:null,
@@ -735,7 +727,7 @@ async function fetchPitcherStats(playerId,season){
     `${base}&stats=expectedStatistics`,
     `${base}&stats=sabermetrics`,
     `${base}&stats=statSplits&sitCodes=vl,vr`,
-    `${base}&stats=lastXGames&limit=5`
+    `${base}&stats=gameLog`
   ];
   const [season_,expected_,saber_,splits_,recent_]=await Promise.all(urls.map(u=>fetchJSON(u)));
   return normalizePitcher(playerId,season_,expected_,saber_,splits_,recent_,season);
@@ -791,17 +783,12 @@ function normalizePitcher(pid,seasonD,expD,saberD,splitsD,recentD,year){
     else if(code==='vr')out.vsR=normalized;
   });
   
-  const recSplitsP=recentD?.stats?.[0]?.splits||[];
-  if(recSplitsP.length===1){
-    const recStat=recSplitsP[0].stat||{};
-    out.recent={
-      g:sf(recStat.gamesPlayed),ip:sf(recStat.inningsPitched),
-      era:sf(recStat.era),whip:sf(recStat.whip),
-      k:sf(recStat.strikeOuts),bb:sf(recStat.baseOnBalls),hr:sf(recStat.homeRuns)
-    };
-  }else if(recSplitsP.length>1){
+  // Pitcher recent — last 5 starts from gameLog
+  const allGamesP=recentD?.stats?.[0]?.splits||[];
+  const last5=allGamesP.slice(-5);
+  if(last5.length){
     let g=0,ipTot=0,er=0,h=0,bb=0,so=0,hr=0;
-    recSplitsP.forEach(s=>{
+    last5.forEach(s=>{
       const st=s.stat||{};
       g++;
       ipTot+=nn(st.inningsPitched);
@@ -1167,7 +1154,7 @@ function batterHitGrade(p,pHand){
   const recAvg=rec.avg;
   const recWeight=rec.pa&&rec.pa>=40?0.15:0;
   
-  // Build component list with metadata
+  // Build component list with metadata.
   const comps=[
     {label:'xBA (expected BA)',raw:xBA,avg:L.b_xBA,elite:L.b_xBA*1.22,weight:0.22,good:'high',fmt:'3'},
     {label:'wOBA overall',raw:avg,avg:L.b_avg,elite:L.b_avg*1.22,weight:0.12,good:'high',fmt:'3'},
@@ -1663,9 +1650,10 @@ function combineMatchup(batterG,pitcherG,order){
 }
 
 // Rating from score
-function getRat(s){
+function getRat(s,lockAt){
+  const lk=lockAt??72;
   if(s==null)return{l:'—',c:'neutral'};
-  if(s>=72)return{l:'🔒 LOCK',c:'lock'};
+  if(s>=lk)return{l:'🔒 LOCK',c:'lock'};
   if(s>=62)return{l:'🔥 STRONG',c:'hot'};
   if(s>=52)return{l:'⚡ LEAN',c:'lean'};
   if(s<=32)return{l:'✗ FADE',c:'fade'};
@@ -1703,9 +1691,10 @@ function renderTab(){
   }
 }
 
-function sbar(s){
+function sbar(s,lockAt){
   if(s==null)return '<span style="color:#1e3050">—</span>';
-  const c=s>=72?'var(--rd)':s>=62?'var(--gd)':s>=52?'var(--ac)':s<=32?'var(--mt)':'var(--mt2)';
+  const lk=lockAt??72;
+  const c=s>=lk?'var(--rd)':s>=62?'var(--gd)':s>=52?'var(--ac)':s<=32?'var(--mt)':'var(--mt2)';
   return `<div class="sb"><span class="sn" style="color:${c}">${s}</span><div class="st"><div class="sf" style="width:${Math.min(100,s)}%;background:${c}"></div></div></div>`;
 }
 function bdg(r){return `<span class="bdg ${r.c}">${r.l}</span>`;}
@@ -1727,8 +1716,8 @@ function renderDashboard(){
   
   const statusLine=`${games.length} games · ${Object.keys(STATE.players).length} batters · ${Object.keys(STATE.pitchers).length} pitchers`;
   
-  function row(name,sub,score,onclick){
-    const r=getRat(score);
+  function row(name,sub,score,onclick,lockAt){
+    const r=getRat(score,lockAt);
     const c=r.c==='lock'?'var(--rd)':r.c==='hot'?'var(--gd)':r.c==='lean'?'var(--ac)':'var(--mt)';
     return `<div class="dash-row" onclick="${onclick}">
       <div class="dash-row-n"><div>${name}</div><div style="font-size:.54rem;color:var(--mt2)">${sub}</div></div>
@@ -1740,7 +1729,8 @@ function renderDashboard(){
     m.batterName,
     `${m.team.abbr||m.team.name} · #${m.order} · vs <span style="color:${hc(m.pHand)}">${m.pHand}HP</span> ${m.pitcherName}`,
     m.hitScore,
-    `openBatterMo('${m.batterId}','${m.pitcherId}','hit')`
+    `openBatterMo('${m.batterId}','${m.pitcherId}','hit')`,
+    79.5
   )).join('');
   
   const hrsHTML=topHRs.map(m=>row(
@@ -1833,18 +1823,18 @@ function renderHits(){
     return (bv-av)*UI.hitsSort.d;
   });
   
-  const lk=data.filter(m=>m.hitScore>=72).length;
-  const ht=data.filter(m=>m.hitScore>=62&&m.hitScore<72).length;
+  const lk=data.filter(m=>m.hitScore>=79.5).length;
+  const ht=data.filter(m=>m.hitScore>=62&&m.hitScore<79.5).length;
   const ln=data.filter(m=>m.hitScore>=52&&m.hitScore<62).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.hitScore);
+    const r=getRat(m.hitScore,79.5);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const p=STATE.players[m.batterId];
     const ov=p?.overall||{};
     const sp=p?batterSplit(p,m.pHand):{};
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
-      <td>${sbar(m.hitScore)}</td>
+      <td>${sbar(m.hitScore,79.5)}</td>
       <td>${bdg(r)}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
@@ -2426,7 +2416,7 @@ function renderExplain(m,type){
   const bG=gradeObj?.grade;
   const pG=type==='hit'?m.pitHitSup:type==='hr'?m.pitHRSup:(m.pitHitSup*0.6+m.pitHRSup*0.4);
   const paF=paFactor(m.order);
-  const rat=getRat(score);
+  const rat=getRat(score,type==='hit'?79.5:undefined);
   const ratC=rat.c==='lock'?'var(--rd)':rat.c==='hot'?'var(--gd)':rat.c==='lean'?'var(--ac)':'var(--mt)';
   
   // Top positives + negatives from combined list, ignore zero-weight components
@@ -2648,10 +2638,10 @@ function renderBatterCard(batterId,pitcherId,propType){
       ${bdg(getRat(Math.max(m.hitScore||0,m.hrScore||0,m.tbScore||0)))}
     </div>
     <div class="pred-g">
-      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore))}
+      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore,79.5))}
       ${pb('💥 HR',m.hrScore,getRat(m.hrScore))}
       ${pb('🏟️ Total Bases',m.tbScore,getRat(m.tbScore))}
-      ${pb('Hit Grade',m.hitGrade?.grade,getRat(m.hitGrade?.grade))}
+      ${pb('Hit Grade',m.hitGrade?.grade,getRat(m.hitGrade?.grade,79.5))}
     </div>
     
     ${(()=>{
@@ -2897,7 +2887,7 @@ function openGameMo(gamePk){
       <thead><tr><th>Score</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th></tr></thead>
       <tbody>
         ${topHit.map(m=>`<tr onclick="closeMo();openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
-          <td>${sbar(m.hitScore)}</td>
+          <td>${sbar(m.hitScore,79.5)}</td>
           <td class="l"><strong>${m.batterName}</strong></td>
           <td style="color:var(--mt2)">${m.team.abbr||''}</td>
           <td style="color:var(--mt2)">${m.order}</td>
