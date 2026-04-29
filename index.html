@@ -195,6 +195,9 @@ tbody td.l{text-align:left}
 .hc-prop:hover .hc-prop-arr{color:var(–ac)}
 
 /* ============ HISTORICAL ACCURACY BADGE (in betting tabs) ============ */
+.hist-top2{padding:7px 10px;margin:0 0 7px;background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.2);border-radius:6px;font-size:.6rem;display:flex;align-items:baseline;gap:5px;flex-wrap:wrap}
+.hist-top2-l{color:var(–mt);font-size:.55rem;letter-spacing:.05em;text-transform:uppercase}
+.hist-top2-note{color:var(–mt2);font-size:.5rem;margin-left:auto}
 .hist-day-row{transition:background .12s}
 .hist-day-row:hover{background:rgba(0,212,255,.06)}
 .hist-day-row:active{background:rgba(0,212,255,.12)}
@@ -398,6 +401,12 @@ details summary::before{content:’▶ ’;color:var(–mt);font-size:.55rem;mar
 details[open] summary::before{content:’▼ ’}
 details summary:hover{color:var(–tx)}
 </style>
+
+<!-- Firebase compat (no build step) -->
+
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
 
 </head>
 <body>
@@ -617,6 +626,97 @@ const HISTORY={
   expanded:{},    // {prop: bool} — track which prop's history badge is expanded
   drillDate:{}    // {prop: 'YYYY-MM-DD'} — when set, renders that day's results inside the prop tab
 };
+
+// ─── FIREBASE: shared 14-day history so all users see the same trends ───
+// Strategy: when a user runs Fact Check on a past day, we push that day's
+// (predictions + boxscore results) to Firestore. On app boot, all users pull
+// the most recent 14 days so they get history even if they're new.
+const FB={app:null,db:null,ready:false,uploadedDates:{}};
+try{
+  const firebaseConfig={
+    apiKey:"AIzaSyAm8TgK3Hl5ndWmqpYlBJs-u64JbeIg2W0",
+    authDomain:"mlb-bets-d196c.firebaseapp.com",
+    projectId:"mlb-bets-d196c",
+    storageBucket:"mlb-bets-d196c.firebasestorage.app",
+    messagingSenderId:"716889601772",
+    appId:"1:716889601772:web:33a4a231ee996ed76e17c9"
+  };
+  if(typeof firebase!=='undefined'){
+    FB.app=firebase.initializeApp(firebaseConfig);
+    FB.db=firebase.firestore();
+    FB.ready=true;
+    console.log('[DIQ] Firebase initialized');
+  }
+}catch(e){console.warn('[DIQ] Firebase init failed (offline mode)',e.message);}
+
+// Pull last 14 days of shared history from Firestore. Merges into local state
+// without overwriting any locally-saved data.
+async function pullSharedHistory(){
+  if(!FB.ready)return;
+  try{
+    const snap=await FB.db.collection('shared_history').orderBy('date','desc').limit(14).get();
+    let pulled=0;
+    snap.forEach(doc=>{
+      const d=doc.data();
+      if(!d.date)return;
+      // Seed PRED.byDate if local doesn't have it
+      if(!PRED.byDate[d.date]&&d.predictions){
+        PRED.byDate[d.date]=d.predictions;
+        pulled++;
+      }
+      // Seed HISTORY.byDate if local doesn't have it
+      if(!HISTORY.byDate[d.date]&&d.results){
+        HISTORY.byDate[d.date]=d.results;
+        HISTORY.fetched[d.date]=true;
+      }
+    });
+    if(pulled>0){
+      console.log(`[DIQ] Pulled ${pulled} shared history days from Firebase`);
+      try{localStorage.setItem('diq_pred',JSON.stringify(PRED));}catch(e){}
+      // Trigger a re-render if the user is on a tab that uses history
+      if(['hits','hr','tb','k','bb','pbb','tot','res'].includes(UI.tab))renderTab();
+    }
+  }catch(e){console.warn('[DIQ] pullSharedHistory failed',e.message);}
+}
+
+// Push one day's data to Firestore. Called after a successful loadResults().
+async function pushSharedHistory(date){
+  if(!FB.ready||!date)return;
+  if(FB.uploadedDates[date])return; // already uploaded this session
+  try{
+    const pred=PRED.byDate[date];
+    const results=HISTORY.byDate[date];
+    if(!pred||!results)return;
+    await FB.db.collection('shared_history').doc(date).set({
+      date,
+      predictions:pred,
+      results,
+      updatedAt:Date.now()
+    });
+    FB.uploadedDates[date]=true;
+    console.log('[DIQ] Pushed shared history for',date);
+    // Cleanup: delete docs older than 14 days to keep Firestore lean
+    cleanupOldShared();
+  }catch(e){console.warn('[DIQ] pushSharedHistory failed',e.message);}
+}
+
+let cleanupRan=false;
+async function cleanupOldShared(){
+  if(!FB.ready||cleanupRan)return;
+  cleanupRan=true;
+  try{
+    const snap=await FB.db.collection('shared_history').orderBy('date','desc').get();
+    const docs=snap.docs;
+    const toDelete=docs.slice(14); // keep top 14, delete rest
+    for(const doc of toDelete){
+      await doc.ref.delete();
+    }
+    if(toDelete.length)console.log(`[DIQ] Cleaned up ${toDelete.length} old shared docs`);
+  }catch(e){console.warn('[DIQ] cleanup failed',e.message);}
+}
+
+// Pull on boot (non-blocking)
+setTimeout(pullSharedHistory,500);
 
 /* ============ HELPERS ============ */
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
@@ -2224,7 +2324,7 @@ function renderDashboard(){
     <div class="home-section-h">Pick a category</div>
     <div class="home-cards">
       <div class="home-card hc-batter" onclick="document.getElementById('hc-bat-props').classList.toggle('open');document.getElementById('hc-pit-props').classList.remove('open');document.getElementById('hc-game-props').classList.remove('open');">
-        <div class="hc-icon hc-svg"><svg viewBox="0 0 32 32" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="26" x2="22" y2="10"/><line x1="20" y1="8" x2="26" y2="14"/><circle cx="9" cy="23" r="3.5" fill="currentColor"/></svg></div>
+        <div class="hc-icon">⚾</div>
         <div class="hc-label">Batter Bets</div>
       </div>
       <div class="home-card hc-pitcher" onclick="document.getElementById('hc-pit-props').classList.toggle('open');document.getElementById('hc-bat-props').classList.remove('open');document.getElementById('hc-game-props').classList.remove('open');">
@@ -2945,7 +3045,13 @@ async function loadResults(date){
   RESULTS.batters=[];
   RESULTS.pitchers=[];
   RESULTS.loaded=false;
-  renderResults();
+  // If a drill is active for the current prop tab, render via the prop tab so the drill view shows.
+  // Otherwise render the standalone Fact Check page as before.
+  const renderResultsOrTab=()=>{
+    const drillActive=Object.keys(HISTORY.drillDate||{}).length>0&&UI.tab!=='res';
+    if(drillActive)renderTab();else renderResults();
+  };
+  renderResultsOrTab();
   
   try{
     const pred=PRED.byDate[date];
@@ -2953,7 +3059,7 @@ async function loadResults(date){
       RESULTS.error='No saved predictions for '+date+'. Predictions are saved each time you load a slate — pick a date you previously loaded.';
       RESULTS.loading=false;
       RESULTS.loaded=true;
-      renderResults();
+      renderResultsOrTab();
       return;
     }
     
@@ -3052,14 +3158,27 @@ async function loadResults(date){
     RESULTS.gameStatus=gameStatus;
     RESULTS.loading=false;
     RESULTS.loaded=true;
-    renderResults();
+    
+    // Cache to HISTORY.byDate so the badge stats include this day immediately,
+    // and so we can push to Firebase for shared-history users.
+    HISTORY.byDate[date]={
+      batters:batterResults,
+      pitchers:pitcherResults,
+      games:gameTotals
+    };
+    HISTORY.fetched[date]=true;
+    
+    // Push to Firebase (non-blocking)
+    if(date<todayStr())pushSharedHistory(date);
+    
+    renderResultsOrTab();
     
   }catch(err){
     console.error(err);
     RESULTS.error=err.message;
     RESULTS.loading=false;
     RESULTS.loaded=true;
-    renderResults();
+    renderResultsOrTab();
   }
 }
 
@@ -3098,6 +3217,8 @@ async function fetchHistoryForDate(date){
       });
     }
     HISTORY.byDate[date]=dayData;
+    // Share this day to Firebase so other users see it
+    if(date<todayStr())pushSharedHistory(date);
   }catch(e){
     console.warn('[DIQ] history fetch failed for',date,e.message);
     HISTORY.fetched[date]=false; // allow retry
@@ -3124,6 +3245,38 @@ function loadHistoryInBackground(propToRefresh){
 
 // Compute per-day lock-grade outcomes for a prop across saved history.
 // Returns: { days: [{date, hits, n, rate}], totalHits, totalN, totalRate }
+// Top-2 Hits accuracy across saved history.
+// For each saved day, look at the 2 highest-scored Hit picks and check if they got a hit.
+// Returns same shape as historicalLockStats.
+function historicalTop2HitsStats(){
+  const today=todayStr();
+  const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
+  const days=[];
+  let totalHits=0,totalN=0;
+  for(const date of dates){
+    const pred=PRED.byDate[date];
+    const hist=HISTORY.byDate[date];
+    if(!hist){
+      days.push({date,hits:null,n:null,rate:null,pending:true});
+      continue;
+    }
+    // Get top 2 Hit picks for this day, sorted by Hit Score
+    const top2=(pred.batters||[])
+      .filter(b=>b.score!=null)
+      .sort((a,b)=>b.score-a.score)
+      .slice(0,2);
+    let hits=0,n=0,outcomes=[];
+    top2.forEach(b=>{
+      const r=hist.batters[b.id];
+      if(!r||(r.ab===0&&r.pa===0))return; // didn't play
+      n++;const got=r.h>0;if(got)hits++;outcomes.push(got);
+    });
+    days.push({date,hits,n,rate:n?Math.round(hits/n*100):null,outcomes});
+    totalHits+=hits;totalN+=n;
+  }
+  return {days,totalHits,totalN,totalRate:totalN?Math.round(totalHits/totalN*100):null};
+}
+
 function historicalLockStats(prop){
   const today=todayStr();
   const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
@@ -3253,8 +3406,26 @@ function renderHistoryBadge(prop){
     <td></td>
   </tr>`:'';
   
+  // For Hits only: also show the "Top 2 Picks" rate as a mini-section above the per-day table
+  let top2Section='';
+  if(prop==='hits'){
+    const t2=historicalTop2HitsStats();
+    if(t2.totalN>0){
+      const c=t2.totalRate>=70?'var(--gn)':t2.totalRate>=50?'var(--gd)':'var(--rd)';
+      top2Section=`<div class="hist-top2">
+        <span class="hist-top2-l">14D Top-2 Picks Hit Rate:</span>
+        <b style="color:${c}">${t2.totalRate}%</b>
+        <span style="color:var(--mt2);font-size:.55rem">(${t2.totalHits}/${t2.totalN})</span>
+        <span class="hist-top2-note">— each day's 2 highest Hit Scores</span>
+      </div>`;
+    }else if(HISTORY.loading){
+      top2Section=`<div class="hist-top2"><span class="hist-top2-l">14D Top-2 Picks Hit Rate:</span> <span style="color:var(--mt)">calculating…</span></div>`;
+    }
+  }
+  
   return `${collapsed}
     <div class="hist-expanded">
+      ${top2Section}
       <div style="font-size:.5rem;color:var(--mt);padding:0 4px 4px;letter-spacing:.06em;text-transform:uppercase">tap a day to view that day's results</div>
       <table style="width:100%;font-size:.6rem;border-collapse:collapse">
         <tbody>${rows||'<tr><td colspan="4" style="color:var(--mt);text-align:center">No saved predictions yet</td></tr>'}${totalLine}</tbody>
@@ -3660,9 +3831,22 @@ function renderFCBatters(type){
     </tr>`;
   }).join('');
   
+  // Top-2 pill (Hits only): how many of the day's 2 highest-scored Hit picks got a hit
+  let top2Pill='';
+  if(type==='hit'){
+    const top2=[...sorted].slice(0,2);
+    const t2Played=top2.filter(b=>b.played);
+    if(t2Played.length>0){
+      const t2Hits=t2Played.filter(b=>b.actualHits>0).length;
+      const t2Rate=Math.round(t2Hits/t2Played.length*100);
+      top2Pill=`<div class="pill" style="border-color:var(--ac)"><span class="pn" style="color:var(--ac)">${t2Rate}%</span>🎯 Top-2 hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${t2Hits}/${t2Played.length} · highest 2 Hit Scores</span></div>`;
+    }
+  }
+  
   return `
     <div class="sum">
       <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${propLabel.replace(/[^A-Za-z ]/g,'').trim()} ≥ ${lockAt} · n=${lockSet.length}</span></div>
+      ${top2Pill}
       <div class="pill"><span class="pn">${sorted.length}</span>Predicted</div>
     </div>
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':type==='hr'?'hit a HR':'actual BB ≥ rounded predicted (conservative)'} · ✗ = no · — = didn't play.</div>
