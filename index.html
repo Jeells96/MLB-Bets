@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5.8 · Prop Intelligence</title>
+<title>Diamond IQ v5.9 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -25,6 +25,13 @@ html,body{background:var(--bg);color:var(--tx);font-family:'DM Mono',monospace;o
 /* ============ GLOBAL BUTTON RESET (iOS Safari fix) ============ */
 button{-webkit-appearance:none!important;appearance:none!important;background:transparent;border:none;color:inherit;font:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
 button:focus{outline:none}
+/* Critical: .btn variants set their own colors and must override the reset above */
+button.btn,button.bp,button.bg,button.bu,button.back-btn,button.fcc-card,button.hist-badge,button.hc-prop,button.fc-pill{font:inherit}
+button.bp{background:var(–ac)!important;color:#000!important}
+button.bg{background:var(–s1)!important;color:var(–tx2)!important;border:1px solid var(–bdr2)!important}
+button.bg:hover{border-color:var(–ac)!important;color:var(–ac)!important}
+button.bu{background:var(–s2)!important;color:var(–tx2)!important;border:1px solid var(–bdr2)!important}
+button.back-btn{color:var(–ac)!important}
 
 /* ============ HEADER ============ */
 header{background:rgba(5,7,16,.97);border-bottom:1px solid var(–bdr);position:sticky;top:0;z-index:200;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
@@ -201,12 +208,14 @@ tbody td.l{text-align:left}
 .fcc-card:active{transform:translateY(0)}
 .fcc-icon{font-size:1.65rem;line-height:1}
 .fcc-label{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(–tx);line-height:1.2}
-.fcc-stat{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.95rem;letter-spacing:.04em;display:inline-block;padding:2px 10px;border-radius:6px;margin-top:2px}
+.fcc-stat{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.85rem;letter-spacing:.04em;display:inline-block;padding:1px 7px;border-radius:5px}
 .fcc-stat-g{background:rgba(46,213,115,.15);color:var(–gn)}
 .fcc-stat-y{background:rgba(255,178,0,.15);color:var(–gd)}
 .fcc-stat-r{background:rgba(255,99,132,.15);color:var(–rd)}
-.fcc-stat-none{background:rgba(126,143,168,.1);color:var(–mt);font-weight:400;font-size:.65rem}
-.fcc-stat-n{font-size:.55rem;color:var(–mt2);font-weight:400;letter-spacing:.04em}
+.fcc-stat-none{background:rgba(126,143,168,.1);color:var(–mt);font-weight:400;font-size:.6rem;display:inline-block;padding:1px 6px;border-radius:5px}
+.fcc-stat-n{font-size:.55rem;color:var(–mt2);font-weight:400;letter-spacing:.04em;margin-left:2px}
+.fcc-stat-row{display:flex;align-items:baseline;justify-content:center;gap:5px;margin-top:3px}
+.fcc-stat-lbl{font-family:‘DM Mono’,monospace;font-size:.5rem;color:var(–mt);text-transform:uppercase;letter-spacing:.07em;width:32px;text-align:right}
 
 /* Overview button on chooser screen — full-width, distinct */
 .fcc-overview{background:linear-gradient(90deg,rgba(255,178,0,.05),rgba(255,178,0,.015));border:1px solid rgba(255,178,0,.3);border-radius:12px;padding:14px 16px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;transition:all .15s;margin-bottom:6px}
@@ -388,7 +397,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5.8 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5.9 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -2740,8 +2749,9 @@ function loadHistoryInBackground(propToRefresh){
   // Fire all in parallel but don't block UI
   Promise.all(todoFetches.map(fetchHistoryForDate)).then(()=>{
     HISTORY.loading=false;
-    // Re-render the currently active prop tab if it's the one that requested
-    if(UI.tab===propToRefresh)renderTab();
+    // Re-render the currently active tab so updated stats appear automatically.
+    // This works for both prop tabs (hits/hr/tb/k/tot) and the FC chooser ('res').
+    renderTab();
   });
 }
 
@@ -2812,7 +2822,8 @@ function historicalLockStats(prop){
 function renderHistoryBadge(prop){
   const stats=historicalLockStats(prop);
   const expanded=HISTORY.expanded[prop];
-  const label=prop==='tot'?'Match':'Lock';
+  // Run Totals has no lock tier, so call it "Success Rate" instead of "Lock Grade Success"
+  const label=prop==='tot'?'14D Success Rate:':'14D Lock Grade Success:';
   const isLoading=HISTORY.loading&&stats.days.some(d=>d.pending);
   
   let mainTxt;
@@ -2824,7 +2835,7 @@ function renderHistoryBadge(prop){
   }
   
   const collapsed=`<button class="hist-badge" onclick="HISTORY.expanded['${prop}']=!HISTORY.expanded['${prop}'];renderTab()">
-    <span class="hist-badge-l">14d ${label} Rate:</span> ${mainTxt} <span class="hist-badge-arr">${expanded?'▴':'▾'}</span>
+    <span class="hist-badge-l">${label}</span> ${mainTxt} <span class="hist-badge-arr">${expanded?'▴':'▾'}</span>
   </button>`;
   
   if(!expanded)return collapsed;
@@ -2997,10 +3008,34 @@ function renderResults(){
       k:fcLockStats('k'),
       tot:fcLockStats('tot')
     };
-    function statBadge(s){
-      if(s.rate==null)return '<span class="fcc-stat fcc-stat-none">no data</span>';
-      const c=s.rate>=70?'fcc-stat-g':s.rate>=50?'fcc-stat-y':'fcc-stat-r';
-      return `<span class="fcc-stat ${c}">${s.rate}% <span class="fcc-stat-n">(${s.hits}/${s.n})</span></span>`;
+    // Compute 14-day historical stats too. Triggers background fetch if not cached.
+    setTimeout(()=>loadHistoryInBackground('res'),50);
+    const hist={
+      hits:historicalLockStats('hits'),
+      tb:historicalLockStats('tb'),
+      hr:historicalLockStats('hr'),
+      k:historicalLockStats('k'),
+      tot:historicalLockStats('tot')
+    };
+    function statRow(todayStat,histStat){
+      // Today's row
+      let todayHTML;
+      if(todayStat.rate==null){
+        todayHTML='<div class="fcc-stat-row"><span class="fcc-stat-lbl">Today</span> <span class="fcc-stat-none">no data</span></div>';
+      }else{
+        const c=todayStat.rate>=70?'fcc-stat-g':todayStat.rate>=50?'fcc-stat-y':'fcc-stat-r';
+        todayHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">Today</span> <span class="fcc-stat ${c}">${todayStat.rate}%</span> <span class="fcc-stat-n">(${todayStat.hits}/${todayStat.n})</span></div>`;
+      }
+      // 14D row
+      let histHTML;
+      const isLoading=HISTORY.loading&&histStat.days.some(d=>d.pending);
+      if(histStat.totalN===0){
+        histHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">14D</span> <span class="fcc-stat-none">${isLoading?'…':'no history'}</span></div>`;
+      }else{
+        const c=histStat.totalRate>=70?'fcc-stat-g':histStat.totalRate>=50?'fcc-stat-y':'fcc-stat-r';
+        histHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">14D</span> <span class="fcc-stat ${c}">${histStat.totalRate}%</span> <span class="fcc-stat-n">(${histStat.totalHits}/${histStat.totalN})</span></div>`;
+      }
+      return todayHTML+histHTML;
     }
     
     setMain(`
@@ -3026,31 +3061,31 @@ function renderResults(){
         <button class="fcc-card" onclick="RESULTS.prop='hits';renderResults()">
           <div class="fcc-icon">🎯</div>
           <div class="fcc-label">Hits</div>
-          ${statBadge(stats.hits)}
+          ${statRow(stats.hits,hist.hits)}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='tb';renderResults()">
           <div class="fcc-icon">🏟️</div>
           <div class="fcc-label">Total Bases</div>
-          ${statBadge(stats.tb)}
+          ${statRow(stats.tb,hist.tb)}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='hr';renderResults()">
           <div class="fcc-icon">💥</div>
           <div class="fcc-label">Home Runs</div>
-          ${statBadge(stats.hr)}
+          ${statRow(stats.hr,hist.hr)}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='k';renderResults()">
           <div class="fcc-icon">⚡</div>
           <div class="fcc-label">Strikeouts</div>
-          ${statBadge(stats.k)}
+          ${statRow(stats.k,hist.k)}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='tot';renderResults()">
           <div class="fcc-icon">🎲</div>
           <div class="fcc-label">Run Totals</div>
-          ${statBadge(stats.tot)}
+          ${statRow(stats.tot,hist.tot)}
         </button>
       </div>
       
-      <div class="disc">Card percentages = Lock-grade hit rate (Hits/TB/HR/Ks) or match rate (Run Totals). Tap a card for full breakdown.</div>
+      <div class="disc">Today = lock-grade hit rate for ${RESULTS.date||candidateDate} only. 14D = same metric across last 14 saved days.</div>
     `);
     return;
   }
