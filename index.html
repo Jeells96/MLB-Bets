@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5.1 · Prop Intelligence</title>
+<title>Diamond IQ v5.2 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -184,8 +184,26 @@ tbody td.l{text-align:left}
 .fc-pills{display:flex;gap:5px;overflow-x:auto;padding:6px 2px 12px;scrollbar-width:none}
 .fc-pills::-webkit-scrollbar{display:none}
 .fc-pill{flex-shrink:0;background:var(–s1);border:1px solid var(–bdr2);color:var(–tx2);font-family:‘Barlow Condensed’,sans-serif;font-size:.7rem;font-weight:600;letter-spacing:.06em;border-radius:8px;padding:7px 12px;cursor:pointer;transition:all .15s;-webkit-appearance:none;appearance:none}
-.fc-pill:hover{border-color:var(–ac);color:var(–ac)}
-.fc-pill.active{background:var(–ac);border-color:var(–ac);color:#000;font-weight:700}
+.fc-pill:hover{border-color:var(–gd);color:var(–gd)}
+.fc-pill.active{background:var(–gd);border-color:var(–gd);color:#000;font-weight:700}
+
+/* ============ FACT CHECK PAGE DIFFERENTIATION ============ */
+/* Persistent banner so user always knows they’re looking at past results, not live bets */
+.fc-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;background:linear-gradient(90deg,rgba(255,178,0,.14),rgba(255,178,0,.06));border:1px solid rgba(255,178,0,.45);border-left:4px solid var(–gd);border-radius:8px;padding:10px 13px;margin:0 0 10px;position:sticky;top:0;z-index:5;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.fc-banner-l{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.fc-banner-icon{font-size:1.05rem;line-height:1}
+.fc-banner-t{font-family:‘Barlow Condensed’,sans-serif;font-size:.78rem;font-weight:800;letter-spacing:.13em;color:var(–gd);text-transform:uppercase;line-height:1.1}
+.fc-banner-d{font-family:‘DM Mono’,monospace;font-size:.58rem;color:var(–mt2);letter-spacing:.06em;text-transform:uppercase;margin-top:1px}
+.fc-banner-r{font-family:‘Barlow Condensed’,sans-serif;font-size:.55rem;font-weight:700;letter-spacing:.16em;color:var(–mt);text-transform:uppercase;text-align:right;flex-shrink:0}
+
+/* Container around all fact-check content — subtly tinted + striped edge */
+.fc-container{background:linear-gradient(180deg,rgba(255,178,0,.03),rgba(255,178,0,.01));border:1px solid rgba(255,178,0,.18);border-radius:10px;padding:12px;position:relative;overflow:hidden}
+.fc-container::before{content:’’;position:absolute;left:0;top:0;bottom:0;width:3px;background:repeating-linear-gradient(45deg,var(–gd),var(–gd) 4px,transparent 4px,transparent 8px);opacity:.4}
+
+/* Tables inside fact check get a goldish header instead of the betting cyan */
+.fc-container table thead th{color:var(–gd)!important;border-bottom-color:rgba(255,178,0,.35)!important}
+.fc-container .pill{background:rgba(255,178,0,.06);border-color:rgba(255,178,0,.25)}
+.fc-container .info{background:rgba(255,178,0,.04);border-color:rgba(255,178,0,.2);color:var(–mt2)}
 
 /* ============ BACK BAR (in prop pages) ============ */
 .back-bar{display:flex;align-items:center;gap:8px;padding:6px 0 10px;font-size:.65rem;color:var(–mt2)}
@@ -320,7 +338,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5.1 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5.2 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -474,7 +492,8 @@ function predSnapshot(){
     pitcherName:m.pitcherName,
     score:m.hitScore,
     hrScore:m.hrScore,
-    tbScore:m.tbScore
+    tbScore:m.tbScore,
+    expectedTB:m.expectedTB
   }));
   const pitchers=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).map(m=>({
     id:String(m.pitcherId),
@@ -1446,6 +1465,43 @@ function batterTBGrade(p,pHand,park,wx,venue){
   };
 }
 
+// Expected total bases per game for a batter facing a pitcher.
+// TB ≈ AB × SLG. AB ≈ PA × (1 - BB% - HBP%) ≈ PA × 0.91. Use blended xSLG vs hand.
+// Apply park HR + park hits factors at reduced weight (TB benefits from both).
+function batterExpectedTB(p,pHand,batterHand,order,park,wx,venue){
+  if(!p||!p.overall.pa)return null;
+  const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
+  const sp=batterSplit(p.prev?.isPrevSeason?p.prev:p,pHand,batterHand);
+  
+  // Blended xSLG (better predictor than actual SLG)
+  const xSLG=blendStat(sp,ov,'xSLG',60)??ov.xSLG??ov.slg??0.400;
+  // BB rate to estimate AB-per-PA: AB = PA × (1 - BB% - HBP%). HBP ≈ 1%.
+  const bbR=blendStat(sp,ov,'bb_rate',100)??ov.bb_rate??0.085;
+  const abPerPA=Math.max(0.78,Math.min(0.95,1-bbR-0.012));
+  
+  // PA per game by lineup spot: leadoff ~4.6, middle ~4.2, bottom ~3.7
+  const o=parseInt(order)||5;
+  const expectedPA=o<=2?4.55:o<=5?4.20:o<=7?3.85:3.55;
+  const expectedAB=expectedPA*abPerPA;
+  
+  // Base TB = AB × xSLG
+  let xTB=expectedAB*xSLG;
+  
+  // Park: blend HR factor (60%) + hits factor (40%) since TB is mostly singles + extra-base
+  if(park){
+    const parkCombined=(park.hr*0.55+park.h*0.45);
+    xTB*=parkCombined;
+  }
+  // Weather: applies modestly (HR-suppressing wind hurts TB ~30% of HR effect)
+  if(wx&&!DOMED.has(venue)){
+    const windF=windHRFactor(venue,wx);
+    const tempF=tempHRFactor(wx.temp);
+    xTB*=(1+((windF*tempF)-1)*0.3);
+  }
+  return Math.round(xTB*100)/100;
+}
+
+
 // === PITCHER K GRADE for a specific pitcher vs lineup ===
 // Returns expected Ks and a 0-100 grade vs typical total
 function pitcherKExpectation(pitcher,oppLineup,pHand,park,wx){
@@ -1695,6 +1751,7 @@ function buildAllMatchups(){
       const hitScore=combineMatchup(hitGObj?.grade,pitG,b.order);
       const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
+      const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
       
       STATE.matchups.push({
         kind:'batter',
@@ -1703,7 +1760,7 @@ function buildAllMatchups(){
         pitcherId:g.aSP?.id,pitcherName:g.aSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,tbScore,
+        hitScore,hrScore,tbScore,expectedTB,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -1724,6 +1781,7 @@ function buildAllMatchups(){
       const hitScore=combineMatchup(hitGObj?.grade,pitG,b.order);
       const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
+      const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
       
       STATE.matchups.push({
         kind:'batter',
@@ -1732,7 +1790,7 @@ function buildAllMatchups(){
         pitcherId:g.hSP?.id,pitcherName:g.hSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,tbScore,
+        hitScore,hrScore,tbScore,expectedTB,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -2187,6 +2245,7 @@ function renderTB(){
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','tb')">
       <td>${sbar(m.tbScore)}</td>
       <td>${bdg(r)}</td>
+      <td><strong style="color:var(--ac)">${m.expectedTB!=null?m.expectedTB.toFixed(2):'—'}</strong></td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
       <td style="color:var(--mt2)">${m.order||''}</td>
@@ -2219,6 +2278,7 @@ function renderTB(){
       <thead><tr>
         <th onclick="sortTB('sc')">TB Score${UI.tbSort.c==='sc'?' '+(UI.tbSort.d>0?'↑':'↓'):''}</th>
         <th>Rating</th>
+        <th>xTB</th>
         <th class="l" onclick="sortTB('n')">Batter</th>
         <th>Team</th>
         <th onclick="sortTB('ord')">#</th>
@@ -2628,14 +2688,31 @@ function renderResults(){
     <button class="fc-pill ${RESULTS.prop===p.id?'active':''}" onclick="RESULTS.prop='${p.id}';renderResults()">${p.label}</button>
   `).join('');
   
-  // Header strip
+  // Format the date prominently
+  const dateObj=new Date(RESULTS.date+'T12:00:00');
+  const dateStr=dateObj.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'}).toUpperCase();
+  
+  // Persistent banner — makes it impossible to confuse this with live betting page
+  const bannerHTML=`
+    <div class="fc-banner">
+      <div class="fc-banner-l">
+        <span class="fc-banner-icon">📊</span>
+        <div>
+          <div class="fc-banner-t">FACT CHECK · PAST RESULTS</div>
+          <div class="fc-banner-d">${dateStr} · ${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} games final</div>
+        </div>
+      </div>
+      <div class="fc-banner-r">Not<br>Live</div>
+    </div>
+  `;
+  
+  // Header strip (date selector + reload)
   const headerHTML=`
     <div class="cb">
       <select class="ms" onchange="RESULTS.loaded=false;loadResults(this.value)">
         ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
       </select>
       <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻ Reload</button>
-      <span style="font-size:.58rem;color:var(--mt2)">${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} final</span>
     </div>
     <div class="fc-pills">${pillsHTML}</div>
   `;
@@ -2643,7 +2720,7 @@ function renderResults(){
   // Body changes per prop
   const body=renderFactCheckBody(RESULTS.prop);
   
-  setMain(headerHTML+body+`<div class="disc">📜 Predictions auto-saved on each load · 14 days kept on this device</div>`);
+  setMain(bannerHTML+headerHTML+`<div class="fc-container">${body}</div>`+`<div class="disc">📜 Predictions auto-saved on each load · 14 days kept on this device</div>`);
 }
 
 function renderFactCheckBody(prop){
@@ -2673,9 +2750,11 @@ function renderFCBatters(type){
       return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHits}-for-${b.actualAB}`,hit};
     }
     if(type==='tb'){
-      // Treat 2+ TB as the "over" outcome (typical line is 1.5)
-      const hit=b.actualTB>=2;
-      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualTB||0} TB`,hit};
+      // Strict point-projection: ≤0.4 off = correct, ≥0.5 = wrong
+      if(b.expectedTB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualTB||0} TB · no pred`,hit:null};
+      const diff=Math.abs((b.actualTB||0)-b.expectedTB);
+      const hit=diff<=0.4;
+      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualTB||0} TB (pred ${b.expectedTB.toFixed(2)})`,hit};
     }
     if(type==='hr'){
       const hit=b.actualHR>0;
@@ -2730,8 +2809,9 @@ function renderFCPitchers(){
   const sorted=[...RESULTS.pitchers].sort((a,b)=>b.xK-a.xK);
   const played=sorted.filter(p=>p.played);
   const meanError=played.length?(played.reduce((s,p)=>s+Math.abs(p.actualKs-p.xK),0)/played.length).toFixed(2):'—';
-  const inRange=played.filter(p=>p.lowK!=null&&p.actualKs>=p.lowK&&p.actualKs<=p.highK).length;
-  const rangeRate=played.length?(inRange/played.length*100).toFixed(0)+'%':'—';
+  // Strict accuracy: ≤0.4 = correct, ≥0.5 = wrong
+  const correct=played.filter(p=>Math.abs(p.actualKs-p.xK)<=0.4).length;
+  const correctRate=played.length?(correct/played.length*100).toFixed(0)+'%':'—';
   
   const rows=sorted.map(p=>{
     const r=getRat(p.grade);
@@ -2739,9 +2819,9 @@ function renderFCPitchers(){
     let icon='—',col='var(--mt)',txt='No final stats',diffStr='';
     if(p.played){
       const diff=p.actualKs-p.xK;
-      const inR=p.lowK!=null&&p.actualKs>=p.lowK&&p.actualKs<=p.highK;
-      icon=inR?'✓':'✗';
-      col=inR?'var(--gn)':Math.abs(diff)<=1.5?'var(--gd)':'var(--rd)';
+      const ok=Math.abs(diff)<=0.4;
+      icon=ok?'✓':'✗';
+      col=ok?'var(--gn)':'var(--rd)';
       txt=`${p.actualKs} K · ${p.actualIP} IP`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
@@ -2752,7 +2832,6 @@ function renderFCPitchers(){
       <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
       <td><strong style="color:var(--ac)">${p.xK}</strong></td>
-      <td style="color:var(--mt2);font-size:.62rem">${p.lowK!=null?p.lowK+'–'+p.highK:'—'}</td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
@@ -2762,13 +2841,13 @@ function renderFCPitchers(){
   return `
     <div class="sum">
       <div class="pill ln"><span class="pn">${meanError}</span>Avg K error</div>
-      <div class="pill"><span class="pn">${rangeRate}</span>Ks in range</div>
+      <div class="pill"><span class="pn">${correctRate}</span>Within ±0.4</div>
       <div class="pill"><span class="pn">${sorted.length}</span>Pitchers</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. ✓ = actual Ks landed inside ±1σ range · ✗ = outside range. Diff = actual − predicted.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. ✓ = actual Ks within 0.4 of predicted · ✗ = off by 0.5 or more. Diff = actual − predicted.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Grade</th><th>Rating</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th>Range</th><th></th><th>Actual</th><th>Diff</th>
+        <th>Grade</th><th>Rating</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th></th><th>Actual</th><th>Diff</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -2779,16 +2858,17 @@ function renderFCTotals(){
   const sorted=[...RESULTS.totals].sort((a,b)=>b.total-a.total);
   const played=sorted.filter(t=>t.played);
   const meanError=played.length?(played.reduce((s,t)=>s+Math.abs(t.actualTotal-t.total),0)/played.length).toFixed(2):'—';
-  const within2=played.filter(t=>Math.abs(t.actualTotal-t.total)<=2).length;
-  const within2Rate=played.length?(within2/played.length*100).toFixed(0)+'%':'—';
+  // Strict accuracy: ≤0.4 = correct, ≥0.5 = wrong
+  const correct=played.filter(t=>Math.abs(t.actualTotal-t.total)<=0.4).length;
+  const correctRate=played.length?(correct/played.length*100).toFixed(0)+'%':'—';
   
   const rows=sorted.map(t=>{
     let icon='—',col='var(--mt)',txt='Game not final',diffStr='';
     if(t.played){
       const diff=t.actualTotal-t.total;
-      const close=Math.abs(diff)<=2;
-      icon=close?'✓':'✗';
-      col=close?'var(--gn)':Math.abs(diff)<=3?'var(--gd)':'var(--rd)';
+      const ok=Math.abs(diff)<=0.4;
+      icon=ok?'✓':'✗';
+      col=ok?'var(--gn)':'var(--rd)';
       txt=`${t.actualTotal} (${t.actualAway}-${t.actualHome})`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
@@ -2806,10 +2886,10 @@ function renderFCTotals(){
   return `
     <div class="sum">
       <div class="pill ln"><span class="pn">${meanError}</span>Avg run error</div>
-      <div class="pill"><span class="pn">${within2Rate}</span>Within 2 runs</div>
+      <div class="pill"><span class="pn">${correctRate}</span>Within ±0.4</div>
       <div class="pill"><span class="pn">${sorted.length}</span>Games</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. ✓ = within 2 runs · ✗ = off by 3+. Diff = actual − predicted.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. ✓ = within 0.4 runs of predicted · ✗ = off by 0.5+. Diff = actual − predicted.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>xR</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th><th></th><th>Actual</th><th>Diff</th>
