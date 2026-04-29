@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6 · Prop Intelligence</title>
+<title>Diamond IQ v6.1 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -400,7 +400,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.1 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -924,6 +924,8 @@ function normalizeBatter(pid,seasonD,expD,saberD,splitsD,recentD,year){
       slg:ab>0?tb/ab:null,
       ops:(ab>0&&pa>0)?(h+bb)/pa+tb/ab:null,
       k_rate:pa>0?so/pa:null,
+      bb_rate:pa>0?bb/pa:null,
+      bb,
       hr
     };
   }else{
@@ -1619,6 +1621,57 @@ function batterExpectedBB(p,pHand,batterHand,order,sp_pitcher){
   return Math.round(xBB*100)/100;
 }
 
+// Walk score for a batter vs pitcher matchup.
+// Combines batter BB% (vs hand), pitcher BB%-allowed (vs hand), and recent BB% trend.
+// CRITICAL: A score >= 72 (lock) requires xBB >= 0.7 (which rounds conservatively to 1).
+// This prevents the model from labeling a 0.5 xBB play as a "lock" — locks must project to ≥1 walk.
+function computeBBScore(p,pitcher,pHand,batterHand,xBB){
+  if(!p||!p.overall.pa)return null;
+  const L=STATE.leagueAvg;
+  const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
+  const bSp=batterSplit(p.prev?.isPrevSeason?p.prev:p,pHand,batterHand);
+  const rec=p.recent||{};
+  
+  // ── Batter side ─────────────────────────────────────────────
+  // Season BB% (overall)
+  const seasonBB=ov.bb_rate??L.b_bb??0.085;
+  // Split BB% vs pitcher hand (blended with season for sample size)
+  const splitBB=blendStat(bSp,ov,'bb_rate',80)??seasonBB;
+  // Recent BB% (last 15G) — meaningful for hot/cold streaks
+  const recBB=rec.pa>=30?(rec.bb_rate??null):null;
+  // Effective batter BB%: split-vs-hand at 60%, season at 25%, recent at 15% if available
+  const effBatterBB=recBB!=null
+    ? splitBB*0.60+seasonBB*0.25+recBB*0.15
+    : splitBB*0.70+seasonBB*0.30;
+  
+  // Batter component score: scaled vs league baseline. Elite walker (12%+) → 90+
+  const batterCompG=scale(effBatterBB,L.b_bb*0.6,L.b_bb*1.7);
+  
+  // ── Pitcher side ─────────────────────────────────────────────
+  // Pitcher BB% allowed (vs batter hand, blended)
+  let pitcherCompG=50;
+  if(pitcher){
+    const pOv=pitcher.prev?.isPrevSeason?pitcher.prev.overall:pitcher.overall;
+    const pSp=pitcherSplit(pitcher,batterHand);
+    const pBB=blendStat(pSp,pOv,'bb_rate',150)??pOv.bb_rate??L.p_bb??0.085;
+    // Higher pitcher BB% → higher grade (more walks expected for the batter)
+    pitcherCompG=scale(pBB,L.p_bb*0.5,L.p_bb*1.8);
+  }
+  
+  // Combined score: batter discipline 65%, pitcher wildness 35%.
+  // (Batter discipline is more predictive than pitcher wildness for individual walk events.)
+  let rawScore=batterCompG*0.65+pitcherCompG*0.35;
+  
+  // ── LOCK FLOOR ENFORCEMENT ──────────────────────────────────
+  // If raw score qualifies as a lock (≥72) but xBB rounds to 0, demote to 71 (Strong, not Lock).
+  // This guarantees a "lock" walk pick projects to at least 1 walk after conservative rounding.
+  if(rawScore>=72&&xBB!=null&&roundConservative(xBB)<1){
+    rawScore=71.5; // just below lock threshold — still "Strong"
+  }
+  
+  return Math.round(rawScore*10)/10;
+}
+
 
 // === PITCHER K GRADE for a specific pitcher vs lineup ===
 // Returns expected Ks and a 0-100 grade vs typical total
@@ -1921,9 +1974,7 @@ function buildAllMatchups(){
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
       const expectedBB=batterExpectedBB(p,pHand,b.bats,b.order,sp);
-      // Walk score = roughly the matchup score for walks (using batter BB% as the grade)
-      const bbGrade=p.overall.bb_rate?scale(p.overall.bb_rate,STATE.leagueAvg.b_bb*0.7,STATE.leagueAvg.b_bb*1.6):50;
-      const bbScore=combineMatchup(bbGrade,50,b.order); // 50 = neutral pitcher walk component
+      const bbScore=computeBBScore(p,sp,pHand,b.bats,expectedBB);
       
       STATE.matchups.push({
         kind:'batter',
@@ -1955,8 +2006,7 @@ function buildAllMatchups(){
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
       const expectedBB=batterExpectedBB(p,pHand,b.bats,b.order,sp);
-      const bbGrade=p.overall.bb_rate?scale(p.overall.bb_rate,STATE.leagueAvg.b_bb*0.7,STATE.leagueAvg.b_bb*1.6):50;
-      const bbScore=combineMatchup(bbGrade,50,b.order);
+      const bbScore=computeBBScore(p,sp,pHand,b.bats,expectedBB);
       
       STATE.matchups.push({
         kind:'batter',
@@ -3967,6 +4017,98 @@ function renderExplain(m,type){
   </div>`;
 }
 
+// Render the Walks (BB) breakdown — uses plate-discipline stats only, NOT power/contact stats
+function renderExplainBB(m){
+  const p=STATE.players[m.batterId];
+  const pit=STATE.pitchers[m.pitcherId];
+  if(!p)return '';
+  const L=STATE.leagueAvg;
+  const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
+  const sp=batterSplit(p.prev?.isPrevSeason?p.prev:p,m.pHand,m.bats);
+  const rec=p.recent||{};
+  
+  const score=m.bbScore;
+  const xBB=m.expectedBB;
+  const xBBWhole=xBB!=null?roundConservative(xBB):null;
+  const rat=getRat(score);
+  const ratC=rat.c==='lock'?'var(--rd)':rat.c==='hot'?'var(--gd)':rat.c==='lean'?'var(--ac)':'var(--mt)';
+  
+  // Batter walk components
+  const seasonBB=ov.bb_rate;
+  const splitBB=blendStat(sp,ov,'bb_rate',80);
+  const recBB=rec.pa>=30?rec.bb_rate:null;
+  // K%/BB ratio — proxy for plate discipline (lower = more disciplined)
+  const kbbRatio=(ov.k_rate&&ov.bb_rate)?ov.k_rate/ov.bb_rate:null;
+  
+  // Pitcher walk components
+  let pitSeasonBB=null,pitSplitBB=null,pitWHIP=null;
+  if(pit){
+    const pOv=pit.prev?.isPrevSeason?pit.prev.overall:pit.overall;
+    const pSp=pitcherSplit(pit,m.bats);
+    pitSeasonBB=pOv.bb_rate;
+    pitSplitBB=blendStat(pSp,pOv,'bb_rate',150);
+    pitWHIP=pOv.whip;
+  }
+  
+  // Build component rows for the explainer
+  const bComps=[
+    {label:`Season BB%`,val:pct(seasonBB,1),avg:pct(L.b_bb,1),score:scale(seasonBB,L.b_bb*0.6,L.b_bb*1.7),weight:30,note:''},
+    {label:`BB% vs ${m.pHand}HP`,val:pct(splitBB,1),avg:pct(L.b_bb,1),score:scale(splitBB,L.b_bb*0.6,L.b_bb*1.7),weight:30,note:'split'},
+    {label:`Recent BB% (last 15G)`,val:recBB!=null?pct(recBB,1):'—',avg:pct(L.b_bb,1),score:recBB!=null?scale(recBB,L.b_bb*0.6,L.b_bb*1.7):50,weight:15,note:rec.pa?rec.pa+' PA':'small sample'},
+    {label:`K%/BB% ratio (lower=disciplined)`,val:fmt(kbbRatio,2),avg:'~2.6',score:kbbRatio!=null?100-scale(kbbRatio,1.5,4.5):50,weight:5,note:''}
+  ];
+  const pComps=pit?[
+    {label:`Pitcher BB% allowed`,val:pct(pitSeasonBB,1),avg:pct(L.p_bb,1),score:scale(pitSeasonBB,L.p_bb*0.5,L.p_bb*1.8),weight:20,note:''},
+    {label:`Pitcher BB% vs ${m.bats}HB`,val:pct(pitSplitBB,1),avg:pct(L.p_bb,1),score:scale(pitSplitBB,L.p_bb*0.5,L.p_bb*1.8),weight:15,note:'split'},
+    {label:`Pitcher WHIP (context)`,val:fmt(pitWHIP,2),avg:fmt(L.p_whip,2),score:pitWHIP!=null?scale(pitWHIP,L.p_whip*0.7,L.p_whip*1.3):50,weight:'—',note:'context'}
+  ]:[];
+  
+  // Math summary
+  const o=parseInt(m.order)||5;
+  const expectedPA=o<=2?4.55:o<=5?4.20:o<=7?3.85:3.55;
+  
+  return `<div class="why-box">
+    <div class="why-title">🚶 Why this Walks projection?</div>
+    
+    <div class="why-math">
+      <div class="why-math-row">
+        <span class="why-math-lbl">Batter BB% (blended)</span>
+        <div class="why-math-bar"><div class="why-math-fill" style="width:${Math.min(100,nn(splitBB||seasonBB)*500)}%;background:var(--ac)"></div></div>
+        <span class="why-math-val" style="color:var(--ac)">${pct(splitBB||seasonBB,1)}</span>
+      </div>
+      <div class="why-math-row">
+        <span class="why-math-lbl">Pitcher BB% allowed</span>
+        <div class="why-math-bar"><div class="why-math-fill" style="width:${Math.min(100,nn(pitSplitBB||pitSeasonBB||L.p_bb)*500)}%;background:var(--gd)"></div></div>
+        <span class="why-math-val" style="color:var(--gd)">${pct(pitSplitBB||pitSeasonBB||L.p_bb,1)}</span>
+      </div>
+      <div class="why-math-row">
+        <span class="why-math-lbl">Expected PA (lineup spot ${m.order})</span>
+        <span style="flex:1"></span>
+        <span class="why-math-val" style="color:var(--tx2)">${expectedPA}</span>
+      </div>
+      <div class="why-math-eq">
+        log5(batter BB%, pitcher BB%) × ${expectedPA} PA = <b style="color:${ratC}">${xBB!=null?xBB.toFixed(2):'—'} xBB</b>
+        ${xBBWhole!=null?` → rounds to <b style="color:var(--tx)">${xBBWhole}</b>`:''}
+      </div>
+      ${score>=72&&xBBWhole!=null&&xBBWhole<1?'<div style="font-size:.55rem;color:var(--rd);padding:4px 0">⚠ Lock floor enforced: a true lock would round to ≥1. This was demoted.</div>':''}
+    </div>
+    
+    <div class="why-section">
+      <div class="why-section-h">🎯 Batter Plate Discipline</div>
+      ${bComps.map(c=>compRow(c.label,c.val,c.avg,c.score,c.weight,c.note)).join('')}
+    </div>
+    
+    ${pit?`<div class="why-section">
+      <div class="why-section-h">⚾ Pitcher Walk Tendency</div>
+      ${pComps.map(c=>compRow(c.label,c.val,c.avg,c.score,c.weight,c.note)).join('')}
+    </div>`:''}
+    
+    <div style="font-size:.54rem;color:var(--mt);margin-top:6px;line-height:1.4">
+      Walks are about plate discipline, not power. This view ignores SLG/wOBA/HR — they don't predict walks. Score combines batter BB% (65% weight, blended split + season + recent) with pitcher BB% allowed (35%). A "Lock" requires xBB ≥ 0.7 so the rounded prediction is ≥1.
+    </div>
+  </div>`;
+}
+
 // Render the K expectation breakdown
 function renderExplainK(m){
   const pit=STATE.pitchers[m.pitcherId];
@@ -4138,10 +4280,11 @@ function renderBatterCard(batterId,pitcherId,propType){
       ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore,79.5))}
       ${pb('💥 HR',m.hrScore,getRat(m.hrScore))}
       ${pb('🏟️ Total Bases',m.tbScore,getRat(m.tbScore))}
-      ${pb('Hit Grade',m.hitGrade?.grade,getRat(m.hitGrade?.grade,79.5))}
+      ${pb('🚶 Walks',m.bbScore,getRat(m.bbScore))}
     </div>
     
     ${(()=>{
+      if(propType==='bb')return renderExplainBB(m);
       const order=propType==='hr'?['hr','hit','tb']:propType==='tb'?['tb','hit','hr']:['hit','tb','hr'];
       return order.map(t=>renderExplain(m,t)).join('');
     })()}
