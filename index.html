@@ -718,6 +718,100 @@ async function cleanupOldShared(){
 // Pull on boot (non-blocking)
 setTimeout(pullSharedHistory,500);
 
+// ─── DEBUG HELPERS for the Settings panel ───
+function fbLog(msg){
+  const el=document.getElementById('fb-log');
+  if(!el)return;
+  const ts=new Date().toLocaleTimeString();
+  el.innerHTML+=`<div>[${ts}] ${msg}</div>`;
+  el.scrollTop=el.scrollHeight;
+  console.log('[DIQ-FB]',msg);
+}
+
+function fbDebugRefreshStatus(){
+  const el=document.getElementById('fb-status');
+  if(!el)return;
+  const localDays=Object.keys(PRED.byDate).sort().reverse();
+  const remoteDays=Object.keys(HISTORY.byDate).sort().reverse();
+  const lines=[
+    `<b style="color:${FB.ready?'var(--gn)':'var(--rd)'}">Firebase: ${FB.ready?'✓ Connected':'✗ Not connected'}</b>`,
+    `Project: <code>${FB.app?.options?.projectId||'—'}</code>`,
+    `Local saved predictions: <b>${localDays.length}</b> day(s)${localDays.length?' · most recent: '+localDays[0]:''}`,
+    `Cached results: <b>${remoteDays.length}</b> day(s)${remoteDays.length?' · most recent: '+remoteDays[0]:''}`,
+    `Pushed this session: <b>${Object.keys(FB.uploadedDates).length}</b>`,
+    `<a href="https://console.firebase.google.com/project/${FB.app?.options?.projectId||'mlb-bets-d196c'}/firestore/data" target="_blank" style="color:var(--ac)">Open Firebase console →</a>`
+  ];
+  el.innerHTML=lines.join('<br>');
+}
+
+async function fbDebugPull(){
+  fbLog('Manual pull starting…');
+  if(!FB.ready){fbLog('✗ Firebase not initialized — check console for init errors');return;}
+  try{
+    const snap=await FB.db.collection('shared_history').orderBy('date','desc').limit(14).get();
+    fbLog(`Read ${snap.size} doc(s) from Firestore`);
+    let added=0,updated=0;
+    snap.forEach(doc=>{
+      const d=doc.data();
+      if(!d.date){fbLog(`✗ Doc ${doc.id} missing date field`);return;}
+      const isNew=!PRED.byDate[d.date];
+      if(d.predictions){PRED.byDate[d.date]=d.predictions;if(isNew)added++;else updated++;}
+      if(d.results){HISTORY.byDate[d.date]=d.results;HISTORY.fetched[d.date]=true;}
+      fbLog(`  ${d.date}: ${d.predictions?'pred✓':'pred✗'} ${d.results?'results✓':'results✗'}`);
+    });
+    try{localStorage.setItem('diq_pred',JSON.stringify(PRED));fbLog(`Saved to localStorage`);}catch(e){fbLog(`✗ localStorage failed: ${e.message}`);}
+    fbLog(`✓ Done. Added ${added}, updated ${updated}.`);
+    fbDebugRefreshStatus();
+  }catch(e){fbLog(`✗ Pull failed: ${e.message}`);}
+}
+
+async function fbDebugPushAll(){
+  fbLog('Manual push starting…');
+  if(!FB.ready){fbLog('✗ Firebase not initialized');return;}
+  const today=todayStr();
+  const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
+  if(!dates.length){fbLog('✗ No past saved predictions to push');return;}
+  fbLog(`Found ${dates.length} day(s) to push`);
+  let pushed=0,failed=0;
+  for(const date of dates){
+    const pred=PRED.byDate[date];
+    let results=HISTORY.byDate[date];
+    if(!results){
+      fbLog(`  ${date}: no results cached — fetching first…`);
+      try{
+        await fetchHistoryForDate(date);
+        results=HISTORY.byDate[date];
+      }catch(e){fbLog(`  ${date}: fetch failed: ${e.message}`);failed++;continue;}
+    }
+    if(!pred||!results){fbLog(`  ${date}: missing data, skip`);failed++;continue;}
+    try{
+      await FB.db.collection('shared_history').doc(date).set({
+        date,predictions:pred,results,updatedAt:Date.now()
+      });
+      FB.uploadedDates[date]=true;
+      fbLog(`  ${date}: ✓ pushed`);
+      pushed++;
+    }catch(e){
+      fbLog(`  ${date}: ✗ ${e.message}`);
+      failed++;
+    }
+  }
+  fbLog(`✓ Done. Pushed ${pushed}, failed ${failed}.`);
+  fbDebugRefreshStatus();
+}
+
+// Auto-refresh the status panel when settings opens
+const origRenderSettings=window.renderSettings;
+setTimeout(()=>{
+  if(typeof renderSettings==='function'){
+    const orig=renderSettings;
+    window.renderSettings=function(){
+      orig.apply(this,arguments);
+      setTimeout(fbDebugRefreshStatus,50);
+    };
+  }
+},200);
+
 /* ============ HELPERS ============ */
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
 const nn=(v,fb=0)=>sf(v)??fb;
@@ -4080,6 +4174,16 @@ function renderSettings(){
           <b>K Grade (P)</b>: Log5 combine of pitcher K% vs each batter's K% (weighted by lineup spot + PA expectation), converted to xK vs ~6K baseline<br><br>
           <b>Run Total</b>: Team xwOBA vs pitcher xwOBA + park R factor + wind HR factor + temp carry + precip suppression
         </div>
+      </div>
+      <div class="sw-grp">
+        <div class="sw-gt">☁️ Shared History (Firebase)</div>
+        <div style="font-size:.62rem;color:var(--mt2);line-height:1.6" id="fb-status">Loading status…</div>
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn bg" style="font-size:.65rem" onclick="fbDebugPull()">↓ Force Pull</button>
+          <button class="btn bg" style="font-size:.65rem" onclick="fbDebugPushAll()">↑ Push All Local Days</button>
+          <button class="btn bg" style="font-size:.65rem" onclick="fbDebugRefreshStatus()">↻ Refresh Status</button>
+        </div>
+        <div id="fb-log" style="margin-top:8px;font-size:.55rem;color:var(--mt);font-family:'DM Mono',monospace;line-height:1.5;max-height:200px;overflow-y:auto;background:var(--s1);padding:6px 8px;border-radius:4px"></div>
       </div>
       <div class="sw-grp">
         <div class="sw-gt">🏟️ League Averages (live from today's slate)</div>
