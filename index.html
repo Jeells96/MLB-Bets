@@ -3381,30 +3381,70 @@ function renderHistoryBadge(prop){
   if(!expanded)return collapsed;
   
   // Expanded view: per-day breakdown. Each row tappable to drill into that day's results.
+  // For Hits prop: pre-compute a date->top2 map so each row can show the top-2 fraction
+  const t2ByDate={};
+  if(prop==='hits'){
+    const t2=historicalTop2HitsStats();
+    t2.days.forEach(d=>{t2ByDate[d.date]=d;});
+  }
+  
   const rows=stats.days.map(d=>{
     const dateLabel=new Date(d.date+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'});
+    // For Hits, the table has 5 columns: Date | Rate% | Lock fraction | Top-2 fraction | ✓✗
+    // For other props: 4 columns: Date | Rate% | Lock fraction | ✓✗
+    const colspanLoading=prop==='hits'?4:3;
     if(d.pending){
-      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="3" style="color:var(--mt);font-style:italic;padding:5px 4px">loading…</td></tr>`;
+      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="${colspanLoading}" style="color:var(--mt);font-style:italic;padding:5px 4px">loading…</td></tr>`;
     }
     if(d.n===0){
-      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="3" style="color:var(--mt);padding:5px 4px">no qualifying plays</td></tr>`;
+      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="${colspanLoading}" style="color:var(--mt);padding:5px 4px">no qualifying plays</td></tr>`;
     }
     const c=d.rate>=70?'var(--gn)':d.rate>=50?'var(--gd)':'var(--rd)';
     const marks=d.outcomes.slice(0,12).map(o=>`<span style="color:${o?'var(--gn)':'var(--rd)'};font-weight:700">${o?'✓':'✗'}</span>`).join('');
+    
+    // Top-2 cell (Hits only): green if 2/2, red if 1/2 or 0/2
+    let top2Cell='';
+    if(prop==='hits'){
+      const t2d=t2ByDate[d.date];
+      if(t2d&&t2d.n>0){
+        const t2Color=t2d.hits===2?'var(--gn)':'var(--rd)';
+        top2Cell=`<td style="font-size:.62rem;letter-spacing:.04em;padding:6px 4px;color:${t2Color};font-weight:700;text-align:center">${t2d.hits}/${t2d.n}</td>`;
+      }else{
+        top2Cell='<td style="padding:6px 4px;color:var(--mt);text-align:center">—</td>';
+      }
+    }
+    
     return `<tr class="hist-day-row" onclick="drillIntoDay('${prop}','${d.date}')" style="cursor:pointer">
       <td style="color:var(--tx2);font-weight:600;padding:6px 4px">${dateLabel}</td>
       <td style="text-align:right;font-weight:700;padding:6px 4px;color:${c}">${d.rate}%</td>
       <td style="font-size:.62rem;letter-spacing:.04em;padding:6px 4px;color:var(--mt2)">${d.hits}/${d.n}</td>
+      ${top2Cell}
       <td style="font-size:.7rem;letter-spacing:.06em;padding:6px 4px;text-align:right">${marks}${d.outcomes.length>12?` <span style="color:var(--mt);font-size:.55rem">+${d.outcomes.length-12}</span>`:''}</td>
     </tr>`;
   }).join('');
   
-  const totalLine=stats.totalN>0?`<tr style="border-top:1px solid var(--bdr2)">
-    <td style="color:var(--tx);font-weight:700;padding-top:7px">14-day total</td>
-    <td style="text-align:right;padding-top:7px;font-weight:700"><b style="color:${stats.totalRate>=70?'var(--gn)':stats.totalRate>=50?'var(--gd)':'var(--rd)'}">${stats.totalRate}%</b></td>
-    <td style="padding-top:7px;color:var(--mt2);font-size:.62rem">${stats.totalHits}/${stats.totalN}</td>
-    <td></td>
-  </tr>`:'';
+  // Total row colspan adjusts based on whether Hits added a column
+  let totalLine='';
+  if(stats.totalN>0){
+    const totalColor=stats.totalRate>=70?'var(--gn)':stats.totalRate>=50?'var(--gd)':'var(--rd)';
+    let top2TotalCell='';
+    if(prop==='hits'){
+      const t2=historicalTop2HitsStats();
+      if(t2.totalN>0){
+        const t2c=t2.totalRate>=70?'var(--gn)':t2.totalRate>=50?'var(--gd)':'var(--rd)';
+        top2TotalCell=`<td style="padding-top:7px;text-align:center;font-weight:700;color:${t2c};font-size:.62rem">${t2.totalHits}/${t2.totalN}</td>`;
+      }else{
+        top2TotalCell='<td style="padding-top:7px;text-align:center;color:var(--mt)">—</td>';
+      }
+    }
+    totalLine=`<tr style="border-top:1px solid var(--bdr2)">
+      <td style="color:var(--tx);font-weight:700;padding-top:7px">14-day total</td>
+      <td style="text-align:right;padding-top:7px;font-weight:700"><b style="color:${totalColor}">${stats.totalRate}%</b></td>
+      <td style="padding-top:7px;color:var(--mt2);font-size:.62rem">${stats.totalHits}/${stats.totalN}</td>
+      ${top2TotalCell}
+      <td></td>
+    </tr>`;
+  }
   
   // For Hits only: also show the "Top 2 Picks" rate as a mini-section above the per-day table
   let top2Section='';
@@ -3428,7 +3468,7 @@ function renderHistoryBadge(prop){
       ${top2Section}
       <div style="font-size:.5rem;color:var(--mt);padding:0 4px 4px;letter-spacing:.06em;text-transform:uppercase">tap a day to view that day's results</div>
       <table style="width:100%;font-size:.6rem;border-collapse:collapse">
-        <tbody>${rows||'<tr><td colspan="4" style="color:var(--mt);text-align:center">No saved predictions yet</td></tr>'}${totalLine}</tbody>
+        <tbody>${rows||`<tr><td colspan="${prop==='hits'?5:4}" style="color:var(--mt);text-align:center">No saved predictions yet</td></tr>`}${totalLine}</tbody>
       </table>
     </div>`;
 }
