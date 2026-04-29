@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5.9.3 · Prop Intelligence</title>
+<title>Diamond IQ v6 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -176,6 +176,8 @@ tbody td.l{text-align:left}
 .home-card:hover{border-color:var(–ac);transform:translateY(-1px);box-shadow:0 4px 14px rgba(0,212,255,.07)}
 .home-card:active{transform:translateY(0)}
 .hc-icon{font-size:1.85rem;margin-bottom:6px;line-height:1}
+.hc-icon.hc-svg{display:flex;align-items:center;justify-content:center;color:var(–ac);height:32px}
+.hc-icon.hc-svg svg{display:block}
 .hc-label{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.78rem;letter-spacing:.11em;text-transform:uppercase;color:var(–tx);line-height:1.2}
 .hc-batter:hover{border-color:var(–ac)}
 .hc-pitcher:hover{border-color:var(–rd)}
@@ -398,7 +400,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5.9.3 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -508,6 +510,8 @@ const UI={
   hrSort:{c:'sc',d:-1},
   tbSort:{c:'sc',d:-1},
   kSort:{c:'sc',d:-1},
+  bbSort:{c:'sc',d:-1},
+  pbbSort:{c:'sc',d:-1},
   totSort:{c:'total',d:-1},
   filt:{hits:'',hr:'',k:''},
 };
@@ -553,7 +557,9 @@ function predSnapshot(){
     score:m.hitScore,
     hrScore:m.hrScore,
     tbScore:m.tbScore,
-    expectedTB:m.expectedTB
+    expectedTB:m.expectedTB,
+    expectedBB:m.expectedBB,
+    bbScore:m.bbScore
   }));
   const pitchers=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).map(m=>({
     id:String(m.pitcherId),
@@ -564,7 +570,9 @@ function predSnapshot(){
     xK:m.expectedK,
     grade:m.kGrade,
     lowK:m.lowK,
-    highK:m.highK
+    highK:m.highK,
+    expectedBB:m.expectedBB,
+    bbGrade:m.bbGrade
   }));
   const totals=(STATE.totals||[]).filter(t=>t.total!=null).map(t=>({
     gamePk:String(t.game.gamePk),
@@ -1581,9 +1589,89 @@ function batterExpectedTB(p,pHand,batterHand,order,park,wx,venue){
   return Math.round(xTB*100)/100;
 }
 
+// Expected walks per game for a batter facing a pitcher.
+// BB ≈ PA × BB_rate. Blend batter BB% and pitcher BB%-allowed using log5.
+function batterExpectedBB(p,pHand,batterHand,order,sp_pitcher){
+  if(!p||!p.overall.pa)return null;
+  const L=STATE.leagueAvg;
+  const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
+  const bSp=batterSplit(p.prev?.isPrevSeason?p.prev:p,pHand,batterHand);
+  
+  // Batter BB% (blended vs hand)
+  const bBBR=blendStat(bSp,ov,'bb_rate',80)??ov.bb_rate??L.b_bb??0.085;
+  
+  // Pitcher BB% allowed (blended). Default to league avg if no pitcher data.
+  let pBBR=L.p_bb??0.085;
+  if(sp_pitcher){
+    const pOv=sp_pitcher.prev?.isPrevSeason?sp_pitcher.prev.overall:sp_pitcher.overall;
+    const pSp=pitcherSplit(sp_pitcher,batterHand);
+    pBBR=blendStat(pSp,pOv,'bb_rate',150)??pOv.bb_rate??L.p_bb??0.085;
+  }
+  
+  // log5 combine batter & pitcher BB rate vs league baseline
+  const combinedBBR=combineRates(pBBR,bBBR,L.p_bb??0.085);
+  
+  // PA per game by lineup spot
+  const o=parseInt(order)||5;
+  const expectedPA=o<=2?4.55:o<=5?4.20:o<=7?3.85:3.55;
+  const xBB=expectedPA*combinedBBR;
+  
+  return Math.round(xBB*100)/100;
+}
+
 
 // === PITCHER K GRADE for a specific pitcher vs lineup ===
 // Returns expected Ks and a 0-100 grade vs typical total
+// === PITCHER BB GRADE for a specific pitcher vs lineup ===
+// Returns expected walks allowed and a 0-100 grade.
+function pitcherBBExpectation(pitcher,oppLineup,pHand){
+  if(!pitcher||!pitcher.overall.ip)return null;
+  const L=STATE.leagueAvg;
+  const ov=pitcher.prev?.isPrevSeason?pitcher.prev.overall:pitcher.overall;
+  
+  // Expected IP from season avg (no opp/park adjustment for walks — less material)
+  const expectedIP=clamp(ov.avgIP||L.p_avgIP,3.5,7.5);
+  const totalBF=expectedIP*4.2;
+  
+  // Sum expected BB across the lineup
+  let totalBB=0;
+  oppLineup.forEach(b=>{
+    const bObj=STATE.players[b.id];
+    const paF=paFactor(b.order);
+    
+    // Pitcher BB% vs batter hand
+    const pSp=pitcherSplit(pitcher,b.bats);
+    const pBBR=blendStat(pSp,ov,'bb_rate',150)??ov.bb_rate??L.p_bb;
+    
+    // Batter BB% vs pitcher hand
+    let bBBR=L.b_bb??0.085;
+    if(bObj){
+      const bOv=bObj.prev?.isPrevSeason?bObj.prev.overall:bObj.overall;
+      const bSp=batterSplit(bObj.prev?.isPrevSeason?bObj.prev:bObj,pHand,b.bats);
+      bBBR=blendStat(bSp,bOv,'bb_rate',80)??bOv.bb_rate??L.b_bb??0.085;
+    }
+    
+    // log5 combine
+    const combined=combineRates(pBBR,bBBR,L.p_bb??0.085);
+    const pa=totalBF/9*paF;
+    totalBB+=combined*pa;
+  });
+  
+  // Grade: lower BB = better pitcher. Invert scale so higher grade = fewer walks issued.
+  // But for prop betting (over/under walks), the score should reflect the prediction itself.
+  // We'll use grade = scale where higher grade = MORE walks expected (pro-bettor view).
+  const avgBaseline=expectedIP*L.p_bb*4.2;  // typical walk count
+  const grade=scale(totalBB,avgBaseline*0.5,avgBaseline*1.6);
+  
+  return {
+    expectedBB:Math.round(totalBB*10)/10,
+    expectedIP:Math.round(expectedIP*10)/10,
+    grade:Math.round(grade*10)/10,
+    bbRate:ov.bb_rate,
+    avgBaseline:Math.round(avgBaseline*10)/10
+  };
+}
+
 function pitcherKExpectation(pitcher,oppLineup,pHand,park,wx){
   if(!pitcher||!pitcher.overall.ip)return null;
   const L=STATE.leagueAvg;
@@ -1832,6 +1920,10 @@ function buildAllMatchups(){
       const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
+      const expectedBB=batterExpectedBB(p,pHand,b.bats,b.order,sp);
+      // Walk score = roughly the matchup score for walks (using batter BB% as the grade)
+      const bbGrade=p.overall.bb_rate?scale(p.overall.bb_rate,STATE.leagueAvg.b_bb*0.7,STATE.leagueAvg.b_bb*1.6):50;
+      const bbScore=combineMatchup(bbGrade,50,b.order); // 50 = neutral pitcher walk component
       
       STATE.matchups.push({
         kind:'batter',
@@ -1840,7 +1932,7 @@ function buildAllMatchups(){
         pitcherId:g.aSP?.id,pitcherName:g.aSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,tbScore,expectedTB,
+        hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -1862,6 +1954,9 @@ function buildAllMatchups(){
       const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
+      const expectedBB=batterExpectedBB(p,pHand,b.bats,b.order,sp);
+      const bbGrade=p.overall.bb_rate?scale(p.overall.bb_rate,STATE.leagueAvg.b_bb*0.7,STATE.leagueAvg.b_bb*1.6):50;
+      const bbScore=combineMatchup(bbGrade,50,b.order);
       
       STATE.matchups.push({
         kind:'batter',
@@ -1870,7 +1965,7 @@ function buildAllMatchups(){
         pitcherId:g.hSP?.id,pitcherName:g.hSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,tbScore,expectedTB,
+        hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -1878,6 +1973,7 @@ function buildAllMatchups(){
     // Pitcher K matchups (both SPs)
     if(g.hSP?.id&&STATE.pitchers[g.hSP.id]){
       const k=pitcherKExpectation(STATE.pitchers[g.hSP.id],g.aLineup,g.hSPHand||'R',park,wx);
+      const bb=pitcherBBExpectation(STATE.pitchers[g.hSP.id],g.aLineup,g.hSPHand||'R');
       if(k){
         STATE.matchups.push({
           kind:'pitcher',
@@ -1889,12 +1985,14 @@ function buildAllMatchups(){
           lowK:k.lowK,highK:k.highK,stdDev:k.stdDev,
           recentBlendUsed:k.recentBlendUsed,recentKRate:k.recentKRate,seasonKRate:k.seasonKRate,
           effectiveKRate:k.effectiveKRate,oppOBP:k.oppOBP,oppIPMult:k.oppIPMult,
-          parkKMult:k.parkKMult,parkK:k.parkK
+          parkKMult:k.parkKMult,parkK:k.parkK,
+          expectedBB:bb?.expectedBB,bbGrade:bb?.grade,bbRate:bb?.bbRate
         });
       }
     }
     if(g.aSP?.id&&STATE.pitchers[g.aSP.id]){
       const k=pitcherKExpectation(STATE.pitchers[g.aSP.id],g.hLineup,g.aSPHand||'R',park,wx);
+      const bb=pitcherBBExpectation(STATE.pitchers[g.aSP.id],g.hLineup,g.aSPHand||'R');
       if(k){
         STATE.matchups.push({
           kind:'pitcher',
@@ -1906,7 +2004,8 @@ function buildAllMatchups(){
           lowK:k.lowK,highK:k.highK,stdDev:k.stdDev,
           recentBlendUsed:k.recentBlendUsed,recentKRate:k.recentKRate,seasonKRate:k.seasonKRate,
           effectiveKRate:k.effectiveKRate,oppOBP:k.oppOBP,oppIPMult:k.oppIPMult,
-          parkKMult:k.parkKMult,parkK:k.parkK
+          parkKMult:k.parkKMult,parkK:k.parkK,
+          expectedBB:bb?.expectedBB,bbGrade:bb?.grade,bbRate:bb?.bbRate
         });
       }
     }
@@ -2024,7 +2123,7 @@ function sw(tab){
   UI.tab=tab;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   // Map sub-pages back to their parent tab in the visible nav
-  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',tot:'dash'};
+  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',bb:'dash',pbb:'dash',tot:'dash'};
   const navTab=parentMap[tab]||tab;
   document.getElementById('t-'+navTab)?.classList.add('active');
   renderTab();
@@ -2041,6 +2140,8 @@ function renderTab(){
     case 'hr':renderHRs();break;
     case 'tb':renderTB();break;
     case 'k':renderKs();break;
+    case 'bb':renderBatterBB();break;
+    case 'pbb':renderPitcherBB();break;
     case 'tot':renderTotals();break;
     case 'res':renderResults();break;
     case 'srch':renderSrch();break;
@@ -2066,7 +2167,7 @@ function renderDashboard(){
     <div class="home-section-h">Pick a category</div>
     <div class="home-cards">
       <div class="home-card hc-batter" onclick="document.getElementById('hc-bat-props').classList.toggle('open');document.getElementById('hc-pit-props').classList.remove('open');document.getElementById('hc-game-props').classList.remove('open');">
-        <div class="hc-icon">🏏</div>
+        <div class="hc-icon hc-svg"><svg viewBox="0 0 32 32" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="26" x2="22" y2="10"/><line x1="20" y1="8" x2="26" y2="14"/><circle cx="9" cy="23" r="3.5" fill="currentColor"/></svg></div>
         <div class="hc-label">Batter Bets</div>
       </div>
       <div class="home-card hc-pitcher" onclick="document.getElementById('hc-pit-props').classList.toggle('open');document.getElementById('hc-bat-props').classList.remove('open');document.getElementById('hc-game-props').classList.remove('open');">
@@ -2096,6 +2197,11 @@ function renderDashboard(){
         <span class="hc-prop-label">Home Runs</span>
         <span class="hc-prop-arr">→</span>
       </button>
+      <button class="hc-prop" onclick="goToProp('bb')">
+        <span class="hc-prop-icon">🚶</span>
+        <span class="hc-prop-label">Walks (BB)</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
     </div>
     
     <div class="hc-props" id="hc-pit-props">
@@ -2103,6 +2209,11 @@ function renderDashboard(){
       <button class="hc-prop" onclick="goToProp('k')">
         <span class="hc-prop-icon">⚡</span>
         <span class="hc-prop-label">Strikeouts</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+      <button class="hc-prop" onclick="goToProp('pbb')">
+        <span class="hc-prop-icon">🚶</span>
+        <span class="hc-prop-label">Walks Allowed (BB)</span>
         <span class="hc-prop-arr">→</span>
       </button>
     </div>
@@ -2118,7 +2229,7 @@ function renderDashboard(){
     
     ${gamesStrip()}
     
-    <div class="disc">⚠️ For entertainment purposes only. Stats from MLB Stats API · Weather from Open-Meteo · Park factors public.</div>
+    <div class="disc">⚾ Go Big Or Go Home. Stats from MLB Stats API · Weather from Open-Meteo · Park factors public.</div>
   `);
 }
 
@@ -2129,6 +2240,8 @@ function goToProp(prop){
   else if(prop==='hr')UI.hrSort={c:'sc',d:-1};
   else if(prop==='tb')UI.tbSort={c:'sc',d:-1};
   else if(prop==='k')UI.kSort={c:'sc',d:-1};
+  else if(prop==='bb')UI.bbSort={c:'sc',d:-1};
+  else if(prop==='pbb')UI.pbbSort={c:'sc',d:-1};
   else if(prop==='tot')UI.totSort={c:'total',d:-1};
   sw(prop);
 }
@@ -2440,6 +2553,125 @@ function renderKs(){
 function sortK(c){if(UI.kSort.c===c)UI.kSort.d*=-1;else{UI.kSort.c=c;UI.kSort.d=c==='n'?1:-1;}renderKs();}
 
 
+/* ---------- BATTER WALKS TAB ---------- */
+function renderBatterBB(){
+  const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.expectedBB!=null);
+  if(!data.length){setMain(`${backBar('🚶 Walks (BB)','bb')}<div class="empty">No batter matchups loaded</div>`);return;}
+  
+  const sortKey={sc:'bbScore',n:'batterName',xbb:'expectedBB'}[UI.bbSort.c]||'bbScore';
+  data.sort((a,b)=>{
+    if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.bbSort.d;
+    const av=a[sortKey]??-Infinity,bv=b[sortKey]??-Infinity;
+    return (bv-av)*UI.bbSort.d;
+  });
+  
+  const lk=data.filter(m=>m.bbScore>=72).length;
+  const ht=data.filter(m=>m.bbScore>=62&&m.bbScore<72).length;
+  const ln=data.filter(m=>m.bbScore>=52&&m.bbScore<62).length;
+  
+  const rows=data.map(m=>{
+    const r=getRat(m.bbScore);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
+    return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','bb')">
+      <td>${sbar(m.bbScore)}</td>
+      <td>${bdg(r)}</td>
+      <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
+      <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
+      <td style="color:var(--mt2)">${m.team.abbr||m.team.name}</td>
+      <td style="color:var(--mt2)">${m.order}</td>
+      <td class="l" style="color:var(--mt2)">${m.pitcherName}</td>
+      <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
+    </tr>`;
+  }).join('');
+  
+  setMain(`
+    ${backBar('🚶 Walks (BB)','bb')}
+    <div class="cb">
+      <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter name…" oninput="filtTbl(this.value,'bbTb')"></div>
+    </div>
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
+      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
+      <div class="pill ln"><span class="pn">${ln}</span>⚡ Lean</div>
+      <div class="pill"><span class="pn">${data.length}</span>Batters</div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th onclick="sortBB('sc')">BB Score${UI.bbSort.c==='sc'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
+        <th>Rating</th>
+        <th onclick="sortBB('xbb')">xBB${UI.bbSort.c==='xbb'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
+        <th class="l" onclick="sortBB('n')">Batter</th>
+        <th>Team</th>
+        <th>#</th>
+        <th class="l">Pitcher</th>
+        <th>Hand</th>
+      </tr></thead>
+      <tbody id="bbTb">${rows}</tbody>
+    </table></div>
+  `);
+}
+function sortBB(c){if(UI.bbSort.c===c)UI.bbSort.d*=-1;else{UI.bbSort.c=c;UI.bbSort.d=c==='n'?1:-1;}renderBatterBB();}
+
+
+/* ---------- PITCHER WALKS TAB ---------- */
+function renderPitcherBB(){
+  const data=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.expectedBB!=null);
+  if(!data.length){setMain(`${backBar('🚶 Walks Allowed (BB)','pbb')}<div class="empty">No pitcher matchups loaded</div>`);return;}
+  
+  const sortKey={sc:'bbGrade',n:'pitcherName',xbb:'expectedBB'}[UI.pbbSort.c]||'bbGrade';
+  data.sort((a,b)=>{
+    if(sortKey==='pitcherName')return a.pitcherName.localeCompare(b.pitcherName)*UI.pbbSort.d;
+    const av=a[sortKey]??-Infinity,bv=b[sortKey]??-Infinity;
+    return (bv-av)*UI.pbbSort.d;
+  });
+  
+  const lk=data.filter(m=>m.bbGrade>=72).length;
+  const ht=data.filter(m=>m.bbGrade>=62&&m.bbGrade<72).length;
+  
+  const rows=data.map(m=>{
+    const r=getRat(m.bbGrade);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
+    return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
+      <td>${sbar(m.bbGrade)}</td>
+      <td>${bdg(r)}</td>
+      <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
+      <td class="l"><strong>${m.pitcherName}</strong></td>
+      <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
+      <td class="l" style="color:var(--mt2)">vs ${m.opp.abbr||m.opp.name}</td>
+      <td style="color:var(--mt2)">${pct(m.bbRate,1)}</td>
+    </tr>`;
+  }).join('');
+  
+  setMain(`
+    ${backBar('🚶 Walks Allowed (BB)','pbb')}
+    <div class="cb">
+      <div class="sw"><span class="si">🔍</span><input type="text" placeholder="Filter pitcher…" oninput="filtTbl(this.value,'pbbTb')"></div>
+    </div>
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">xBB = projected walks allowed · Higher score = more walks predicted (good for OVER bettors)</div>
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
+      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
+      <div class="pill"><span class="pn">${data.length}</span>Pitchers</div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th onclick="sortPBB('sc')">BB Grade${UI.pbbSort.c==='sc'?' '+(UI.pbbSort.d>0?'↑':'↓'):''}</th>
+        <th>Rating</th>
+        <th onclick="sortPBB('xbb')">xBB${UI.pbbSort.c==='xbb'?' '+(UI.pbbSort.d>0?'↑':'↓'):''}</th>
+        <th class="l" onclick="sortPBB('n')">Pitcher</th>
+        <th>Hand</th>
+        <th class="l">Opp</th>
+        <th>BB%</th>
+      </tr></thead>
+      <tbody id="pbbTb">${rows}</tbody>
+    </table></div>
+  `);
+}
+function sortPBB(c){if(UI.pbbSort.c===c)UI.pbbSort.d*=-1;else{UI.pbbSort.c=c;UI.pbbSort.d=c==='n'?1:-1;}renderPitcherBB();}
+
+
 /* ---------- TOTALS TAB ---------- */
 function renderTotals(){
   const data=[...STATE.totals].filter(t=>t.total!=null);
@@ -2631,7 +2863,8 @@ async function loadResults(date){
               hr:nn(bat.homeRuns),
               tb:nn(bat.totalBases),
               pa:nn(bat.plateAppearances),
-              k:nn(bat.strikeOuts)
+              k:nn(bat.strikeOuts),
+              bb:nn(bat.baseOnBalls)
             };
           }
           if(pit.inningsPitched!=null&&nn(pit.inningsPitched)>0){
@@ -2659,6 +2892,7 @@ async function loadResults(date){
         actualHits:r?.h??null,
         actualHR:r?.hr??null,
         actualTB:r?.tb??null,
+        actualBB:r?.bb??null,
         gotHit:r?(r.h>0?true:(r.ab>0||r.pa>0?false:null)):null
       };
     });
@@ -2669,7 +2903,8 @@ async function loadResults(date){
         played:!!r,
         actualKs:r?.k??null,
         actualIP:r?.ip??null,
-        actualBF:r?.bf??null
+        actualBF:r?.bf??null,
+        actualBB:r?.bb??null
       };
     });
     RESULTS.totals=(pred.totals||[]).map(t=>{
@@ -2723,7 +2958,7 @@ async function fetchHistoryForDate(date){
           const bat=p.stats?.batting||{};
           const pit=p.stats?.pitching||{};
           if(bat.atBats!=null||bat.plateAppearances!=null){
-            dayData.batters[pid]={ab:nn(bat.atBats),h:nn(bat.hits),hr:nn(bat.homeRuns),tb:nn(bat.totalBases),pa:nn(bat.plateAppearances),k:nn(bat.strikeOuts)};
+            dayData.batters[pid]={ab:nn(bat.atBats),h:nn(bat.hits),hr:nn(bat.homeRuns),tb:nn(bat.totalBases),pa:nn(bat.plateAppearances),k:nn(bat.strikeOuts),bb:nn(bat.baseOnBalls)};
           }
           if(pit.inningsPitched!=null&&nn(pit.inningsPitched)>0){
             dayData.pitchers[pid]={ip:nn(pit.inningsPitched),k:nn(pit.strikeOuts),bb:nn(pit.baseOnBalls),h:nn(pit.hits),er:nn(pit.earnedRuns),bf:nn(pit.battersFaced)};
@@ -2802,6 +3037,26 @@ function historicalLockStats(prop){
         if(!r)return;
         const predWhole=roundConservative(p.xK);
         const got=r.k>=predWhole;
+        n++;if(got)hits++;outcomes.push(got);
+      });
+    }else if(prop==='bb'){
+      // Batter walks: lock = bbScore >= 72; ✓ if actual BB >= rounded predicted
+      const lockSet=(pred.batters||[]).filter(b=>b.bbScore>=72&&b.expectedBB!=null);
+      lockSet.forEach(b=>{
+        const r=hist.batters[b.id];
+        if(!r||(r.ab===0&&r.pa===0))return;
+        const predWhole=roundConservative(b.expectedBB);
+        const got=(r.bb||0)>=predWhole;
+        n++;if(got)hits++;outcomes.push(got);
+      });
+    }else if(prop==='pbb'){
+      // Pitcher walks allowed: lock = bbGrade >= 72; ✓ if actual BB allowed >= rounded predicted
+      const lockSet=(pred.pitchers||[]).filter(p=>p.bbGrade>=72&&p.expectedBB!=null);
+      lockSet.forEach(p=>{
+        const r=hist.pitchers[p.id];
+        if(!r)return;
+        const predWhole=roundConservative(p.expectedBB);
+        const got=(r.bb||0)>=predWhole;
         n++;if(got)hits++;outcomes.push(got);
       });
     }else if(prop==='tot'){
@@ -2893,10 +3148,24 @@ function fcLockStats(prop){
     });
     return {n,hits,rate:n?Math.round(hits/n*100):null,total:RESULTS.batters.length,lockAt};
   }
+  if(prop==='bb'){
+    // Batter walks: lock if bbScore >= 72; ✓ if actual BB >= rounded predicted
+    const played=RESULTS.batters.filter(b=>b.played&&b.bbScore!=null&&b.expectedBB!=null);
+    const lockSet=played.filter(b=>b.bbScore>=72);
+    const hits=lockSet.filter(b=>(b.actualBB||0)>=roundConservative(b.expectedBB)).length;
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.batters.length,lockAt:72};
+  }
   if(prop==='k'){
     const played=RESULTS.pitchers.filter(p=>p.played);
     const lockSet=played.filter(p=>{const r=getRat(p.grade);return r.c==='lock';});
     const hits=lockSet.filter(p=>p.actualKs>=roundConservative(p.xK)).length;
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:72};
+  }
+  if(prop==='pbb'){
+    // Pitcher walks: lock if bbGrade >= 72; ✓ if actual BB allowed >= rounded predicted
+    const played=RESULTS.pitchers.filter(p=>p.played&&p.bbGrade!=null&&p.expectedBB!=null);
+    const lockSet=played.filter(p=>p.bbGrade>=72);
+    const hits=lockSet.filter(p=>(p.actualBB||0)>=roundConservative(p.expectedBB)).length;
     return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:72};
   }
   if(prop==='tot'){
@@ -3006,7 +3275,9 @@ function renderResults(){
       hits:fcLockStats('hits'),
       tb:fcLockStats('tb'),
       hr:fcLockStats('hr'),
+      bb:fcLockStats('bb'),
       k:fcLockStats('k'),
+      pbb:fcLockStats('pbb'),
       tot:fcLockStats('tot')
     };
     // Compute 14-day historical stats too. Triggers background fetch if not cached.
@@ -3015,7 +3286,9 @@ function renderResults(){
       hits:historicalLockStats('hits'),
       tb:historicalLockStats('tb'),
       hr:historicalLockStats('hr'),
+      bb:historicalLockStats('bb'),
       k:historicalLockStats('k'),
+      pbb:historicalLockStats('pbb'),
       tot:historicalLockStats('tot')
     };
     function statRow(todayStat,histStat){
@@ -3074,10 +3347,20 @@ function renderResults(){
           <div class="fcc-label">Home Runs</div>
           ${statRow(stats.hr,hist.hr)}
         </button>
+        <button class="fcc-card" onclick="RESULTS.prop='bb';renderResults()">
+          <div class="fcc-icon">🚶</div>
+          <div class="fcc-label">Walks (BB)</div>
+          ${statRow(stats.bb,hist.bb)}
+        </button>
         <button class="fcc-card" onclick="RESULTS.prop='k';renderResults()">
           <div class="fcc-icon">⚡</div>
           <div class="fcc-label">Strikeouts</div>
           ${statRow(stats.k,hist.k)}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='pbb';renderResults()">
+          <div class="fcc-icon">🚶</div>
+          <div class="fcc-label">Walks Allowed</div>
+          ${statRow(stats.pbb,hist.pbb)}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='tot';renderResults()">
           <div class="fcc-icon">🎲</div>
@@ -3097,7 +3380,9 @@ function renderResults(){
       {prop:'hits',icon:'🎯',name:'Hits',lockTxt:'Hit Score ≥ 79.5',metric:'Lock hit rate'},
       {prop:'tb',icon:'🏟️',name:'Total Bases',lockTxt:'TB Score ≥ 72',metric:'Lock hit rate'},
       {prop:'hr',icon:'💥',name:'Home Runs',lockTxt:'HR Score ≥ 72',metric:'Lock hit rate'},
+      {prop:'bb',icon:'🚶',name:'Walks (BB)',lockTxt:'BB Score ≥ 72',metric:'Lock hit rate'},
       {prop:'k',icon:'⚡',name:'Strikeouts',lockTxt:'K Grade ≥ 72',metric:'Lock hit rate'},
+      {prop:'pbb',icon:'🚶',name:'Walks Allowed',lockTxt:'BB Grade ≥ 72',metric:'Lock hit rate'},
       {prop:'tot',icon:'🎲',name:'Run Totals',lockTxt:'No grade — all games',metric:'Match rate (±0.4)'}
     ];
     
@@ -3154,15 +3439,17 @@ function renderFactCheckBody(prop){
   if(prop==='hits')return renderFCBatters('hit');
   if(prop==='tb')return renderFCBatters('tb');
   if(prop==='hr')return renderFCBatters('hr');
+  if(prop==='bb')return renderFCBatters('bb');
   if(prop==='k')return renderFCPitchers();
+  if(prop==='pbb')return renderFCPitcherBB();
   if(prop==='tot')return renderFCTotals();
   return '';
 }
 
 function renderFCBatters(type){
-  const scoreKey=type==='hit'?'score':type==='tb'?'tbScore':'hrScore';
+  const scoreKey=type==='hit'?'score':type==='tb'?'tbScore':type==='hr'?'hrScore':'bbScore';
   const lockAt=type==='hit'?79.5:72;
-  const propLabel=type==='hit'?'🎯 Hit Score':type==='tb'?'🏟️ TB Score':'💥 HR Score';
+  const propLabel=type==='hit'?'🎯 Hit Score':type==='tb'?'🏟️ TB Score':type==='hr'?'💥 HR Score':'🚶 BB Score';
   
   const sorted=[...RESULTS.batters]
     .filter(b=>b[scoreKey]!=null)
@@ -3187,6 +3474,14 @@ function renderFCBatters(type){
     if(type==='hr'){
       const hit=b.actualHR>0;
       return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHR||0} HR`,hit};
+    }
+    if(type==='bb'){
+      // Walks: round prediction conservatively, ✓ if actual ≥ predicted
+      if(b.expectedBB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualBB||0} BB · no pred`,hit:null};
+      const predWhole=roundConservative(b.expectedBB);
+      const actual=b.actualBB||0;
+      const hit=actual>=predWhole;
+      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} BB (pred ${predWhole})`,hit};
     }
   }
   
@@ -3216,7 +3511,7 @@ function renderFCBatters(type){
       <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${propLabel.replace(/[^A-Za-z ]/g,'').trim()} ≥ ${lockAt} · n=${lockSet.length}</span></div>
       <div class="pill"><span class="pn">${sorted.length}</span>Predicted</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':'hit a HR'} · ✗ = no · — = didn't play.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':type==='hr'?'hit a HR':'actual BB ≥ rounded predicted (conservative)'} · ✗ = no · — = didn't play.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>${propLabel}</th><th></th><th>Result</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Rating</th>
@@ -3273,6 +3568,58 @@ function renderFCPitchers(){
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>Grade</th><th>Expected Strikeouts</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
+}
+
+function renderFCPitcherBB(){
+  const sorted=[...RESULTS.pitchers].filter(p=>p.bbGrade!=null).sort((a,b)=>b.bbGrade-a.bbGrade);
+  const played=sorted.filter(p=>p.played&&p.expectedBB!=null);
+  const meanError=played.length?(played.reduce((s,p)=>s+Math.abs((p.actualBB||0)-p.expectedBB),0)/played.length).toFixed(2):'—';
+  // Lock-only accuracy: conservative round + actual ≥ predicted
+  const lockSet=played.filter(p=>p.bbGrade>=72);
+  const lockHits=lockSet.filter(p=>(p.actualBB||0)>=roundConservative(p.expectedBB)).length;
+  const lockRate=lockSet.length?(lockHits/lockSet.length*100).toFixed(0)+'%':'—';
+  
+  const rows=sorted.map(p=>{
+    const r=getRat(p.bbGrade);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    let icon='—',col='var(--mt)',txt='No final stats',diffStr='',predWhole=null;
+    if(p.played&&p.expectedBB!=null){
+      predWhole=roundConservative(p.expectedBB);
+      const actual=p.actualBB||0;
+      const diff=actual-p.expectedBB;
+      const ok=actual>=predWhole;
+      icon=ok?'✓':'✗';
+      col=ok?'var(--gn)':'var(--rd)';
+      txt=`${actual} BB · ${p.actualIP||0} IP`;
+      diffStr=(diff>=0?'+':'')+diff.toFixed(1);
+    }
+    return `<tr class="${rc}">
+      <td>${sbar(p.bbGrade)}</td>
+      <td><strong style="color:var(--ac)">${predWhole!=null?predWhole:(p.expectedBB!=null?p.expectedBB:'—')}</strong></td>
+      <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
+      <td style="color:${col};font-size:.62rem">${txt}</td>
+      <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td class="l"><strong>${p.name}</strong></td>
+      <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
+      <td class="l" style="color:var(--mt2)">${p.opp}</td>
+      <td>${bdg(r)}</td>
+    </tr>`;
+  }).join('');
+  
+  return `
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">BB Grade ≥ 72 · n=${lockSet.length}</span></div>
+      <div class="pill ln"><span class="pn">${meanError}</span>Avg BB error</div>
+      <div class="pill"><span class="pn">${sorted.length}</span>Pitchers</div>
+    </div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted BB grade. Predicted rounded conservatively (only rounds up at .7+). ✓ = actual ≥ predicted · ✗ = below. Diff = actual − raw prediction.</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>BB Grade</th><th>Expected Walks</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
