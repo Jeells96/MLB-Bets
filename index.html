@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5.3 · Prop Intelligence</title>
+<title>Diamond IQ v5.5 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -338,7 +338,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5.3 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5.5 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -2245,7 +2245,7 @@ function renderTB(){
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','tb')">
       <td>${sbar(m.tbScore)}</td>
       <td>${bdg(r)}</td>
-      <td><strong style="color:var(--ac)">${m.expectedTB!=null?m.expectedTB.toFixed(2):'—'}</strong></td>
+      <td><strong style="color:var(--ac)">${m.expectedTB!=null?Math.round(m.expectedTB):'—'}</strong></td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
       <td style="color:var(--mt2)">${m.order||''}</td>
@@ -2350,7 +2350,7 @@ function renderKs(){
         <th class="l" onclick="sortK('n')">Pitcher</th>
         <th>Hand</th>
         <th class="l">Opp</th>
-        <th onclick="sortK('eK')">xK</th>
+        <th onclick="sortK('eK')">Expected Strikeouts</th>
         <th>Range</th>
         <th>xIP</th>
         <th>K%</th><th>K/9</th><th>ERA</th><th>WHIP</th><th>Opp K%</th>
@@ -2622,13 +2622,26 @@ async function loadResults(date){
 function renderResults(){
   const candidateDate=RESULTS.date||defaultResultsDate();
   const savedDates=Object.keys(PRED.byDate).sort().reverse();
+  const minD=savedDates.length?savedDates[savedDates.length-1]:'';
+  const maxD=savedDates.length?savedDates[0]:'';
+  
+  // Build a date input that only accepts saved dates. Validates on change.
+  function dateInput(currentVal,onChangeJS){
+    return `<input type="date" value="${currentVal}" min="${minD}" max="${maxD}" onchange="
+      var saved=Object.keys(PRED.byDate);
+      if(!saved.includes(this.value)){
+        alert('No saved predictions for '+this.value+'. Pick a date you previously loaded on Home.');
+        this.value='${currentVal}';
+        return;
+      }
+      ${onChangeJS}
+    ">`;
+  }
   
   if(RESULTS.loading){
     setMain(`
       <div class="cb">
-        <select class="ms" id="resDateSel" onchange="loadResults(this.value)">
-          ${savedDates.map(d=>`<option value="${d}" ${d===candidateDate?'selected':''}>${d}</option>`).join('')}
-        </select>
+        ${dateInput(candidateDate,'loadResults(this.value)')}
         <span style="font-size:.62rem;color:var(--mt2)">${savedDates.length} day(s) saved</span>
       </div>
       <div class="empty"><b>Loading…</b><div class="spin"></div> Fetching final box scores from MLB API</div>
@@ -2649,10 +2662,8 @@ function renderResults(){
     }
     setMain(`
       <div class="cb">
-        <select class="ms" id="resDateSel">
-          ${savedDates.map(d=>`<option value="${d}" ${d===candidateDate?'selected':''}>${d}</option>`).join('')}
-        </select>
-        <button class="btn bp" onclick="loadResults(document.getElementById('resDateSel').value)">▶ Load Results</button>
+        ${dateInput(candidateDate,'RESULTS.date=this.value;renderResults()')}
+        <button class="btn bp" onclick="loadResults(RESULTS.date||'${candidateDate}')">▶ Load Results</button>
       </div>
       <div class="info" style="font-size:.6rem;margin-bottom:10px">Pick a date you previously ran predictions for, then tap Load. Only games that have ended (Final) get checked.</div>
       <div class="empty">
@@ -2666,9 +2677,7 @@ function renderResults(){
   if(RESULTS.error){
     setMain(`
       <div class="cb">
-        <select class="ms" onchange="loadResults(this.value)">
-          ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
-        </select>
+        ${dateInput(RESULTS.date,'loadResults(this.value)')}
         <button class="btn bg" onclick="RESULTS.loaded=false;renderResults()">↺ Reset</button>
       </div>
       <div class="empty"><b>Error</b>${RESULTS.error}</div>
@@ -2690,7 +2699,7 @@ function renderResults(){
   
   // Format the date prominently
   const dateObj=new Date(RESULTS.date+'T12:00:00');
-  const dateStr=dateObj.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'}).toUpperCase();
+  const dateStr=dateObj.toLocaleDateString([],{month:'short',day:'numeric'}).toUpperCase();
   
   // Persistent banner — makes it impossible to confuse this with live betting page
   const bannerHTML=`
@@ -2709,9 +2718,7 @@ function renderResults(){
   // Header strip (date selector + reload)
   const headerHTML=`
     <div class="cb">
-      <select class="ms" onchange="RESULTS.loaded=false;loadResults(this.value)">
-        ${savedDates.map(d=>`<option value="${d}" ${d===RESULTS.date?'selected':''}>${d}</option>`).join('')}
-      </select>
+      ${dateInput(RESULTS.date,'RESULTS.loaded=false;loadResults(this.value)')}
       <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻ Reload</button>
     </div>
     <div class="fc-pills">${pillsHTML}</div>
@@ -2750,11 +2757,12 @@ function renderFCBatters(type){
       return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHits}-for-${b.actualAB}`,hit};
     }
     if(type==='tb'){
-      // Strict point-projection: ≤0.4 off = correct, ≥0.5 = wrong
+      // Round prediction to nearest whole number, ✓ only if actual exactly matches
       if(b.expectedTB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualTB||0} TB · no pred`,hit:null};
-      const diff=Math.abs((b.actualTB||0)-b.expectedTB);
-      const hit=diff<=0.4;
-      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualTB||0} TB (pred ${b.expectedTB.toFixed(2)})`,hit};
+      const predWhole=Math.round(b.expectedTB);
+      const actual=b.actualTB||0;
+      const hit=actual===predWhole;
+      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} TB (pred ${predWhole})`,hit};
     }
     if(type==='hr'){
       const hit=b.actualHR>0;
@@ -2795,7 +2803,7 @@ function renderFCBatters(type){
       ${strongRate?`<div class="pill ht"><span class="pn">${strongRate}</span>🔥 Strong (${strongSet.length})</div>`:''}
       <div class="pill"><span class="pn">${sorted.length}</span>Predicted</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'≥2 total bases':'hit a HR'} · ✗ = no · — = didn't play.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB matches predicted (rounded to whole)':'hit a HR'} · ✗ = no · — = didn't play.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>${propLabel}</th><th></th><th>Result</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Rating</th>
@@ -2827,13 +2835,13 @@ function renderFCPitchers(){
     }
     return `<tr class="${rc}">
       <td>${sbar(p.grade)}</td>
+      <td><strong style="color:var(--ac)">${p.xK}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
       <td class="l"><strong>${p.name}</strong></td>
       <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
-      <td><strong style="color:var(--ac)">${p.xK}</strong></td>
       <td>${bdg(r)}</td>
     </tr>`;
   }).join('');
@@ -2847,7 +2855,7 @@ function renderFCPitchers(){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. ✓ = actual Ks within 0.4 of predicted · ✗ = off by 0.5 or more. Diff = actual − predicted.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Grade</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th>Rating</th>
+        <th>Grade</th><th>Expected Strikeouts</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -2892,7 +2900,7 @@ function renderFCTotals(){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. ✓ = within 0.4 runs of predicted · ✗ = off by 0.5+. Diff = actual − predicted.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>xR</th><th></th><th>Actual</th><th>Diff</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th>
+        <th>Expected Runs</th><th></th><th>Actual</th><th>Diff</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
