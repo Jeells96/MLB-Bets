@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5.6 · Prop Intelligence</title>
+<title>Diamond IQ v5.7 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -180,6 +180,42 @@ tbody td.l{text-align:left}
 .hc-prop-arr{color:var(–mt);font-size:.9rem}
 .hc-prop:hover .hc-prop-arr{color:var(–ac)}
 
+/* ============ FACT CHECK CHOOSER + OVERVIEW ============ */
+.fcc-section-h{font-family:‘Barlow Condensed’,sans-serif;font-size:.66rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(–mt);text-align:center;margin:14px 0 10px}
+.fcc-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fcc-card{background:var(–s1)!important;border:1px solid var(–bdr2);border-radius:14px;padding:18px 12px 14px;cursor:pointer;text-align:center;transition:all .2s;-webkit-appearance:none;appearance:none;color:var(–tx);font-family:inherit;display:flex;flex-direction:column;align-items:center;gap:6px}
+.fcc-card:hover{border-color:var(–gd);transform:translateY(-1px);box-shadow:0 4px 14px rgba(255,178,0,.08)}
+.fcc-card:active{transform:translateY(0)}
+.fcc-icon{font-size:1.65rem;line-height:1}
+.fcc-label{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;color:var(–tx);line-height:1.2}
+.fcc-stat{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.95rem;letter-spacing:.04em;display:inline-block;padding:2px 10px;border-radius:6px;margin-top:2px}
+.fcc-stat-g{background:rgba(46,213,115,.15);color:var(–gn)}
+.fcc-stat-y{background:rgba(255,178,0,.15);color:var(–gd)}
+.fcc-stat-r{background:rgba(255,99,132,.15);color:var(–rd)}
+.fcc-stat-none{background:rgba(126,143,168,.1);color:var(–mt);font-weight:400;font-size:.65rem}
+.fcc-stat-n{font-size:.55rem;color:var(–mt2);font-weight:400;letter-spacing:.04em}
+
+/* Overview button on chooser screen — full-width, distinct */
+.fcc-overview{background:linear-gradient(90deg,rgba(255,178,0,.1),rgba(255,178,0,.03));border:1px solid var(–gd);border-radius:12px;padding:14px 16px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;transition:all .15s;margin-bottom:6px}
+.fcc-overview:hover{background:linear-gradient(90deg,rgba(255,178,0,.16),rgba(255,178,0,.06));transform:translateY(-1px)}
+.fcc-ov-l{display:flex;align-items:center;gap:12px;flex:1}
+.fcc-ov-icon{font-size:1.5rem;line-height:1}
+.fcc-ov-t{font-family:‘Barlow Condensed’,sans-serif;font-weight:800;font-size:.95rem;letter-spacing:.12em;color:var(–gd);text-transform:uppercase;line-height:1.1}
+.fcc-ov-d{font-size:.6rem;color:var(–mt2);margin-top:2px}
+.fcc-ov-arr{color:var(–gd);font-size:1.2rem;font-weight:700}
+
+/* Overview screen — list of all categories */
+.fc-ov-h{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.85rem;letter-spacing:.13em;color:var(–gd);text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid rgba(255,178,0,.25);margin-bottom:8px}
+.fc-ov-list{display:flex;flex-direction:column;gap:6px}
+.fc-ov-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:rgba(255,178,0,.04);border:1px solid rgba(255,178,0,.2);border-radius:10px;cursor:pointer;transition:all .15s}
+.fc-ov-row:hover{background:rgba(255,178,0,.09);border-color:rgba(255,178,0,.4)}
+.fc-ov-row-l{display:flex;align-items:center;gap:11px;flex:1;min-width:0}
+.fc-ov-row-icon{font-size:1.5rem;line-height:1}
+.fc-ov-row-name{font-family:‘Barlow Condensed’,sans-serif;font-weight:700;font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(–tx)}
+.fc-ov-row-sub{font-size:.55rem;color:var(–mt2);margin-top:2px;letter-spacing:.04em}
+.fc-ov-row-r{text-align:right;flex-shrink:0}
+.fc-ov-row-n{font-size:.55rem;color:var(–mt);margin-top:2px}
+
 /* ============ FACT CHECK PROP PILLS ============ */
 .fc-pills{display:flex;gap:5px;overflow-x:auto;padding:6px 2px 12px;scrollbar-width:none}
 .fc-pills::-webkit-scrollbar{display:none}
@@ -338,7 +374,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5.6 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5.7 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -524,7 +560,7 @@ const RESULTS={
   date:null,
   loaded:false,
   loading:false,
-  prop:'hits',  // active filter: hits | tb | hr | k | tot
+  prop:null,    // null = chooser screen | 'overview' | 'hits' | 'tb' | 'hr' | 'k' | 'tot'
   batters:[],   // [{...prediction, actualHits, actualAB, gotHit, played, actualHR, actualTB}]
   pitchers:[],  // [{...prediction, actualKs, actualIP, gameFinal}]
   totals:[],    // [{...prediction, actualTotal, actualHome, actualAway, gameFinal}]
@@ -2622,6 +2658,42 @@ async function loadResults(date){
   }
 }
 
+// Compute lock-grade hit rate for each prop type (used by Overview + chooser screen)
+function fcLockStats(prop){
+  if(prop==='hits'||prop==='tb'||prop==='hr'){
+    const scoreKey=prop==='hits'?'score':prop==='tb'?'tbScore':'hrScore';
+    const lockAt=prop==='hits'?79.5:72;
+    const played=RESULTS.batters.filter(b=>b.played&&b[scoreKey]!=null);
+    const lockSet=played.filter(b=>b[scoreKey]>=lockAt);
+    let hits=0,n=0;
+    lockSet.forEach(b=>{
+      let h=null;
+      if(prop==='hits'){h=b.actualHits>0;}
+      else if(prop==='tb'){
+        if(b.expectedTB==null)return;
+        h=(b.actualTB||0)>=roundConservative(b.expectedTB);
+      }
+      else if(prop==='hr'){h=b.actualHR>0;}
+      if(h===null)return;
+      n++;if(h)hits++;
+    });
+    return {n,hits,rate:n?Math.round(hits/n*100):null,total:RESULTS.batters.length,lockAt};
+  }
+  if(prop==='k'){
+    const played=RESULTS.pitchers.filter(p=>p.played);
+    const lockSet=played.filter(p=>{const r=getRat(p.grade);return r.c==='lock';});
+    const hits=lockSet.filter(p=>p.actualKs>=roundConservative(p.xK)).length;
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:72};
+  }
+  if(prop==='tot'){
+    // Run totals don't have a lock grade. Use match rate (within 0.4 of rounded predicted).
+    const played=RESULTS.totals.filter(t=>t.played);
+    const matches=played.filter(t=>Math.abs(t.actualTotal-Math.round(t.total))<=0.4).length;
+    return {n:played.length,hits:matches,rate:played.length?Math.round(matches/played.length*100):null,total:RESULTS.totals.length,lockAt:null};
+  }
+  return {n:0,hits:0,rate:null,total:0,lockAt:null};
+}
+
 function renderResults(){
   const candidateDate=RESULTS.date||defaultResultsDate();
   const savedDates=Object.keys(PRED.byDate).sort().reverse();
@@ -2641,8 +2713,28 @@ function renderResults(){
     ">`;
   }
   
+  // Common banner builder
+  function banner(){
+    const d=RESULTS.date||candidateDate;
+    const dateObj=new Date(d+'T12:00:00');
+    const dateStr=dateObj.toLocaleDateString([],{month:'short',day:'numeric'}).toUpperCase();
+    const finalStr=RESULTS.loaded?`${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} games final`:'Pick a date to load';
+    return `<div class="fc-banner">
+      <div class="fc-banner-l">
+        <span class="fc-banner-icon">📊</span>
+        <div>
+          <div class="fc-banner-t">FACT CHECK · PAST RESULTS</div>
+          <div class="fc-banner-d">${dateStr} · ${finalStr}</div>
+        </div>
+      </div>
+      <div class="fc-banner-r">Not<br>Live</div>
+    </div>`;
+  }
+  
+  // ── LOADING STATE ──
   if(RESULTS.loading){
     setMain(`
+      ${banner()}
       <div class="cb">
         ${dateInput(candidateDate,'loadResults(this.value)')}
         <span style="font-size:.62rem;color:var(--mt2)">${savedDates.length} day(s) saved</span>
@@ -2652,9 +2744,24 @@ function renderResults(){
     return;
   }
   
+  // ── ERROR STATE ──
+  if(RESULTS.error){
+    setMain(`
+      ${banner()}
+      <div class="cb">
+        ${dateInput(RESULTS.date,'loadResults(this.value)')}
+        <button class="btn bg" onclick="RESULTS.loaded=false;RESULTS.prop=null;renderResults()">↺ Reset</button>
+      </div>
+      <div class="empty"><b>Error</b>${RESULTS.error}</div>
+    `);
+    return;
+  }
+  
+  // ── NOT YET LOADED — show date picker + load button ──
   if(!RESULTS.loaded){
     if(!savedDates.length){
       setMain(`
+        ${banner()}
         <div class="empty">
           <b>No saved predictions yet</b>
           Predictions are saved each time you tap ▶ Reload on Home.<br>
@@ -2664,6 +2771,7 @@ function renderResults(){
       return;
     }
     setMain(`
+      ${banner()}
       <div class="cb">
         ${dateInput(candidateDate,'RESULTS.date=this.value;renderResults()')}
         <button class="btn bp" onclick="loadResults(RESULTS.date||'${candidateDate}')">▶ Load Results</button>
@@ -2677,60 +2785,131 @@ function renderResults(){
     return;
   }
   
-  if(RESULTS.error){
+  // ── LOADED + NO PROP SELECTED — show chooser screen ──
+  if(RESULTS.prop==null){
+    // Build per-prop stat strings for the chooser cards
+    const stats={
+      hits:fcLockStats('hits'),
+      tb:fcLockStats('tb'),
+      hr:fcLockStats('hr'),
+      k:fcLockStats('k'),
+      tot:fcLockStats('tot')
+    };
+    function statBadge(s){
+      if(s.rate==null)return '<span class="fcc-stat fcc-stat-none">no data</span>';
+      const c=s.rate>=70?'fcc-stat-g':s.rate>=50?'fcc-stat-y':'fcc-stat-r';
+      return `<span class="fcc-stat ${c}">${s.rate}% <span class="fcc-stat-n">(${s.hits}/${s.n})</span></span>`;
+    }
+    
     setMain(`
+      ${banner()}
       <div class="cb">
-        ${dateInput(RESULTS.date,'loadResults(this.value)')}
-        <button class="btn bg" onclick="RESULTS.loaded=false;renderResults()">↺ Reset</button>
+        ${dateInput(RESULTS.date,'RESULTS.loaded=false;RESULTS.prop=null;loadResults(this.value)')}
+        <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻ Reload</button>
       </div>
-      <div class="empty"><b>Error</b>${RESULTS.error}</div>
+      
+      <div class="fcc-overview" onclick="RESULTS.prop='overview';renderResults()">
+        <div class="fcc-ov-l">
+          <div class="fcc-ov-icon">📊</div>
+          <div>
+            <div class="fcc-ov-t">OVERVIEW</div>
+            <div class="fcc-ov-d">All categories at a glance</div>
+          </div>
+        </div>
+        <div class="fcc-ov-arr">→</div>
+      </div>
+      
+      <div class="fcc-section-h">Pick a category to fact-check</div>
+      <div class="fcc-grid">
+        <button class="fcc-card" onclick="RESULTS.prop='hits';renderResults()">
+          <div class="fcc-icon">🎯</div>
+          <div class="fcc-label">Hits</div>
+          ${statBadge(stats.hits)}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='tb';renderResults()">
+          <div class="fcc-icon">🏟️</div>
+          <div class="fcc-label">Total Bases</div>
+          ${statBadge(stats.tb)}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='hr';renderResults()">
+          <div class="fcc-icon">💥</div>
+          <div class="fcc-label">Home Runs</div>
+          ${statBadge(stats.hr)}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='k';renderResults()">
+          <div class="fcc-icon">⚡</div>
+          <div class="fcc-label">Strikeouts</div>
+          ${statBadge(stats.k)}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='tot';renderResults()">
+          <div class="fcc-icon">🎲</div>
+          <div class="fcc-label">Run Totals</div>
+          ${statBadge(stats.tot)}
+        </button>
+      </div>
+      
+      <div class="disc">Card percentages = Lock-grade hit rate (Hits/TB/HR/Ks) or match rate (Run Totals). Tap a card for full breakdown.</div>
     `);
     return;
   }
   
-  // Prop pills
-  const props=[
-    {id:'hits',label:'🎯 Hits',count:RESULTS.batters.length},
-    {id:'tb',label:'🏟️ Total Bases',count:RESULTS.batters.length},
-    {id:'hr',label:'💥 Home Runs',count:RESULTS.batters.length},
-    {id:'k',label:'⚡ Strikeouts',count:RESULTS.pitchers.length},
-    {id:'tot',label:'🎲 Run Totals',count:RESULTS.totals.length}
-  ];
-  const pillsHTML=props.map(p=>`
-    <button class="fc-pill ${RESULTS.prop===p.id?'active':''}" onclick="RESULTS.prop='${p.id}';renderResults()">${p.label}</button>
-  `).join('');
-  
-  // Format the date prominently
-  const dateObj=new Date(RESULTS.date+'T12:00:00');
-  const dateStr=dateObj.toLocaleDateString([],{month:'short',day:'numeric'}).toUpperCase();
-  
-  // Persistent banner — makes it impossible to confuse this with live betting page
-  const bannerHTML=`
-    <div class="fc-banner">
-      <div class="fc-banner-l">
-        <span class="fc-banner-icon">📊</span>
-        <div>
-          <div class="fc-banner-t">FACT CHECK · PAST RESULTS</div>
-          <div class="fc-banner-d">${dateStr} · ${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} games final</div>
+  // ── OVERVIEW SCREEN — all categories side by side ──
+  if(RESULTS.prop==='overview'){
+    const cats=[
+      {prop:'hits',icon:'🎯',name:'Hits',lockTxt:'Hit Score ≥ 79.5',metric:'Lock hit rate'},
+      {prop:'tb',icon:'🏟️',name:'Total Bases',lockTxt:'TB Score ≥ 72',metric:'Lock hit rate'},
+      {prop:'hr',icon:'💥',name:'Home Runs',lockTxt:'HR Score ≥ 72',metric:'Lock hit rate'},
+      {prop:'k',icon:'⚡',name:'Strikeouts',lockTxt:'K Grade ≥ 72',metric:'Lock hit rate'},
+      {prop:'tot',icon:'🎲',name:'Run Totals',lockTxt:'No grade — all games',metric:'Match rate (±0.4)'}
+    ];
+    
+    const rows=cats.map(c=>{
+      const s=fcLockStats(c.prop);
+      const rateStr=s.rate==null?'<span style="color:var(--mt)">no data</span>':`<b style="color:${s.rate>=70?'var(--gn)':s.rate>=50?'var(--gd)':'var(--rd)'};font-size:1.4rem">${s.rate}%</b>`;
+      return `<div class="fc-ov-row" onclick="RESULTS.prop='${c.prop}';renderResults()">
+        <div class="fc-ov-row-l">
+          <span class="fc-ov-row-icon">${c.icon}</span>
+          <div>
+            <div class="fc-ov-row-name">${c.name}</div>
+            <div class="fc-ov-row-sub">${c.metric} · ${c.lockTxt}</div>
+          </div>
         </div>
+        <div class="fc-ov-row-r">
+          ${rateStr}
+          <div class="fc-ov-row-n">${s.rate==null?'—':s.hits+' of '+s.n}</div>
+        </div>
+      </div>`;
+    }).join('');
+    
+    setMain(`
+      ${banner()}
+      <div class="cb">
+        <button class="btn bg" onclick="RESULTS.prop=null;renderResults()">← Back to chooser</button>
       </div>
-      <div class="fc-banner-r">Not<br>Live</div>
-    </div>
-  `;
+      <div class="fc-container">
+        <div class="fc-ov-h">📊 ALL CATEGORIES</div>
+        <div class="fc-ov-list">${rows}</div>
+        <div class="info" style="font-size:.56rem;margin-top:10px">Tap any row to drill into that category's full per-bet breakdown. Percentages reflect only Lock-grade plays for batter/pitcher props (the highest-confidence tier). Run Totals don't use a grading system, so it shows match rate across all games.</div>
+      </div>
+      <div class="disc">📜 Predictions auto-saved on each load · 14 days kept on this device</div>
+    `);
+    return;
+  }
   
-  // Header strip (date selector + reload)
+  // ── INDIVIDUAL PROP SCREEN ──
+  // Header strip with back button + reload
   const headerHTML=`
     <div class="cb">
-      ${dateInput(RESULTS.date,'RESULTS.loaded=false;loadResults(this.value)')}
-      <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻ Reload</button>
+      <button class="btn bg" onclick="RESULTS.prop=null;renderResults()">← Categories</button>
+      ${dateInput(RESULTS.date,'RESULTS.loaded=false;RESULTS.prop=null;loadResults(this.value)')}
+      <button class="btn bg" onclick="RESULTS.loaded=false;loadResults(RESULTS.date)">↻</button>
     </div>
-    <div class="fc-pills">${pillsHTML}</div>
   `;
   
   // Body changes per prop
   const body=renderFactCheckBody(RESULTS.prop);
   
-  setMain(bannerHTML+headerHTML+`<div class="fc-container">${body}</div>`+`<div class="disc">📜 Predictions auto-saved on each load · 14 days kept on this device</div>`);
+  setMain(banner()+headerHTML+`<div class="fc-container">${body}</div>`+`<div class="disc">📜 Predictions auto-saved on each load · 14 days kept on this device</div>`);
 }
 
 function renderFactCheckBody(prop){
@@ -2796,7 +2975,7 @@ function renderFCBatters(type){
   
   return `
     <div class="sum">
-      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate (${lockSet.length})</div>
+      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${propLabel.replace(/[^A-Za-z ]/g,'').trim()} ≥ ${lockAt} · n=${lockSet.length}</span></div>
       <div class="pill"><span class="pn">${sorted.length}</span>Predicted</div>
     </div>
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':'hit a HR'} · ✗ = no · — = didn't play.</div>
@@ -2848,7 +3027,7 @@ function renderFCPitchers(){
   
   return `
     <div class="sum">
-      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate (${lockSet.length})</div>
+      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">K Grade ≥ 72 · n=${lockSet.length}</span></div>
       <div class="pill ln"><span class="pn">${meanError}</span>Avg K error</div>
       <div class="pill"><span class="pn">${sorted.length}</span>Pitchers</div>
     </div>
@@ -2894,7 +3073,7 @@ function renderFCTotals(){
   
   return `
     <div class="sum">
-      <div class="pill"><span class="pn">${correctRate}</span>Match rate</div>
+      <div class="pill"><span class="pn">${correctRate}</span>Match rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">Within 0.4 of rounded predicted</span></div>
       <div class="pill ln"><span class="pn">${meanError}</span>Avg run error</div>
       <div class="pill"><span class="pn">${sorted.length}</span>Games</div>
     </div>
