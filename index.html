@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5.2 · Prop Intelligence</title>
+<title>Diamond IQ v5.3 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -338,7 +338,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5.2 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5.3 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -2778,13 +2778,13 @@ function renderFCBatters(type){
     const o=outcome(b);
     return `<tr class="${rc}">
       <td>${sbar(b[scoreKey],lockAt)}</td>
-      <td>${bdg(r)}</td>
+      <td style="color:${o.col};font-weight:700;font-size:1rem">${o.icon}</td>
+      <td style="color:${o.col};font-size:.62rem">${o.txt}</td>
       <td class="l"><strong>${b.name}</strong></td>
       <td style="color:var(--mt2)">${b.team}</td>
       <td style="color:var(--mt2)">${b.order||''}</td>
       <td class="l" style="max-width:90px;overflow:hidden;text-overflow:ellipsis;color:var(--mt2)">${b.pitcherName||''}</td>
-      <td style="color:${o.col};font-weight:700;font-size:1rem">${o.icon}</td>
-      <td style="color:${o.col};font-size:.62rem">${o.txt}</td>
+      <td>${bdg(r)}</td>
     </tr>`;
   }).join('');
   
@@ -2798,7 +2798,7 @@ function renderFCBatters(type){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'≥2 total bases':'hit a HR'} · ✗ = no · — = didn't play.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>${propLabel}</th><th>Rating</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th></th><th>Result</th>
+        <th>${propLabel}</th><th></th><th>Result</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Rating</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -2827,14 +2827,14 @@ function renderFCPitchers(){
     }
     return `<tr class="${rc}">
       <td>${sbar(p.grade)}</td>
-      <td>${bdg(r)}</td>
+      <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
+      <td style="color:${col};font-size:.62rem">${txt}</td>
+      <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
       <td class="l"><strong>${p.name}</strong></td>
       <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
       <td><strong style="color:var(--ac)">${p.xK}</strong></td>
-      <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
-      <td style="color:${col};font-size:.62rem">${txt}</td>
-      <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td>${bdg(r)}</td>
     </tr>`;
   }).join('');
   
@@ -2847,7 +2847,7 @@ function renderFCPitchers(){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. ✓ = actual Ks within 0.4 of predicted · ✗ = off by 0.5 or more. Diff = actual − predicted.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Grade</th><th>Rating</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th></th><th>Actual</th><th>Diff</th>
+        <th>Grade</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>xK</th><th>Rating</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -2874,12 +2874,12 @@ function renderFCTotals(){
     }
     return `<tr>
       <td><strong style="color:var(--gd);font-size:1.1rem">${t.total}</strong></td>
-      <td class="l"><strong>${t.away} @ ${t.home}</strong></td>
-      <td class="l" style="color:var(--mt2);font-size:.6rem">${t.venue?.replace(/(Stadium|Park|Field)/i,'').trim()||''}</td>
-      <td style="color:var(--mt2);font-size:.62rem">${t.awayRuns}-${t.homeRuns}</td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td class="l"><strong>${t.away} @ ${t.home}</strong></td>
+      <td class="l" style="color:var(--mt2);font-size:.6rem">${t.venue?.replace(/(Stadium|Park|Field)/i,'').trim()||''}</td>
+      <td style="color:var(--mt2);font-size:.62rem">${t.awayRuns}-${t.homeRuns}</td>
     </tr>`;
   }).join('');
   
@@ -2892,7 +2892,7 @@ function renderFCTotals(){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. ✓ = within 0.4 runs of predicted · ✗ = off by 0.5+. Diff = actual − predicted.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>xR</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th><th></th><th>Actual</th><th>Diff</th>
+        <th>xR</th><th></th><th>Actual</th><th>Diff</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
