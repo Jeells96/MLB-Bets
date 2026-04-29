@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.1 · Prop Intelligence</title>
+<title>Diamond IQ v6.2 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -195,6 +195,12 @@ tbody td.l{text-align:left}
 .hc-prop:hover .hc-prop-arr{color:var(–ac)}
 
 /* ============ HISTORICAL ACCURACY BADGE (in betting tabs) ============ */
+.hist-day-row{transition:background .12s}
+.hist-day-row:hover{background:rgba(0,212,255,.06)}
+.hist-day-row:active{background:rgba(0,212,255,.12)}
+
+/* Drill-in banner that shows when viewing a past day’s results inside a prop tab */
+.fc-drill-banner{display:flex;align-items:center;justify-content:space-between;gap:10px;background:linear-gradient(90deg,rgba(255,178,0,.1),rgba(255,178,0,.025));border:1px solid rgba(255,178,0,.4);border-left:3px solid var(–gd);border-radius:8px;padding:10px 13px;margin:0 0 10px}
 .hist-badge{display:inline-flex;align-items:center;gap:6px;background:var(–s2);border:1px solid var(–bdr);border-radius:6px;padding:5px 10px;font-family:‘DM Mono’,monospace;font-size:.6rem;color:var(–tx2);cursor:pointer;transition:all .12s;-webkit-appearance:none;appearance:none;line-height:1.3}
 .hist-badge:hover{border-color:var(–ac)}
 .hist-badge-l{color:var(–mt2);letter-spacing:.04em;text-transform:uppercase;font-size:.55rem}
@@ -400,7 +406,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.1 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.2 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -608,7 +614,8 @@ const HISTORY={
   fetched:{},     // dates we've already fetched (avoid refetching mid-session)
   byDate:{},      // {date: {batters:{}, pitchers:{}, games:{}}}
   loading:false,
-  expanded:{}     // {prop: bool} — track which prop's history badge is expanded
+  expanded:{},    // {prop: bool} — track which prop's history badge is expanded
+  drillDate:{}    // {prop: 'YYYY-MM-DD'} — when set, renders that day's results inside the prop tab
 };
 
 /* ============ HELPERS ============ */
@@ -2304,6 +2311,73 @@ function backBar(label,prop){
   return `<div class="back-bar"><button class="back-btn" onclick="sw('dash')">← Home</button><span class="back-sep">·</span><span class="back-cur">${label}</span></div>${histPart}`;
 }
 
+// Maps prop tab key to the FC renderer for that prop
+function fcRendererFor(prop){
+  if(prop==='hits')return ()=>renderFCBatters('hit');
+  if(prop==='tb')return ()=>renderFCBatters('tb');
+  if(prop==='hr')return ()=>renderFCBatters('hr');
+  if(prop==='bb')return ()=>renderFCBatters('bb');
+  if(prop==='k')return renderFCPitchers;
+  if(prop==='pbb')return renderFCPitcherBB;
+  if(prop==='tot')return renderFCTotals;
+  return null;
+}
+
+// If the user has drilled into a past day from the history badge, render that day's
+// FC body instead of today's predictions. Returns null if not drilled in.
+function maybeRenderDrillView(label,prop){
+  const drillDate=HISTORY.drillDate[prop];
+  if(!drillDate)return null;
+  
+  // Loading state — RESULTS hasn't finished loading the past date yet
+  if(RESULTS.loading||!RESULTS.loaded||RESULTS.date!==drillDate){
+    setMain(`
+      ${backBar(label,prop)}
+      <div class="fc-drill-banner">
+        <span style="color:var(--gd);font-weight:700">📊 ${new Date(drillDate+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})} · Past Results</span>
+        <button class="btn bg" onclick="exitDrill('${prop}')" style="margin-left:auto">← Today</button>
+      </div>
+      <div class="empty"><b>Loading…</b><div class="spin"></div> Fetching final box scores from MLB API</div>
+    `);
+    return true;
+  }
+  
+  if(RESULTS.error){
+    setMain(`
+      ${backBar(label,prop)}
+      <div class="fc-drill-banner">
+        <span style="color:var(--gd);font-weight:700">📊 ${new Date(drillDate+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})} · Past Results</span>
+        <button class="btn bg" onclick="exitDrill('${prop}')" style="margin-left:auto">← Today</button>
+      </div>
+      <div class="empty"><b>Error</b>${RESULTS.error}</div>
+    `);
+    return true;
+  }
+  
+  const renderer=fcRendererFor(prop);
+  if(!renderer){
+    setMain(`${backBar(label,prop)}<div class="empty">Drill view not available for this prop</div>`);
+    return true;
+  }
+  
+  const body=renderer();
+  const dateStr=new Date(drillDate+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'}).toUpperCase();
+  const finalStr=`${RESULTS.gameStatus?.final||0}/${RESULTS.gameStatus?.total||0} games final`;
+  
+  setMain(`
+    ${backBar(label,prop)}
+    <div class="fc-drill-banner">
+      <div>
+        <div style="color:var(--gd);font-weight:700;font-size:.72rem;letter-spacing:.1em">📊 PAST RESULTS · ${dateStr}</div>
+        <div style="color:var(--mt2);font-size:.55rem;margin-top:1px">${finalStr}</div>
+      </div>
+      <button class="btn bg" onclick="exitDrill('${prop}')">← Today</button>
+    </div>
+    <div class="fc-container">${body}</div>
+  `);
+  return true;
+}
+
 function gamesStrip(){
   return `<details><summary>Today's Games (${STATE.games.length})</summary><div class="gg">${STATE.games.map(g=>{
     const venue=g.venue;
@@ -2326,6 +2400,7 @@ function gamesStrip(){
 
 /* ---------- HITS TAB ---------- */
 function renderHits(){
+  if(maybeRenderDrillView('🎯 Hits','hits'))return;
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.hitScore!=null);
   if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
   
@@ -2393,6 +2468,7 @@ function sortHits(c){if(UI.hitsSort.c===c)UI.hitsSort.d*=-1;else{UI.hitsSort.c=c
 
 /* ---------- HR TAB ---------- */
 function renderHRs(){
+  if(maybeRenderDrillView('💥 Home Runs','hr'))return;
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.hrScore!=null);
   if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
   
@@ -2460,6 +2536,7 @@ function sortHR(c){if(UI.hrSort.c===c)UI.hrSort.d*=-1;else{UI.hrSort.c=c;UI.hrSo
 
 /* ---------- TOTAL BASES TAB ---------- */
 function renderTB(){
+  if(maybeRenderDrillView('🏟️ Total Bases','tb'))return;
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.tbScore!=null);
   if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
   
@@ -2535,6 +2612,7 @@ function sortTB(c){if(UI.tbSort.c===c)UI.tbSort.d*=-1;else{UI.tbSort.c=c;UI.tbSo
 
 /* ---------- K TAB ---------- */
 function renderKs(){
+  if(maybeRenderDrillView('⚡ Strikeouts','k'))return;
   const data=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null);
   if(!data.length){setMain(`<div class="empty">No pitcher matchups loaded</div>`);return;}
   
@@ -2605,6 +2683,7 @@ function sortK(c){if(UI.kSort.c===c)UI.kSort.d*=-1;else{UI.kSort.c=c;UI.kSort.d=
 
 /* ---------- BATTER WALKS TAB ---------- */
 function renderBatterBB(){
+  if(maybeRenderDrillView('🚶 Walks (BB)','bb'))return;
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.expectedBB!=null);
   if(!data.length){setMain(`${backBar('🚶 Walks (BB)','bb')}<div class="empty">No batter matchups loaded</div>`);return;}
   
@@ -2666,6 +2745,7 @@ function sortBB(c){if(UI.bbSort.c===c)UI.bbSort.d*=-1;else{UI.bbSort.c=c;UI.bbSo
 
 /* ---------- PITCHER WALKS TAB ---------- */
 function renderPitcherBB(){
+  if(maybeRenderDrillView('🚶 Walks Allowed (BB)','pbb'))return;
   const data=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.expectedBB!=null);
   if(!data.length){setMain(`${backBar('🚶 Walks Allowed (BB)','pbb')}<div class="empty">No pitcher matchups loaded</div>`);return;}
   
@@ -2724,6 +2804,7 @@ function sortPBB(c){if(UI.pbbSort.c===c)UI.pbbSort.d*=-1;else{UI.pbbSort.c=c;UI.
 
 /* ---------- TOTALS TAB ---------- */
 function renderTotals(){
+  if(maybeRenderDrillView('🎲 Run Totals','tot'))return;
   const data=[...STATE.totals].filter(t=>t.total!=null);
   if(!data.length){setMain(`<div class="empty">No run total estimates available</div>`);return;}
   
@@ -3146,36 +3227,59 @@ function renderHistoryBadge(prop){
   
   if(!expanded)return collapsed;
   
-  // Expanded view: per-day breakdown
+  // Expanded view: per-day breakdown. Each row tappable to drill into that day's results.
   const rows=stats.days.map(d=>{
     const dateLabel=new Date(d.date+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'});
     if(d.pending){
-      return `<tr><td style="color:var(--mt2)">${dateLabel}</td><td colspan="2" style="color:var(--mt);font-style:italic">loading…</td></tr>`;
+      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="3" style="color:var(--mt);font-style:italic;padding:5px 4px">loading…</td></tr>`;
     }
     if(d.n===0){
-      return `<tr><td style="color:var(--mt2)">${dateLabel}</td><td colspan="2" style="color:var(--mt)">no qualifying plays</td></tr>`;
+      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="3" style="color:var(--mt);padding:5px 4px">no qualifying plays</td></tr>`;
     }
     const c=d.rate>=70?'var(--gn)':d.rate>=50?'var(--gd)':'var(--rd)';
-    const marks=d.outcomes.slice(0,15).map(o=>`<span style="color:${o?'var(--gn)':'var(--rd)'};font-weight:700">${o?'✓':'✗'}</span>`).join('');
-    return `<tr>
-      <td style="color:var(--tx2)">${dateLabel}</td>
-      <td style="font-size:.65rem;letter-spacing:.05em">${marks}${d.outcomes.length>15?` <span style="color:var(--mt)">+${d.outcomes.length-15}</span>`:''}</td>
-      <td style="text-align:right;color:${c};font-weight:700">${d.rate}% <span style="color:var(--mt2);font-weight:400">(${d.hits}/${d.n})</span></td>
+    const marks=d.outcomes.slice(0,12).map(o=>`<span style="color:${o?'var(--gn)':'var(--rd)'};font-weight:700">${o?'✓':'✗'}</span>`).join('');
+    return `<tr class="hist-day-row" onclick="drillIntoDay('${prop}','${d.date}')" style="cursor:pointer">
+      <td style="color:var(--tx2);font-weight:600;padding:6px 4px">${dateLabel}</td>
+      <td style="text-align:right;font-weight:700;padding:6px 4px;color:${c}">${d.rate}%</td>
+      <td style="font-size:.62rem;letter-spacing:.04em;padding:6px 4px;color:var(--mt2)">${d.hits}/${d.n}</td>
+      <td style="font-size:.7rem;letter-spacing:.06em;padding:6px 4px;text-align:right">${marks}${d.outcomes.length>12?` <span style="color:var(--mt);font-size:.55rem">+${d.outcomes.length-12}</span>`:''}</td>
     </tr>`;
   }).join('');
   
   const totalLine=stats.totalN>0?`<tr style="border-top:1px solid var(--bdr2)">
-    <td style="color:var(--tx);font-weight:700;padding-top:6px">14-day total</td>
+    <td style="color:var(--tx);font-weight:700;padding-top:7px">14-day total</td>
+    <td style="text-align:right;padding-top:7px;font-weight:700"><b style="color:${stats.totalRate>=70?'var(--gn)':stats.totalRate>=50?'var(--gd)':'var(--rd)'}">${stats.totalRate}%</b></td>
+    <td style="padding-top:7px;color:var(--mt2);font-size:.62rem">${stats.totalHits}/${stats.totalN}</td>
     <td></td>
-    <td style="text-align:right;padding-top:6px"><b style="color:${stats.totalRate>=70?'var(--gn)':stats.totalRate>=50?'var(--gd)':'var(--rd)'}">${stats.totalRate}%</b> <span style="color:var(--mt2)">(${stats.totalHits}/${stats.totalN})</span></td>
   </tr>`:'';
   
   return `${collapsed}
     <div class="hist-expanded">
-      <table style="width:100%;font-size:.6rem">
-        <tbody>${rows||'<tr><td colspan="3" style="color:var(--mt);text-align:center">No saved predictions yet</td></tr>'}${totalLine}</tbody>
+      <div style="font-size:.5rem;color:var(--mt);padding:0 4px 4px;letter-spacing:.06em;text-transform:uppercase">tap a day to view that day's results</div>
+      <table style="width:100%;font-size:.6rem;border-collapse:collapse">
+        <tbody>${rows||'<tr><td colspan="4" style="color:var(--mt);text-align:center">No saved predictions yet</td></tr>'}${totalLine}</tbody>
       </table>
     </div>`;
+}
+
+// Drill into a specific past date for the current prop. Loads results if needed,
+// then sets a state var that the prop's render function checks to show the FC view inline.
+async function drillIntoDay(prop,date){
+  HISTORY.drillDate[prop]=date;
+  HISTORY.expanded[prop]=false; // collapse the badge so the FC view has room
+  // Set up RESULTS for that date so the FC body renderers work
+  RESULTS.prop=prop;
+  if(RESULTS.date!==date||!RESULTS.loaded){
+    await loadResults(date);
+  }else{
+    renderTab();
+  }
+}
+
+// Exit the drill view — return to live betting predictions for the current prop
+function exitDrill(prop){
+  delete HISTORY.drillDate[prop];
+  renderTab();
 }
 
 function fcLockStats(prop){
