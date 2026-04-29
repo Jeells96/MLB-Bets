@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v5.5 · Prop Intelligence</title>
+<title>Diamond IQ v5.6 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -338,7 +338,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v5.5 · Live API</div>
+      <div class="bsub">Prop Intelligence · v5.6 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -534,6 +534,14 @@ const RESULTS={
 /* ============ HELPERS ============ */
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
 const nn=(v,fb=0)=>sf(v)??fb;
+// Conservative rounding for prop predictions — only rounds UP if frac >= 0.7
+// Used so we err on the safe side when betting OVER (lower predicted = harder line to clear)
+const roundConservative=v=>{
+  if(v==null||isNaN(v))return null;
+  const floor=Math.floor(v);
+  const frac=v-floor;
+  return frac>=0.7?floor+1:floor;
+};
 const clamp=(v,lo,hi)=>Math.min(hi,Math.max(lo,v));
 const norm=s=>s?s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/gi,'').toUpperCase().trim():'';
 const pct=(v,d=1)=>v==null?'—':(v*(v<1&&v>-1?100:1)).toFixed(d)+'%';
@@ -1982,12 +1990,7 @@ function renderDashboard(){
   const games=STATE.games;
   if(!games.length){setMain(`<div class="empty"><b>No games loaded</b>Pick a date and tap ▶ Load</div>`);return;}
   
-  const dateStr=STATE.date?new Date(STATE.date+'T12:00:00').toLocaleDateString([],{month:'short',day:'numeric'}):'';
-  const statusLine=`<div class="home-status">${dateStr.toUpperCase()} · ${games.length} games · ${Object.keys(STATE.players).length} batters · ${Object.keys(STATE.pitchers).length} pitchers · <span style="color:var(--gn)">● live</span></div>`;
-  
   setMain(`
-    ${statusLine}
-    
     <div class="home-section-h">Pick a category</div>
     <div class="home-cards">
       <div class="home-card hc-batter" onclick="document.getElementById('hc-bat-props').classList.toggle('open');document.getElementById('hc-pit-props').classList.remove('open');document.getElementById('hc-game-props').classList.remove('open');">
@@ -2245,7 +2248,7 @@ function renderTB(){
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','tb')">
       <td>${sbar(m.tbScore)}</td>
       <td>${bdg(r)}</td>
-      <td><strong style="color:var(--ac)">${m.expectedTB!=null?Math.round(m.expectedTB):'—'}</strong></td>
+      <td><strong style="color:var(--ac)">${m.expectedTB!=null?roundConservative(m.expectedTB):'—'}</strong></td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
       <td style="color:var(--mt2)">${m.order||''}</td>
@@ -2394,7 +2397,7 @@ function renderTotals(){
           <div class="rtc-pit"><span style="color:${hc(g.aSPHand)}">${g.aSPHand||'?'}HP</span> ${g.aSP?.name||'TBD'}</div>
         </div>
         <div class="rtc-total">
-          <div class="rtc-total-v">${t.total}</div>
+          <div class="rtc-total-v">${Math.round(t.total)}</div>
           <div class="rtc-total-l">Proj Total</div>
         </div>
         <div style="text-align:right">
@@ -2757,11 +2760,11 @@ function renderFCBatters(type){
       return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHits}-for-${b.actualAB}`,hit};
     }
     if(type==='tb'){
-      // Round prediction to nearest whole number, ✓ only if actual exactly matches
+      // Conservative round prediction (only rounds up at .7+), ✓ if actual ≥ predicted
       if(b.expectedTB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualTB||0} TB · no pred`,hit:null};
-      const predWhole=Math.round(b.expectedTB);
+      const predWhole=roundConservative(b.expectedTB);
       const actual=b.actualTB||0;
-      const hit=actual===predWhole;
+      const hit=actual>=predWhole;
       return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} TB (pred ${predWhole})`,hit};
     }
     if(type==='hr'){
@@ -2771,14 +2774,9 @@ function renderFCBatters(type){
   }
   
   const outcomes=played.map(outcome).filter(o=>o.hit!==null);
-  const hitCount=outcomes.filter(o=>o.hit).length;
-  const hitRate=outcomes.length?(hitCount/outcomes.length*100).toFixed(1)+'%':'—';
   const lockSet=played.filter(b=>b[scoreKey]>=lockAt);
   const lockOutcomes=lockSet.map(outcome).filter(o=>o.hit!==null);
-  const lockRate=lockOutcomes.length?(lockOutcomes.filter(o=>o.hit).length/lockOutcomes.length*100).toFixed(0)+'%':null;
-  const strongSet=played.filter(b=>b[scoreKey]>=62&&b[scoreKey]<lockAt);
-  const strongOutcomes=strongSet.map(outcome).filter(o=>o.hit!==null);
-  const strongRate=strongOutcomes.length?(strongOutcomes.filter(o=>o.hit).length/strongOutcomes.length*100).toFixed(0)+'%':null;
+  const lockRate=lockOutcomes.length?(lockOutcomes.filter(o=>o.hit).length/lockOutcomes.length*100).toFixed(0)+'%':'—';
   
   const rows=sorted.map(b=>{
     const r=getRat(b[scoreKey],lockAt);
@@ -2798,12 +2796,10 @@ function renderFCBatters(type){
   
   return `
     <div class="sum">
-      <div class="pill"><span class="pn">${hitRate}</span>Overall hit rate</div>
-      ${lockRate?`<div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock (${lockSet.length})</div>`:''}
-      ${strongRate?`<div class="pill ht"><span class="pn">${strongRate}</span>🔥 Strong (${strongSet.length})</div>`:''}
+      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate (${lockSet.length})</div>
       <div class="pill"><span class="pn">${sorted.length}</span>Predicted</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB matches predicted (rounded to whole)':'hit a HR'} · ✗ = no · — = didn't play.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':'hit a HR'} · ✗ = no · — = didn't play.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>${propLabel}</th><th></th><th>Result</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Rating</th>
@@ -2817,17 +2813,21 @@ function renderFCPitchers(){
   const sorted=[...RESULTS.pitchers].sort((a,b)=>b.xK-a.xK);
   const played=sorted.filter(p=>p.played);
   const meanError=played.length?(played.reduce((s,p)=>s+Math.abs(p.actualKs-p.xK),0)/played.length).toFixed(2):'—';
-  // Strict accuracy: ≤0.4 = correct, ≥0.5 = wrong
-  const correct=played.filter(p=>Math.abs(p.actualKs-p.xK)<=0.4).length;
-  const correctRate=played.length?(correct/played.length*100).toFixed(0)+'%':'—';
+  // Lock-only accuracy (your bar for "this hit"): conservative round + actual ≥ predicted
+  const lockSet=played.filter(p=>{
+    const r=getRat(p.grade);return r.c==='lock';
+  });
+  const lockHits=lockSet.filter(p=>p.actualKs>=roundConservative(p.xK)).length;
+  const lockRate=lockSet.length?(lockHits/lockSet.length*100).toFixed(0)+'%':'—';
   
   const rows=sorted.map(p=>{
     const r=getRat(p.grade);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
-    let icon='—',col='var(--mt)',txt='No final stats',diffStr='';
+    let icon='—',col='var(--mt)',txt='No final stats',diffStr='',predWhole=null;
     if(p.played){
+      predWhole=roundConservative(p.xK);
       const diff=p.actualKs-p.xK;
-      const ok=Math.abs(diff)<=0.4;
+      const ok=p.actualKs>=predWhole;
       icon=ok?'✓':'✗';
       col=ok?'var(--gn)':'var(--rd)';
       txt=`${p.actualKs} K · ${p.actualIP} IP`;
@@ -2835,7 +2835,7 @@ function renderFCPitchers(){
     }
     return `<tr class="${rc}">
       <td>${sbar(p.grade)}</td>
-      <td><strong style="color:var(--ac)">${p.xK}</strong></td>
+      <td><strong style="color:var(--ac)">${predWhole!=null?predWhole:p.xK}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
@@ -2848,11 +2848,11 @@ function renderFCPitchers(){
   
   return `
     <div class="sum">
+      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate (${lockSet.length})</div>
       <div class="pill ln"><span class="pn">${meanError}</span>Avg K error</div>
-      <div class="pill"><span class="pn">${correctRate}</span>Within ±0.4</div>
       <div class="pill"><span class="pn">${sorted.length}</span>Pitchers</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. ✓ = actual Ks within 0.4 of predicted · ✗ = off by 0.5 or more. Diff = actual − predicted.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. Predicted rounded conservatively (only rounds up at .7+). ✓ = actual ≥ predicted · ✗ = below. Diff = actual − raw prediction.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>Grade</th><th>Expected Strikeouts</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
@@ -2866,14 +2866,15 @@ function renderFCTotals(){
   const sorted=[...RESULTS.totals].sort((a,b)=>b.total-a.total);
   const played=sorted.filter(t=>t.played);
   const meanError=played.length?(played.reduce((s,t)=>s+Math.abs(t.actualTotal-t.total),0)/played.length).toFixed(2):'—';
-  // Strict accuracy: ≤0.4 = correct, ≥0.5 = wrong
-  const correct=played.filter(t=>Math.abs(t.actualTotal-t.total)<=0.4).length;
+  // Round prediction to whole, ✓ if actual within 0.4 of rounded prediction (effectively = match)
+  const correct=played.filter(t=>Math.abs(t.actualTotal-Math.round(t.total))<=0.4).length;
   const correctRate=played.length?(correct/played.length*100).toFixed(0)+'%':'—';
   
   const rows=sorted.map(t=>{
     let icon='—',col='var(--mt)',txt='Game not final',diffStr='';
+    const predWhole=Math.round(t.total);
     if(t.played){
-      const diff=t.actualTotal-t.total;
+      const diff=t.actualTotal-predWhole;
       const ok=Math.abs(diff)<=0.4;
       icon=ok?'✓':'✗';
       col=ok?'var(--gn)':'var(--rd)';
@@ -2881,7 +2882,7 @@ function renderFCTotals(){
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
     return `<tr>
-      <td><strong style="color:var(--gd);font-size:1.1rem">${t.total}</strong></td>
+      <td><strong style="color:var(--gd);font-size:1.1rem">${predWhole}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
@@ -2893,11 +2894,11 @@ function renderFCTotals(){
   
   return `
     <div class="sum">
+      <div class="pill"><span class="pn">${correctRate}</span>Match rate</div>
       <div class="pill ln"><span class="pn">${meanError}</span>Avg run error</div>
-      <div class="pill"><span class="pn">${correctRate}</span>Within ±0.4</div>
       <div class="pill"><span class="pn">${sorted.length}</span>Games</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. ✓ = within 0.4 runs of predicted · ✗ = off by 0.5+. Diff = actual − predicted.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. Predicted rounded to nearest whole. ✓ = actual within 0.4 of rounded predicted · ✗ = off. Diff = actual − rounded predicted.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>Expected Runs</th><th></th><th>Actual</th><th>Diff</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th>
@@ -3589,7 +3590,7 @@ function openGameMo(gamePk){
   
   mb.innerHTML=`
     ${t&&t.total?`<div style="text-align:center;margin-bottom:10px">
-      <div style="font-family:'Bebas Neue',sans-serif;font-size:2.5rem;color:var(--gd);line-height:1">${t.total}</div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:2.5rem;color:var(--gd);line-height:1">${Math.round(t.total)}</div>
       <div style="font-size:.56rem;color:var(--mt);letter-spacing:.08em;text-transform:uppercase">Projected Total · ${t.awayRuns} – ${t.homeRuns}</div>
     </div>`:''}
     
