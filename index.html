@@ -715,8 +715,72 @@ async function cleanupOldShared(){
   }catch(e){console.warn('[DIQ] cleanup failed',e.message);}
 }
 
-// Pull on boot (non-blocking)
-setTimeout(pullSharedHistory,500);
+// ─── ROBUST BOOT PULL ───
+// Wait for Firebase to actually be ready (CDN can be slow on mobile).
+// Retry every 250ms up to 8 seconds. Once pulled, force a re-render so any
+// open tab picks up the new data immediately.
+async function bootPullWithRetry(){
+  let waited=0;
+  while(!FB.ready&&waited<8000){
+    await new Promise(r=>setTimeout(r,250));
+    waited+=250;
+  }
+  if(!FB.ready){
+    console.warn('[DIQ] Firebase never became ready after 8s — running offline');
+    return;
+  }
+  await pullSharedHistory();
+  // Force a re-render so the badge picks up the newly pulled data
+  if(typeof renderTab==='function')renderTab();
+}
+bootPullWithRetry();
+
+// ─── AUTO-PUSH ANY PENDING DATES ───
+// Walks through saved predictions + cached results and pushes any past date
+// that hasn't been uploaded yet this session. Runs every 30s while the app is open.
+// This ensures: (a) data eventually reaches Firebase even if individual triggers miss,
+// (b) users who load the app fresh push their cached data automatically.
+async function autoPushPendingDates(){
+  if(!FB.ready)return;
+  const today=todayStr();
+  const candidates=Object.keys(PRED.byDate).filter(d=>{
+    return d<today                          // only past dates
+      &&!FB.uploadedDates[d]                // not already pushed this session
+      &&HISTORY.byDate[d];                  // have results to share
+  }).sort().reverse().slice(0,14);
+  if(!candidates.length)return;
+  for(const date of candidates){
+    try{
+      const pred=PRED.byDate[date];
+      const results=HISTORY.byDate[date];
+      await FB.db.collection('shared_history').doc(date).set({
+        date,predictions:pred,results,updatedAt:Date.now()
+      });
+      FB.uploadedDates[date]=true;
+      console.log('[DIQ] Auto-pushed',date);
+    }catch(e){
+      console.warn('[DIQ] Auto-push failed for',date,e.message);
+      // Don't keep retrying a failing date in tight loop
+      FB.uploadedDates[date]=true;
+    }
+  }
+}
+// Run once 5s after boot (after pull completes), then every 30s
+setTimeout(autoPushPendingDates,5000);
+setInterval(autoPushPendingDates,30000);
+
+// ─── AUTO-PULL ON FACT-CHECK / PROP TAB OPEN ───
+// In addition to the boot pull, refresh from Firebase when the user navigates
+// to a tab that uses history. Cheap (single Firestore query) and ensures other
+// users' recent pushes show up without requiring an app reload.
+let lastAutoPull=0;
+async function maybeAutoPull(){
+  if(!FB.ready)return;
+  // Throttle to once every 60 seconds
+  if(Date.now()-lastAutoPull<60000)return;
+  lastAutoPull=Date.now();
+  await pullSharedHistory();
+}
 
 // ─── DEBUG HELPERS for the Settings panel ───
 function fbLog(msg){
@@ -3322,6 +3386,8 @@ async function fetchHistoryForDate(date){
 // Kick off background fetch of the last 14 days' final boxscores (excluding today).
 // Triggers UI re-render after completion.
 function loadHistoryInBackground(propToRefresh){
+  // Trigger a Firebase pull (throttled to once per minute) so other users' data shows up
+  maybeAutoPull();
   if(HISTORY.loading)return;
   const today=todayStr();
   const savedDates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
