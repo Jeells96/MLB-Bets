@@ -625,7 +625,7 @@ function predSnapshot(){
     noHRScore:t.noHRScore,
     multiHRScore:t.multiHRScore
   }));
-  PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now()};
+  PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now(),schemaV:3};
   predSave();
   
   // Push to Firebase. For past dates: first-write-wins (so original snapshot is preserved).
@@ -697,9 +697,15 @@ async function pullSharedHistory(){
       // For PAST dates: Firebase predictions win (canonical snapshot from when bets were placed).
       // For TODAY: local wins (user wants their fresh predictions).
       if(d.predictions){
+        // Honor schema version — newer local schema wins (so v6.3 fields don't get clobbered by older v6.2 snapshots).
+        const localPred=PRED.byDate[d.date];
+        const localSchemaV=localPred?.schemaV||0;
+        const remoteSchemaV=d.predictions.schemaV||0;
+        const localIsNewer=localPred&&localSchemaV>remoteSchemaV;
+        
         if(d.date<today){
-          // Past date — Firebase is canonical. Overwrite local unless user has explicitly overridden.
-          if(!PRED.overrides||!PRED.overrides[d.date]){
+          // Past date — Firebase is canonical UNLESS local has newer schema or user overrode.
+          if(!localIsNewer&&(!PRED.overrides||!PRED.overrides[d.date])){
             const isNew=!PRED.byDate[d.date];
             PRED.byDate[d.date]=d.predictions;
             if(isNew)pulled++;else overwritten++;
@@ -749,8 +755,12 @@ async function pushSharedHistory(date,opts={}){
     }
     
     const payload={date,updatedAt:Date.now()};
-    // Only set predictions if doc doesn't exist OR override was requested
-    if(!existing||!existing.predictions||forceOverridePred){
+    // Set predictions if: doc doesn't exist, has no predictions, override requested,
+    // OR local schema version is newer than Firebase (auto-upgrade for new bet types).
+    const localSchemaV=pred.schemaV||0;
+    const remoteSchemaV=existing?.predictions?.schemaV||0;
+    const schemaUpgrade=localSchemaV>remoteSchemaV;
+    if(!existing||!existing.predictions||forceOverridePred||schemaUpgrade){
       payload.predictions=pred;
     }
     // Always update results when we have them (results are factual)
@@ -3959,7 +3969,15 @@ function renderHistoryBadge(prop){
   
   let mainTxt;
   if(stats.totalN===0){
-    mainTxt=isLoading?'<span style="color:var(--mt)">calculating…</span>':'<span style="color:var(--mt)">no history</span>';
+    if(isLoading){
+      mainTxt='<span style="color:var(--mt)">calculating…</span>';
+    }else{
+      // For new bet types added in v6.3, explain why there's no history yet
+      const isNewBetType=['gnoHR','gmultiHR','bbat'].includes(prop);
+      mainTxt=isNewBetType
+        ?'<span style="color:var(--mt)">new — accumulates over time</span>'
+        :'<span style="color:var(--mt)">no history</span>';
+    }
   }else{
     const c=stats.totalRate>=70?'var(--gn)':stats.totalRate>=50?'var(--gd)':'var(--rd)';
     mainTxt=`<b style="color:${c}">${stats.totalRate}%</b> <span style="color:var(--mt2)">(${stats.totalHits}/${stats.totalN})</span>`;
