@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.3 · Prop Intelligence</title>
+<title>Diamond IQ v6.4 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.3 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.4 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -534,27 +534,10 @@ const UI={
 // Qualification thresholds
 const Q={bPA:40,bSp:15,pIP:10,pTBF:25};
 
-// Personalized lock thresholds (per-user, stored in localStorage, not Firebase).
-// Each prop type's "lock" cutoff. Adjusting these affects what counts as a lock
-// in both live betting tabs AND historical accuracy stats.
-const LOCKS_DEFAULTS={hits:79.5,tb:72,hr:72,bb:72,k:72,pbb:72,bbat:72,gnoHR:72,gmultiHR:72};
-const LOCKS={...LOCKS_DEFAULTS};
-try{
-  const saved=localStorage.getItem('diq_locks');
-  if(saved){
-    const parsed=JSON.parse(saved);
-    Object.keys(LOCKS_DEFAULTS).forEach(k=>{
-      if(typeof parsed[k]==='number')LOCKS[k]=parsed[k];
-    });
-  }
-}catch(e){}
-function saveLocks(){
-  try{localStorage.setItem('diq_locks',JSON.stringify(LOCKS));}catch(e){}
-}
-function resetLocks(){
-  Object.assign(LOCKS,LOCKS_DEFAULTS);
-  saveLocks();
-}
+// Lock thresholds — fixed defaults for all users so historical stats are comparable
+const LOCKS=Object.freeze({hits:79.5,tb:72,hr:72,bb:72,k:72,pbb:72,bbat:72,gnoHR:72,gmultiHR:72});
+// Clean up any leftover localStorage from the previous personalized version
+try{localStorage.removeItem('diq_locks');}catch(e){}
 
 /* ============ PREDICTIONS PERSISTENCE (Results tab) ============ */
 // Lightweight: save each load's hit + K predictions to localStorage so the Results tab
@@ -726,7 +709,7 @@ async function pullSharedHistory(){
     });
     if(pulled>0||overwritten>0){
       console.log(`[DIQ] Pulled ${pulled} new + ${overwritten} canonical predictions from Firebase`);
-      try{localStorage.setItem('diq_pred',JSON.stringify(PRED));}catch(e){}
+      predSave();
       if(['hits','hr','tb','k','bb','pbb','bbat','gnoHR','gmultiHR','tot','res'].includes(UI.tab))renderTab();
     }
   }catch(e){console.warn('[DIQ] pullSharedHistory failed',e.message);}
@@ -898,7 +881,7 @@ async function fbDebugPull(){
       if(d.results){HISTORY.byDate[d.date]=d.results;HISTORY.fetched[d.date]=true;}
       fbLog(`  ${d.date}: ${d.predictions?'pred✓':'pred✗'} ${d.results?'results✓':'results✗'}`);
     });
-    try{localStorage.setItem('diq_pred',JSON.stringify(PRED));fbLog(`Saved to localStorage`);}catch(e){fbLog(`✗ localStorage failed: ${e.message}`);}
+    predSave();fbLog(`Saved to localStorage`);
     fbLog(`✓ Done. Added ${added}, updated ${updated}.`);
     fbDebugRefreshStatus();
   }catch(e){fbLog(`✗ Pull failed: ${e.message}`);}
@@ -4072,12 +4055,21 @@ function renderHistoryBadge(prop){
     }
   }
   
+  // Count what's actually in the underlying data to show in empty state
+  const today=todayStr();
+  const predCount=Object.keys(PRED.byDate||{}).filter(d=>d<today).length;
+  const histCount=Object.keys(HISTORY.byDate||{}).filter(d=>d<today).length;
+  const emptyMsg=`<tr><td colspan="${prop==='hits'?5:4}" style="color:var(--mt);text-align:center;padding:8px 4px">
+    No saved predictions yet for past dates<br>
+    <span style="font-size:.5rem;color:var(--mt2)">Predictions saved: ${predCount} · Results cached: ${histCount}</span>
+  </td></tr>`;
+  
   return `${collapsed}
     <div class="hist-expanded">
       ${top2Section}
       <div style="font-size:.5rem;color:var(--mt);padding:0 4px 4px;letter-spacing:.06em;text-transform:uppercase">tap a day to view that day's results</div>
       <table style="width:100%;font-size:.6rem;border-collapse:collapse">
-        <tbody>${rows||`<tr><td colspan="${prop==='hits'?5:4}" style="color:var(--mt);text-align:center">No saved predictions yet</td></tr>`}${totalLine}</tbody>
+        <tbody>${rows||emptyMsg}${totalLine}</tbody>
       </table>
     </div>`;
 }
@@ -4786,20 +4778,6 @@ function renderSettings(){
           <button class="btn bg" style="font-size:.65rem" onclick="overrideTodayPredictions()">⚠ Override Today's Predictions</button>
         </div>
         <div id="override-log" style="margin-top:8px;font-size:.55rem;color:var(--mt);font-family:'DM Mono',monospace"></div>
-      </div>
-      <div class="sw-grp">
-        <div class="sw-gt">🔒 Lock Thresholds (personal)</div>
-        <div style="font-size:.58rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Score required to qualify as a Lock for each prop. Affects live tabs and your personal historical accuracy stats. Not shared.</div>
-        <div class="sw-row"><span class="sw-lbl">🎯 Hits</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hits}" oninput="LOCKS.hits=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">🏟️ Total Bases</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.tb}" oninput="LOCKS.tb=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">💥 Home Runs</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hr}" oninput="LOCKS.hr=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">🚶 Walks (batter)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.bb}" oninput="LOCKS.bb=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">⚡ Strikeouts (pitcher)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.k}" oninput="LOCKS.k=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">🚶 Walks Allowed (pitcher)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.pbb}" oninput="LOCKS.pbb=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">⚡ K's (batter)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.bbat}" oninput="LOCKS.bbat=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">🎲 0-1 HRs (game)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.gnoHR}" oninput="LOCKS.gnoHR=+this.value||0;saveLocks();renderTab()"></div>
-        <div class="sw-row"><span class="sw-lbl">🎲 2+ HRs (game)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.gmultiHR}" oninput="LOCKS.gmultiHR=+this.value||0;saveLocks();renderTab()"></div>
-        <div style="margin-top:8px"><button class="btn bg" style="font-size:.7rem" onclick="resetLocks();renderSettings()">↻ Reset to defaults (79.5 / 72)</button></div>
       </div>
       <div class="sw-grp">
         <div class="sw-gt">🔎 Qualification Thresholds</div>
