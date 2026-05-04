@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.2 · Prop Intelligence</title>
+<title>Diamond IQ v6.3 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.2 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.3 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -534,11 +534,33 @@ const UI={
 // Qualification thresholds
 const Q={bPA:40,bSp:15,pIP:10,pTBF:25};
 
+// Personalized lock thresholds (per-user, stored in localStorage, not Firebase).
+// Each prop type's "lock" cutoff. Adjusting these affects what counts as a lock
+// in both live betting tabs AND historical accuracy stats.
+const LOCKS_DEFAULTS={hits:79.5,tb:72,hr:72,bb:72,k:72,pbb:72,bbat:72,gnoHR:72,gmultiHR:72};
+const LOCKS={...LOCKS_DEFAULTS};
+try{
+  const saved=localStorage.getItem('diq_locks');
+  if(saved){
+    const parsed=JSON.parse(saved);
+    Object.keys(LOCKS_DEFAULTS).forEach(k=>{
+      if(typeof parsed[k]==='number')LOCKS[k]=parsed[k];
+    });
+  }
+}catch(e){}
+function saveLocks(){
+  try{localStorage.setItem('diq_locks',JSON.stringify(LOCKS));}catch(e){}
+}
+function resetLocks(){
+  Object.assign(LOCKS,LOCKS_DEFAULTS);
+  saveLocks();
+}
+
 /* ============ PREDICTIONS PERSISTENCE (Results tab) ============ */
 // Lightweight: save each load's hit + K predictions to localStorage so the Results tab
 // can fetch yesterday's box scores and compare. NOT a learning loop — just historical record.
 const PRED_KEY='diq_predictions_v1';
-const PRED={byDate:{}};  // { 'YYYY-MM-DD': { batters:[{id,name,team,score,grade,order}], pitchers:[{id,name,team,opp,xK,grade}] } }
+const PRED={byDate:{},overrides:{}};  // overrides[date]=true means user manually re-rated, ignore Firebase pull for this date
 
 function predLoad(){
   try{
@@ -574,7 +596,9 @@ function predSnapshot(){
     tbScore:m.tbScore,
     expectedTB:m.expectedTB,
     expectedBB:m.expectedBB,
-    bbScore:m.bbScore
+    bbScore:m.bbScore,
+    batterKScore:m.batterKScore,
+    batterExpectedK:m.batterExpectedK
   }));
   const pitchers=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).map(m=>({
     id:String(m.pitcherId),
@@ -596,10 +620,20 @@ function predSnapshot(){
     total:t.total,
     homeRuns:t.homeRuns,
     awayRuns:t.awayRuns,
-    venue:t.game.venue
+    venue:t.game.venue,
+    totalHR:t.totalHR,
+    noHRScore:t.noHRScore,
+    multiHRScore:t.multiHRScore
   }));
   PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now()};
   predSave();
+  
+  // Push to Firebase. For past dates: first-write-wins (so original snapshot is preserved).
+  // For today: also first-write-wins by default — first user to load locks in the predictions.
+  // User can force overwrite via Settings → Override.
+  if(FB.ready){
+    pushSharedHistory(STATE.date,{forceOverridePred:!!PRED.overrides?.[STATE.date]});
+  }
 }
 
 // Results state (separate from STATE so it doesn't bloat main load)
@@ -655,47 +689,78 @@ async function pullSharedHistory(){
   if(!FB.ready)return;
   try{
     const snap=await FB.db.collection('shared_history').orderBy('date','desc').limit(14).get();
-    let pulled=0;
+    let pulled=0,overwritten=0;
+    const today=todayStr();
     snap.forEach(doc=>{
       const d=doc.data();
       if(!d.date)return;
-      // Seed PRED.byDate if local doesn't have it
-      if(!PRED.byDate[d.date]&&d.predictions){
-        PRED.byDate[d.date]=d.predictions;
-        pulled++;
+      // For PAST dates: Firebase predictions win (canonical snapshot from when bets were placed).
+      // For TODAY: local wins (user wants their fresh predictions).
+      if(d.predictions){
+        if(d.date<today){
+          // Past date — Firebase is canonical. Overwrite local unless user has explicitly overridden.
+          if(!PRED.overrides||!PRED.overrides[d.date]){
+            const isNew=!PRED.byDate[d.date];
+            PRED.byDate[d.date]=d.predictions;
+            if(isNew)pulled++;else overwritten++;
+          }
+        }else{
+          // Today/future — only seed if local is empty
+          if(!PRED.byDate[d.date]){
+            PRED.byDate[d.date]=d.predictions;
+            pulled++;
+          }
+        }
       }
-      // Seed HISTORY.byDate if local doesn't have it
-      if(!HISTORY.byDate[d.date]&&d.results){
+      // Seed HISTORY.byDate (results) — Firebase always wins since results are factual
+      if(d.results){
         HISTORY.byDate[d.date]=d.results;
         HISTORY.fetched[d.date]=true;
       }
     });
-    if(pulled>0){
-      console.log(`[DIQ] Pulled ${pulled} shared history days from Firebase`);
+    if(pulled>0||overwritten>0){
+      console.log(`[DIQ] Pulled ${pulled} new + ${overwritten} canonical predictions from Firebase`);
       try{localStorage.setItem('diq_pred',JSON.stringify(PRED));}catch(e){}
-      // Trigger a re-render if the user is on a tab that uses history
-      if(['hits','hr','tb','k','bb','pbb','tot','res'].includes(UI.tab))renderTab();
+      if(['hits','hr','tb','k','bb','pbb','bbat','gnoHR','gmultiHR','tot','res'].includes(UI.tab))renderTab();
     }
   }catch(e){console.warn('[DIQ] pullSharedHistory failed',e.message);}
 }
 
-// Push one day's data to Firestore. Called after a successful loadResults().
-async function pushSharedHistory(date){
+// Push one day's data to Firestore.
+// For predictions: first-write-wins by default (so the original snapshot is preserved).
+// Set forceOverridePred=true to overwrite existing predictions (used by manual override).
+async function pushSharedHistory(date,opts={}){
   if(!FB.ready||!date)return;
-  if(FB.uploadedDates[date])return; // already uploaded this session
+  const {forceOverridePred=false,predictionsOnly=false}=opts;
+  // Skip in-session re-pushes unless forcing
+  if(FB.uploadedDates[date]&&!forceOverridePred)return;
   try{
     const pred=PRED.byDate[date];
     const results=HISTORY.byDate[date];
-    if(!pred||!results)return;
-    await FB.db.collection('shared_history').doc(date).set({
-      date,
-      predictions:pred,
-      results,
-      updatedAt:Date.now()
-    });
+    if(!pred)return;
+    
+    // Check existing doc to honor first-write-wins for predictions
+    let existing=null;
+    if(!forceOverridePred){
+      try{
+        const docSnap=await FB.db.collection('shared_history').doc(date).get();
+        if(docSnap.exists)existing=docSnap.data();
+      }catch(e){}
+    }
+    
+    const payload={date,updatedAt:Date.now()};
+    // Only set predictions if doc doesn't exist OR override was requested
+    if(!existing||!existing.predictions||forceOverridePred){
+      payload.predictions=pred;
+    }
+    // Always update results when we have them (results are factual)
+    if(results&&!predictionsOnly){
+      payload.results=results;
+    }
+    
+    await FB.db.collection('shared_history').doc(date).set(payload,{merge:true});
     FB.uploadedDates[date]=true;
-    console.log('[DIQ] Pushed shared history for',date);
-    // Cleanup: delete docs older than 14 days to keep Firestore lean
+    console.log(`[DIQ] Pushed ${date} ${forceOverridePred?'(OVERRIDE)':''} pred:${!!payload.predictions} results:${!!payload.results}`);
     cleanupOldShared();
   }catch(e){console.warn('[DIQ] pushSharedHistory failed',e.message);}
 }
@@ -864,6 +929,30 @@ async function fbDebugPushAll(){
   fbDebugRefreshStatus();
 }
 
+// Force-recalculate today's predictions and overwrite the saved Firebase snapshot.
+// Use case: lineups confirm later in the day and you want fresh ratings.
+async function overrideTodayPredictions(){
+  const log=document.getElementById('override-log');
+  const wlog=msg=>{if(log)log.innerHTML+=`<div>${msg}</div>`;console.log('[DIQ-OVR]',msg);};
+  if(!STATE.ready||!STATE.date){
+    wlog('✗ No predictions loaded yet — load a slate from Home first');
+    return;
+  }
+  if(!confirm(`Override today's (${STATE.date}) predictions? This will:\n\n• Recompute all matchups with current lineups & stats\n• Overwrite the Firebase snapshot for everyone\n• Cannot be undone\n\nContinue?`))return;
+  
+  wlog(`Overriding ${STATE.date}…`);
+  PRED.overrides=PRED.overrides||{};
+  PRED.overrides[STATE.date]=true;
+  
+  // Recompute matchups with current data
+  buildAllMatchups();
+  buildRunTotals();
+  predSnapshot(); // this will push with forceOverridePred=true
+  
+  wlog(`✓ Done. New ratings live for everyone.`);
+  setTimeout(()=>renderTab(),200);
+}
+
 // Auto-refresh the status panel when settings opens
 const origRenderSettings=window.renderSettings;
 setTimeout(()=>{
@@ -878,6 +967,17 @@ setTimeout(()=>{
 
 /* ============ HELPERS ============ */
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
+// MLB innings pitched: .1 = 1/3, .2 = 2/3. Convert "5.2" → 5.667 etc for division math.
+function ipToDec(ip){
+  if(ip==null)return null;
+  const n=parseFloat(ip);
+  if(isNaN(n))return null;
+  const whole=Math.floor(n);
+  const frac=Math.round((n-whole)*10);
+  if(frac===1)return whole+1/3;
+  if(frac===2)return whole+2/3;
+  return whole;
+}
 const nn=(v,fb=0)=>sf(v)??fb;
 // Conservative rounding for prop predictions — only rounds UP if frac >= 0.7
 // Used so we err on the safe side when betting OVER (lower predicted = harder line to clear)
@@ -1219,6 +1319,7 @@ function normalizePitcher(pid,seasonD,expD,saberD,splitsD,recentD,year){
   
   const seasonStat=seasonD?.stats?.[0]?.splits?.[0]?.stat||{};
   const ip=sf(seasonStat.inningsPitched);
+  const ipDec=ipToDec(seasonStat.inningsPitched)||0;
   const bf=sf(seasonStat.battersFaced);
   out.overall={
     g:sf(seasonStat.gamesPlayed),gs:sf(seasonStat.gamesStarted),
@@ -1233,7 +1334,9 @@ function normalizePitcher(pid,seasonD,expD,saberD,splitsD,recentD,year){
     k9:ip?sf(seasonStat.strikeOuts)/ip*9:null,
     bb9:ip?sf(seasonStat.baseOnBalls)/ip*9:null,
     hr9:ip?sf(seasonStat.homeRuns)/ip*9:null,
-    avgIP:seasonStat.gamesStarted?ip/sf(seasonStat.gamesStarted):null
+    avgIP:seasonStat.gamesStarted?ip/sf(seasonStat.gamesStarted):null,
+    h_per_ip:ipDec>0?sf(seasonStat.hits)/ipDec:null,
+    bb_per_ip:ipDec>0?sf(seasonStat.baseOnBalls)/ipDec:null
   };
   
   const expStat=expD?.stats?.[0]?.splits?.[0]?.stat||{};
@@ -1886,6 +1989,49 @@ function batterExpectedBB(p,pHand,batterHand,order,sp_pitcher){
   return Math.round(xBB*100)/100;
 }
 
+// Expected strikeouts for a batter facing a pitcher.
+// K ≈ PA × log5(batter K%, pitcher K%-allowed, league K%).
+function batterExpectedK(p,pHand,batterHand,order,sp_pitcher){
+  if(!p||!p.overall.pa)return null;
+  const L=STATE.leagueAvg;
+  const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
+  const bSp=batterSplit(p.prev?.isPrevSeason?p.prev:p,pHand,batterHand);
+  const bKR=blendStat(bSp,ov,'k_rate',80)??ov.k_rate??L.b_k??0.225;
+  let pKR=L.p_k??0.225;
+  if(sp_pitcher){
+    const pOv=sp_pitcher.prev?.isPrevSeason?sp_pitcher.prev.overall:sp_pitcher.overall;
+    const pSp=pitcherSplit(sp_pitcher,batterHand);
+    pKR=blendStat(pSp,pOv,'k_rate',150)??pOv.k_rate??L.p_k??0.225;
+  }
+  const combined=combineRates(pKR,bKR,L.p_k??0.225);
+  const o=parseInt(order)||5;
+  const expectedPA=o<=2?4.55:o<=5?4.20:o<=7?3.85:3.55;
+  return Math.round(expectedPA*combined*100)/100;
+}
+
+// Score a batter for likelihood to strike out. Higher = more likely.
+function computeBatterKScore(p,pitcher,pHand,batterHand,xK){
+  if(!p||!p.overall.pa)return null;
+  const L=STATE.leagueAvg;
+  const ov=p.prev?.isPrevSeason?p.prev.overall:p.overall;
+  const bSp=batterSplit(p.prev?.isPrevSeason?p.prev:p,pHand,batterHand);
+  const seasonK=ov.k_rate??L.b_k??0.225;
+  const splitK=blendStat(bSp,ov,'k_rate',80)??seasonK;
+  const recK=p.recent?.pa>=30?p.recent.k_rate:null;
+  const effBatterK=recK!=null?splitK*0.55+seasonK*0.30+recK*0.15:splitK*0.65+seasonK*0.35;
+  const batterCompG=scale(effBatterK,L.b_k*0.6,L.b_k*1.5);
+  let pitcherCompG=50;
+  if(pitcher){
+    const pOv=pitcher.prev?.isPrevSeason?pitcher.prev.overall:pitcher.overall;
+    const pSp=pitcherSplit(pitcher,batterHand);
+    const pK=blendStat(pSp,pOv,'k_rate',150)??pOv.k_rate??L.p_k;
+    pitcherCompG=scale(pK,L.p_k*0.6,L.p_k*1.5);
+  }
+  let raw=batterCompG*0.55+pitcherCompG*0.45;
+  if(raw>=LOCKS.bbat&&xK!=null&&roundConservative(xK)<1)raw=LOCKS.bbat-0.5;
+  return Math.round(raw*10)/10;
+}
+
 // Walk score for a batter vs pitcher matchup.
 // Combines batter BB% (vs hand), pitcher BB%-allowed (vs hand), and recent BB% trend.
 // CRITICAL: A score >= 72 (lock) requires xBB >= 0.7 (which rounds conservatively to 1).
@@ -1930,7 +2076,7 @@ function computeBBScore(p,pitcher,pHand,batterHand,xBB){
   // ── LOCK FLOOR ENFORCEMENT ──────────────────────────────────
   // If raw score qualifies as a lock (≥72) but xBB rounds to 0, demote to 71 (Strong, not Lock).
   // This guarantees a "lock" walk pick projects to at least 1 walk after conservative rounding.
-  if(rawScore>=72&&xBB!=null&&roundConservative(xBB)<1){
+  if(rawScore>=LOCKS.bb&&xBB!=null&&roundConservative(xBB)<1){
     rawScore=71.5; // just below lock threshold — still "Strong"
   }
   
@@ -2240,6 +2386,8 @@ function buildAllMatchups(){
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
       const expectedBB=batterExpectedBB(p,pHand,b.bats,b.order,sp);
       const bbScore=computeBBScore(p,sp,pHand,b.bats,expectedBB);
+      const batterExpectedKVal=batterExpectedK(p,pHand,b.bats,b.order,sp);
+      const batterKScore=computeBatterKScore(p,sp,pHand,b.bats,batterExpectedKVal);
       
       STATE.matchups.push({
         kind:'batter',
@@ -2248,7 +2396,7 @@ function buildAllMatchups(){
         pitcherId:g.aSP?.id,pitcherName:g.aSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,
+        hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,batterKScore,batterExpectedK:batterExpectedKVal,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -2272,6 +2420,8 @@ function buildAllMatchups(){
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
       const expectedBB=batterExpectedBB(p,pHand,b.bats,b.order,sp);
       const bbScore=computeBBScore(p,sp,pHand,b.bats,expectedBB);
+      const batterExpectedKVal=batterExpectedK(p,pHand,b.bats,b.order,sp);
+      const batterKScore=computeBatterKScore(p,sp,pHand,b.bats,batterExpectedKVal);
       
       STATE.matchups.push({
         kind:'batter',
@@ -2280,7 +2430,7 @@ function buildAllMatchups(){
         pitcherId:g.hSP?.id,pitcherName:g.hSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
         pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
-        hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,
+        hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,batterKScore,batterExpectedK:batterExpectedKVal,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
     });
@@ -2334,11 +2484,66 @@ function buildRunTotals(){
     const homeRuns=estimateTeamRuns(g.hLineup,STATE.pitchers[g.aSP?.id],g.aSPHand||'R',pk,wx,venue);
     const awayRuns=estimateTeamRuns(g.aLineup,STATE.pitchers[g.hSP?.id],g.hSPHand||'R',pk,wx,venue);
     const total=homeRuns!=null&&awayRuns!=null?Math.round((homeRuns+awayRuns)*10)/10:null;
+    const hrExp=gameHRExpectation(g);
     STATE.totals.push({
       game:g,homeRuns,awayRuns,total,
-      park:pk,wx
+      park:pk,wx,
+      totalHR:hrExp?.totalHR,
+      noHRScore:hrExp?.noHRScore,
+      multiHRScore:hrExp?.multiHRScore,
+      hSPhr:hrExp?.hSPhr,aSPhr:hrExp?.aSPhr,
+      hrEnvMult:hrExp?.envMult
     });
   });
+}
+
+// Expected total HRs in a game. Sum each pitcher's HR expectation
+// (HR/9 × expected IP × park HR factor × wind HR factor) for both teams.
+// Plus a small contribution from bullpen (~3 IP at league avg HR/9).
+function gameHRExpectation(g){
+  if(!g)return null;
+  const L=STATE.leagueAvg;
+  const pk=g.parkFactor,wx=g.weather,venue=g.venue;
+  const parkHR=pk?.hr||1.0;
+  const windF=wx&&!DOMED.has(venue)?windHRFactor(venue,wx):1.0;
+  const tempF=wx?(1+(wx.temp-70)*0.005):1.0; // ~0.5% per °F over 70
+  const envMult=parkHR*windF*tempF;
+  
+  const lgHR9=1.2; // league-avg HR/9
+  
+  function spExpectation(sp){
+    if(!sp||!sp.overall.ip)return lgHR9*5*envMult/9; // ~5 IP starter at league avg
+    const ov=sp.prev?.isPrevSeason?sp.prev.overall:sp.overall;
+    const hr9=ov.hr9||lgHR9;
+    const ip=clamp(ov.avgIP||L.p_avgIP||5.5,3.5,7.5);
+    return hr9*ip*envMult/9;
+  }
+  
+  const hSP=STATE.pitchers[g.hSP?.id];
+  const aSP=STATE.pitchers[g.aSP?.id];
+  const hSPhr=spExpectation(hSP);
+  const aSPhr=spExpectation(aSP);
+  
+  // Bullpen contribution: roughly 3-4 IP per side at slight worse HR/9 than starters
+  const bullpenIP=8.5-(hSP?clamp(hSP.overall.avgIP||5.5,3.5,7.5):5.5);
+  const aBullpenIP=8.5-(aSP?clamp(aSP.overall.avgIP||5.5,3.5,7.5):5.5);
+  const bullpenHR=(bullpenIP+aBullpenIP)*lgHR9*envMult/9;
+  
+  const totalHR=hSPhr+aSPhr+bullpenHR;
+  
+  // Score for "0-1 HR" bet: higher score = lower HR likely. Favor games with low totalHR.
+  // Score for "2+ HR" bet: higher score = more HRs likely. Favor games with high totalHR.
+  // Use scale: 0.5 totalHR → 100 grade for under, 3.0 totalHR → 100 grade for over
+  const noHRScore=100-scale(totalHR,0.6,3.2);
+  const multiHRScore=scale(totalHR,0.6,3.2);
+  
+  return {
+    totalHR:Math.round(totalHR*100)/100,
+    noHRScore:Math.round(noHRScore*10)/10,
+    multiHRScore:Math.round(multiHRScore*10)/10,
+    parkHR,windF,tempF,envMult,
+    hSPhr:Math.round(hSPhr*100)/100,aSPhr:Math.round(aSPhr*100)/100
+  };
 }
 
 // Pitcher "hittability" grade (0-100, higher = harder to hit against = worse for batter)
@@ -2438,7 +2643,7 @@ function sw(tab){
   UI.tab=tab;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   // Map sub-pages back to their parent tab in the visible nav
-  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',bb:'dash',pbb:'dash',tot:'dash'};
+  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',bb:'dash',pbb:'dash',tot:'dash',gnoHR:'dash',gmultiHR:'dash',bbat:'dash'};
   const navTab=parentMap[tab]||tab;
   document.getElementById('t-'+navTab)?.classList.add('active');
   renderTab();
@@ -2458,6 +2663,9 @@ function renderTab(){
     case 'bb':renderBatterBB();break;
     case 'pbb':renderPitcherBB();break;
     case 'tot':renderTotals();break;
+    case 'gnoHR':renderGameNoHR();break;
+    case 'gmultiHR':renderGameMultiHR();break;
+    case 'bbat':renderBatterKs();break;
     case 'res':renderResults();break;
     case 'srch':renderSrch();break;
     case 'set':renderSettings();break;
@@ -2517,6 +2725,11 @@ function renderDashboard(){
         <span class="hc-prop-label">Walks (BB)</span>
         <span class="hc-prop-arr">→</span>
       </button>
+      <button class="hc-prop" onclick="goToProp('bbat')">
+        <span class="hc-prop-icon">⚡</span>
+        <span class="hc-prop-label">Strikeouts</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
     </div>
     
     <div class="hc-props" id="hc-pit-props">
@@ -2538,6 +2751,16 @@ function renderDashboard(){
       <button class="hc-prop" onclick="goToProp('tot')">
         <span class="hc-prop-icon">🎲</span>
         <span class="hc-prop-label">Run Totals</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+      <button class="hc-prop" onclick="goToProp('gnoHR')">
+        <span class="hc-prop-icon">🚫</span>
+        <span class="hc-prop-label">0-1 HRs in Game</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+      <button class="hc-prop" onclick="goToProp('gmultiHR')">
+        <span class="hc-prop-icon">💥</span>
+        <span class="hc-prop-label">2+ HRs in Game</span>
         <span class="hc-prop-arr">→</span>
       </button>
     </div>
@@ -2575,8 +2798,11 @@ function fcRendererFor(prop){
   if(prop==='tb')return ()=>renderFCBatters('tb');
   if(prop==='hr')return ()=>renderFCBatters('hr');
   if(prop==='bb')return ()=>renderFCBatters('bb');
+  if(prop==='bbat')return ()=>renderFCBatters('bbat');
   if(prop==='k')return renderFCPitchers;
   if(prop==='pbb')return renderFCPitcherBB;
+  if(prop==='gnoHR')return ()=>renderFCGameHR('gnoHR');
+  if(prop==='gmultiHR')return ()=>renderFCGameHR('gmultiHR');
   if(prop==='tot')return renderFCTotals;
   return null;
 }
@@ -2669,12 +2895,12 @@ function renderHits(){
     return (bv-av)*UI.hitsSort.d;
   });
   
-  const lk=data.filter(m=>m.hitScore>=79.5).length;
+  const lk=data.filter(m=>m.hitScore>=LOCKS.hits).length;
   const ht=data.filter(m=>m.hitScore>=62&&m.hitScore<79.5).length;
   const ln=data.filter(m=>m.hitScore>=52&&m.hitScore<62).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.hitScore,79.5);
+    const r=getRat(m.hitScore,LOCKS.hits);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const p=STATE.players[m.batterId];
     const ov=p?.overall||{};
@@ -2736,11 +2962,11 @@ function renderHRs(){
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.hrSort.d;
   });
   
-  const lk=data.filter(m=>m.hrScore>=72).length;
+  const lk=data.filter(m=>m.hrScore>=LOCKS.hr).length;
   const ht=data.filter(m=>m.hrScore>=62&&m.hrScore<72).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.hrScore);
+    const r=getRat(m.hrScore,LOCKS.hr);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const p=STATE.players[m.batterId];
     const ov=p?.overall||{};
@@ -2804,12 +3030,12 @@ function renderTB(){
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.tbSort.d;
   });
   
-  const lk=data.filter(m=>m.tbScore>=72).length;
+  const lk=data.filter(m=>m.tbScore>=LOCKS.tb).length;
   const ht=data.filter(m=>m.tbScore>=62&&m.tbScore<72).length;
   const ln=data.filter(m=>m.tbScore>=52&&m.tbScore<62).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.tbScore);
+    const r=getRat(m.tbScore,LOCKS.tb);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const p=STATE.players[m.batterId];
     const ov=p?.overall||{};
@@ -2880,11 +3106,11 @@ function renderKs(){
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.kSort.d;
   });
   
-  const lk=data.filter(m=>m.kGrade>=72).length;
+  const lk=data.filter(m=>m.kGrade>=LOCKS.k).length;
   const ht=data.filter(m=>m.kGrade>=62&&m.kGrade<72).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.kGrade);
+    const r=getRat(m.kGrade,LOCKS.k);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const p=STATE.pitchers[m.pitcherId];
     const ov=p?.overall||{};
@@ -2952,12 +3178,12 @@ function renderBatterBB(){
     return (bv-av)*UI.bbSort.d;
   });
   
-  const lk=data.filter(m=>m.bbScore>=72).length;
+  const lk=data.filter(m=>m.bbScore>=LOCKS.bb).length;
   const ht=data.filter(m=>m.bbScore>=62&&m.bbScore<72).length;
   const ln=data.filter(m=>m.bbScore>=52&&m.bbScore<62).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.bbScore);
+    const r=getRat(m.bbScore,LOCKS.bb);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','bb')">
@@ -3014,11 +3240,11 @@ function renderPitcherBB(){
     return (bv-av)*UI.pbbSort.d;
   });
   
-  const lk=data.filter(m=>m.bbGrade>=72).length;
+  const lk=data.filter(m=>m.bbGrade>=LOCKS.pbb).length;
   const ht=data.filter(m=>m.bbGrade>=62&&m.bbGrade<72).length;
   
   const rows=data.map(m=>{
-    const r=getRat(m.bbGrade);
+    const r=getRat(m.bbGrade,LOCKS.pbb);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
     return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
@@ -3138,6 +3364,126 @@ function renderTotals(){
 }
 
 /* ---------- SEARCH TAB ---------- */
+function renderGameNoHR(){
+  if(maybeRenderDrillView('🚫 0-1 HRs (Game)','gnoHR'))return;
+  const data=[...STATE.totals].filter(t=>t.noHRScore!=null).sort((a,b)=>b.noHRScore-a.noHRScore);
+  if(!data.length){setMain(`${backBar('🚫 0-1 HRs (Game)','gnoHR')}<div class="empty">No game HR estimates available</div>`);return;}
+  
+  const lk=data.filter(t=>t.noHRScore>=LOCKS.gnoHR).length;
+  const ht=data.filter(t=>t.noHRScore>=62&&t.noHRScore<LOCKS.gnoHR).length;
+  
+  const rows=data.map(t=>{
+    const r=getRat(t.noHRScore,LOCKS.gnoHR);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const g=t.game;
+    return `<tr class="${rc}" onclick="openGameMo('${g.gamePk}')">
+      <td>${sbar(t.noHRScore)}</td>
+      <td>${bdg(r)}</td>
+      <td><strong style="color:var(--ac)">${t.totalHR.toFixed(1)}</strong></td>
+      <td class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
+      <td style="color:var(--mt2)">${t.aSPhr?.toFixed(1)||'—'} / ${t.hSPhr?.toFixed(1)||'—'}</td>
+      <td style="color:var(--mt2)">${t.park?.hr.toFixed(2)||'—'}</td>
+    </tr>`;
+  }).join('');
+  
+  setMain(`
+    ${backBar('🚫 0-1 HRs (Game)','gnoHR')}
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">Score = confidence the game ends with 0 or 1 total HRs. Lower projected total HRs = better.</div>
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
+      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
+      <div class="pill"><span class="pn">${data.length}</span>Games</div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Score</th><th>Rating</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `);
+}
+
+function renderGameMultiHR(){
+  if(maybeRenderDrillView('💥💥 2+ HRs (Game)','gmultiHR'))return;
+  const data=[...STATE.totals].filter(t=>t.multiHRScore!=null).sort((a,b)=>b.multiHRScore-a.multiHRScore);
+  if(!data.length){setMain(`${backBar('💥💥 2+ HRs (Game)','gmultiHR')}<div class="empty">No game HR estimates available</div>`);return;}
+  
+  const lk=data.filter(t=>t.multiHRScore>=LOCKS.gmultiHR).length;
+  const ht=data.filter(t=>t.multiHRScore>=62&&t.multiHRScore<LOCKS.gmultiHR).length;
+  
+  const rows=data.map(t=>{
+    const r=getRat(t.multiHRScore,LOCKS.gmultiHR);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const g=t.game;
+    return `<tr class="${rc}" onclick="openGameMo('${g.gamePk}')">
+      <td>${sbar(t.multiHRScore)}</td>
+      <td>${bdg(r)}</td>
+      <td><strong style="color:var(--ac)">${t.totalHR.toFixed(1)}</strong></td>
+      <td class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
+      <td style="color:var(--mt2)">${t.aSPhr?.toFixed(1)||'—'} / ${t.hSPhr?.toFixed(1)||'—'}</td>
+      <td style="color:var(--mt2)">${t.park?.hr.toFixed(2)||'—'}</td>
+    </tr>`;
+  }).join('');
+  
+  setMain(`
+    ${backBar('💥💥 2+ HRs (Game)','gmultiHR')}
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">Score = confidence the game has 2+ total HRs. Higher projected total HRs = better.</div>
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
+      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
+      <div class="pill"><span class="pn">${data.length}</span>Games</div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Score</th><th>Rating</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `);
+}
+
+function renderBatterKs(){
+  if(maybeRenderDrillView('⚡ Strikeouts (Batter)','bbat'))return;
+  const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.batterKScore!=null);
+  if(!data.length){setMain(`${backBar('⚡ Strikeouts (Batter)','bbat')}<div class="empty">No batter strikeout matchups loaded — recompute in Settings</div>`);return;}
+  data.sort((a,b)=>(b.batterKScore||0)-(a.batterKScore||0));
+  
+  const lk=data.filter(m=>m.batterKScore>=LOCKS.bbat).length;
+  const ht=data.filter(m=>m.batterKScore>=62&&m.batterKScore<LOCKS.bbat).length;
+  
+  const rows=data.map(m=>{
+    const r=getRat(m.batterKScore,LOCKS.bbat);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const xK=m.batterExpectedK!=null?roundConservative(m.batterExpectedK):null;
+    return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
+      <td>${sbar(m.batterKScore)}</td>
+      <td>${bdg(r)}</td>
+      <td><strong style="color:var(--ac)">${xK!=null?xK:'—'}</strong></td>
+      <td class="l"><strong>${m.batterName}</strong></td>
+      <td style="color:var(--mt2)">${m.team.abbr||m.team.name}</td>
+      <td style="color:var(--mt2)">${m.order}</td>
+      <td class="l" style="color:var(--mt2)">${m.pitcherName}</td>
+      <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
+    </tr>`;
+  }).join('');
+  
+  setMain(`
+    ${backBar('⚡ Strikeouts (Batter)','bbat')}
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">Higher score = batter more likely to strike out. xK = projected strikeouts in this game.</div>
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
+      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
+      <div class="pill"><span class="pn">${data.length}</span>Batters</div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>K Score</th><th>Rating</th><th>xK</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Hand</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `);
+}
+
 function renderSrch(){
   setMain(`
     <div style="position:relative;margin-bottom:11px">
@@ -3239,10 +3585,17 @@ async function loadResults(date){
       // Capture final score for run-totals fact-check
       const homeRunsFinal=nn(feed.liveData?.linescore?.teams?.home?.runs);
       const awayRunsFinal=nn(feed.liveData?.linescore?.teams?.away?.runs);
+      // Tally total HRs hit in the game
+      let gameHRTotal=0;
+      ['home','away'].forEach(side=>{
+        const teamBat=teams[side]?.teamStats?.batting||{};
+        gameHRTotal+=nn(teamBat.homeRuns);
+      });
       gameTotals[String(g.gamePk)]={
         homeRuns:homeRunsFinal,
         awayRuns:awayRunsFinal,
-        total:homeRunsFinal+awayRunsFinal
+        total:homeRunsFinal+awayRunsFinal,
+        gameHR:gameHRTotal
       };
       ['home','away'].forEach(side=>{
         const players=teams[side]?.players||{};
@@ -3288,6 +3641,7 @@ async function loadResults(date){
         actualHR:r?.hr??null,
         actualTB:r?.tb??null,
         actualBB:r?.bb??null,
+        actualK:r?.k??null,
         gotHit:r?(r.h>0?true:(r.ab>0||r.pa>0?false:null)):null
       };
     });
@@ -3309,7 +3663,8 @@ async function loadResults(date){
         played:!!r,
         actualTotal:r?.total??null,
         actualHome:r?.homeRuns??null,
-        actualAway:r?.awayRuns??null
+        actualAway:r?.awayRuns??null,
+        actualGameHR:r?.gameHR??null
       };
     });
     
@@ -3357,7 +3712,13 @@ async function fetchHistoryForDate(date){
       const teams=feed.liveData?.boxscore?.teams||{};
       const homeRuns=nn(feed.liveData?.linescore?.teams?.home?.runs);
       const awayRuns=nn(feed.liveData?.linescore?.teams?.away?.runs);
-      dayData.games[String(g.gamePk)]={homeRuns,awayRuns,total:homeRuns+awayRuns};
+      // Tally total HRs hit in the game (for 0-1 HR / 2+ HR game bets)
+      let gameHR=0;
+      ['home','away'].forEach(side=>{
+        const teamBat=teams[side]?.teamStats?.batting||{};
+        gameHR+=nn(teamBat.homeRuns);
+      });
+      dayData.games[String(g.gamePk)]={homeRuns,awayRuns,total:homeRuns+awayRuns,gameHR};
       ['home','away'].forEach(side=>{
         const players=teams[side]?.players||{};
         Object.values(players).forEach(p=>{
@@ -3409,6 +3770,12 @@ function loadHistoryInBackground(propToRefresh){
 // For each saved day, look at the 2 highest-scored Hit picks and check if they got a hit.
 // Returns same shape as historicalLockStats.
 function historicalTop2HitsStats(){
+  return historicalTopNStats('hits',2);
+}
+
+// Generalized top-N historical accuracy across saved 14 days for any prop.
+// For each day, takes the n highest-scored picks of that prop and checks if they hit.
+function historicalTopNStats(prop,n){
   const today=todayStr();
   const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
   const days=[];
@@ -3420,19 +3787,50 @@ function historicalTop2HitsStats(){
       days.push({date,hits:null,n:null,rate:null,pending:true});
       continue;
     }
-    // Get top 2 Hit picks for this day, sorted by Hit Score
-    const top2=(pred.batters||[])
-      .filter(b=>b.score!=null)
-      .sort((a,b)=>b.score-a.score)
-      .slice(0,2);
-    let hits=0,n=0,outcomes=[];
-    top2.forEach(b=>{
-      const r=hist.batters[b.id];
-      if(!r||(r.ab===0&&r.pa===0))return; // didn't play
-      n++;const got=r.h>0;if(got)hits++;outcomes.push(got);
+    let topPicks=[],pickType='batter';
+    if(prop==='hits'){
+      topPicks=(pred.batters||[]).filter(b=>b.score!=null).sort((a,b)=>b.score-a.score).slice(0,n);
+    }else if(prop==='tb'){
+      topPicks=(pred.batters||[]).filter(b=>b.tbScore!=null).sort((a,b)=>b.tbScore-a.tbScore).slice(0,n);
+    }else if(prop==='hr'){
+      topPicks=(pred.batters||[]).filter(b=>b.hrScore!=null).sort((a,b)=>b.hrScore-a.hrScore).slice(0,n);
+    }else if(prop==='bb'){
+      topPicks=(pred.batters||[]).filter(b=>b.bbScore!=null&&b.expectedBB!=null).sort((a,b)=>b.bbScore-a.bbScore).slice(0,n);
+    }else if(prop==='k'){
+      topPicks=(pred.pitchers||[]).filter(p=>p.grade!=null).sort((a,b)=>b.grade-a.grade).slice(0,n);
+      pickType='pitcher';
+    }else if(prop==='pbb'){
+      topPicks=(pred.pitchers||[]).filter(p=>p.bbGrade!=null&&p.expectedBB!=null).sort((a,b)=>b.bbGrade-a.bbGrade).slice(0,n);
+      pickType='pitcher';
+    }else if(prop==='tot'){
+      // For totals, pick the top n games by predicted total — "top" doesn't mean much, skip
+      days.push({date,hits:null,n:null,rate:null,outcomes:[],noTop:true});
+      continue;
+    }
+    let hits=0,nPlayed=0,outcomes=[];
+    topPicks.forEach(p=>{
+      if(pickType==='batter'){
+        const r=hist.batters[p.id];
+        if(!r||(r.ab===0&&r.pa===0))return;
+        nPlayed++;
+        let got=false;
+        if(prop==='hits')got=r.h>0;
+        else if(prop==='tb')got=(r.tb||0)>=roundConservative(p.expectedTB||0);
+        else if(prop==='hr')got=(r.hr||0)>0;
+        else if(prop==='bb')got=(r.bb||0)>=roundConservative(p.expectedBB||0);
+        if(got)hits++;outcomes.push(got);
+      }else{
+        const r=hist.pitchers[p.id];
+        if(!r)return;
+        nPlayed++;
+        let got=false;
+        if(prop==='k')got=r.k>=roundConservative(p.xK||0);
+        else if(prop==='pbb')got=(r.bb||0)>=roundConservative(p.expectedBB||0);
+        if(got)hits++;outcomes.push(got);
+      }
     });
-    days.push({date,hits,n,rate:n?Math.round(hits/n*100):null,outcomes});
-    totalHits+=hits;totalN+=n;
+    days.push({date,hits,n:nPlayed,rate:nPlayed?Math.round(hits/nPlayed*100):null,outcomes});
+    totalHits+=hits;totalN+=nPlayed;
   }
   return {days,totalHits,totalN,totalRate:totalN?Math.round(totalHits/totalN*100):null};
 }
@@ -3451,14 +3849,14 @@ function historicalLockStats(prop){
     }
     let hits=0,n=0,outcomes=[];
     if(prop==='hits'){
-      const lockSet=(pred.batters||[]).filter(b=>b.score>=79.5);
+      const lockSet=(pred.batters||[]).filter(b=>b.score>=LOCKS.hits);
       lockSet.forEach(b=>{
         const r=hist.batters[b.id];
         if(!r||(r.ab===0&&r.pa===0))return;
         n++;const got=r.h>0;if(got)hits++;outcomes.push(got);
       });
     }else if(prop==='tb'){
-      const lockSet=(pred.batters||[]).filter(b=>b.tbScore>=72&&b.expectedTB!=null);
+      const lockSet=(pred.batters||[]).filter(b=>b.tbScore>=LOCKS.tb&&b.expectedTB!=null);
       lockSet.forEach(b=>{
         const r=hist.batters[b.id];
         if(!r||(r.ab===0&&r.pa===0))return;
@@ -3467,7 +3865,7 @@ function historicalLockStats(prop){
         n++;if(got)hits++;outcomes.push(got);
       });
     }else if(prop==='hr'){
-      const lockSet=(pred.batters||[]).filter(b=>b.hrScore>=72);
+      const lockSet=(pred.batters||[]).filter(b=>b.hrScore>=LOCKS.hr);
       lockSet.forEach(b=>{
         const r=hist.batters[b.id];
         if(!r||(r.ab===0&&r.pa===0))return;
@@ -3475,7 +3873,7 @@ function historicalLockStats(prop){
         n++;if(got)hits++;outcomes.push(got);
       });
     }else if(prop==='k'){
-      const lockSet=(pred.pitchers||[]).filter(p=>p.grade>=72);
+      const lockSet=(pred.pitchers||[]).filter(p=>p.grade>=LOCKS.k);
       lockSet.forEach(p=>{
         const r=hist.pitchers[p.id];
         if(!r)return;
@@ -3485,7 +3883,7 @@ function historicalLockStats(prop){
       });
     }else if(prop==='bb'){
       // Batter walks: lock = bbScore >= 72; ✓ if actual BB >= rounded predicted
-      const lockSet=(pred.batters||[]).filter(b=>b.bbScore>=72&&b.expectedBB!=null);
+      const lockSet=(pred.batters||[]).filter(b=>b.bbScore>=LOCKS.bb&&b.expectedBB!=null);
       lockSet.forEach(b=>{
         const r=hist.batters[b.id];
         if(!r||(r.ab===0&&r.pa===0))return;
@@ -3495,12 +3893,45 @@ function historicalLockStats(prop){
       });
     }else if(prop==='pbb'){
       // Pitcher walks allowed: lock = bbGrade >= 72; ✓ if actual BB allowed >= rounded predicted
-      const lockSet=(pred.pitchers||[]).filter(p=>p.bbGrade>=72&&p.expectedBB!=null);
+      const lockSet=(pred.pitchers||[]).filter(p=>p.bbGrade>=LOCKS.pbb&&p.expectedBB!=null);
       lockSet.forEach(p=>{
         const r=hist.pitchers[p.id];
         if(!r)return;
         const predWhole=roundConservative(p.expectedBB);
         const got=(r.bb||0)>=predWhole;
+        n++;if(got)hits++;outcomes.push(got);
+      });
+    }else if(prop==='bbat'){
+      // Batter strikeouts: ✓ if actual K >= rounded predicted
+      const lockSet=(pred.batters||[]).filter(b=>b.batterKScore>=LOCKS.bbat&&b.batterExpectedK!=null);
+      lockSet.forEach(b=>{
+        const r=hist.batters[b.id];
+        if(!r||(r.ab===0&&r.pa===0))return;
+        const predWhole=roundConservative(b.batterExpectedK);
+        const got=(r.k||0)>=predWhole;
+        n++;if(got)hits++;outcomes.push(got);
+      });
+    }else if(prop==='gnoHR'){
+      // 0-1 HR game bet: ✓ if game total HRs ≤ 1
+      const lockSet=(pred.totals||[]).filter(t=>t.noHRScore>=LOCKS.gnoHR);
+      lockSet.forEach(t=>{
+        const r=hist.games[t.gamePk];
+        if(!r)return;
+        // Need gameHR field — historical fetch doesn't capture it yet, derive from boxscore if missing
+        const totalHR=r.gameHR;
+        if(totalHR==null)return;
+        const got=totalHR<=1;
+        n++;if(got)hits++;outcomes.push(got);
+      });
+    }else if(prop==='gmultiHR'){
+      // 2+ HR game bet: ✓ if game total HRs ≥ 2
+      const lockSet=(pred.totals||[]).filter(t=>t.multiHRScore>=LOCKS.gmultiHR);
+      lockSet.forEach(t=>{
+        const r=hist.games[t.gamePk];
+        if(!r)return;
+        const totalHR=r.gameHR;
+        if(totalHR==null)return;
+        const got=totalHR>=2;
         n++;if(got)hits++;outcomes.push(got);
       });
     }else if(prop==='tot'){
@@ -3656,7 +4087,7 @@ function exitDrill(prop){
 function fcLockStats(prop){
   if(prop==='hits'||prop==='tb'||prop==='hr'){
     const scoreKey=prop==='hits'?'score':prop==='tb'?'tbScore':'hrScore';
-    const lockAt=prop==='hits'?79.5:72;
+    const lockAt=prop==='hits'?LOCKS.hits:(prop==='tb'?LOCKS.tb:LOCKS.hr);
     const played=RESULTS.batters.filter(b=>b.played&&b[scoreKey]!=null);
     const lockSet=played.filter(b=>b[scoreKey]>=lockAt);
     let hits=0,n=0;
@@ -3674,27 +4105,45 @@ function fcLockStats(prop){
     return {n,hits,rate:n?Math.round(hits/n*100):null,total:RESULTS.batters.length,lockAt};
   }
   if(prop==='bb'){
-    // Batter walks: lock if bbScore >= 72; ✓ if actual BB >= rounded predicted
     const played=RESULTS.batters.filter(b=>b.played&&b.bbScore!=null&&b.expectedBB!=null);
-    const lockSet=played.filter(b=>b.bbScore>=72);
+    const lockSet=played.filter(b=>b.bbScore>=LOCKS.bb);
     const hits=lockSet.filter(b=>(b.actualBB||0)>=roundConservative(b.expectedBB)).length;
-    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.batters.length,lockAt:72};
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.batters.length,lockAt:LOCKS.bb};
+  }
+  if(prop==='bbat'){
+    // Batter strikeouts: ✓ if actual K >= rounded predicted
+    const played=RESULTS.batters.filter(b=>b.played&&b.batterKScore!=null&&b.batterExpectedK!=null);
+    const lockSet=played.filter(b=>b.batterKScore>=LOCKS.bbat);
+    const hits=lockSet.filter(b=>(b.actualK||0)>=roundConservative(b.batterExpectedK)).length;
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.batters.length,lockAt:LOCKS.bbat};
   }
   if(prop==='k'){
     const played=RESULTS.pitchers.filter(p=>p.played);
-    const lockSet=played.filter(p=>{const r=getRat(p.grade);return r.c==='lock';});
+    const lockSet=played.filter(p=>p.grade>=LOCKS.k);
     const hits=lockSet.filter(p=>p.actualKs>=roundConservative(p.xK)).length;
-    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:72};
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:LOCKS.k};
   }
   if(prop==='pbb'){
-    // Pitcher walks: lock if bbGrade >= 72; ✓ if actual BB allowed >= rounded predicted
     const played=RESULTS.pitchers.filter(p=>p.played&&p.bbGrade!=null&&p.expectedBB!=null);
-    const lockSet=played.filter(p=>p.bbGrade>=72);
+    const lockSet=played.filter(p=>p.bbGrade>=LOCKS.pbb);
     const hits=lockSet.filter(p=>(p.actualBB||0)>=roundConservative(p.expectedBB)).length;
-    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:72};
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:LOCKS.pbb};
+  }
+  if(prop==='gnoHR'){
+    // 0-1 HR game bet: ✓ if total HRs in game ≤ 1
+    const played=RESULTS.totals.filter(t=>t.played&&t.noHRScore!=null);
+    const lockSet=played.filter(t=>t.noHRScore>=LOCKS.gnoHR);
+    const hits=lockSet.filter(t=>(t.actualGameHR||0)<=1).length;
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.totals.length,lockAt:LOCKS.gnoHR};
+  }
+  if(prop==='gmultiHR'){
+    // 2+ HR game bet: ✓ if total HRs in game ≥ 2
+    const played=RESULTS.totals.filter(t=>t.played&&t.multiHRScore!=null);
+    const lockSet=played.filter(t=>t.multiHRScore>=LOCKS.gmultiHR);
+    const hits=lockSet.filter(t=>(t.actualGameHR||0)>=2).length;
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.totals.length,lockAt:LOCKS.gmultiHR};
   }
   if(prop==='tot'){
-    // Run totals don't have a lock grade. Use match rate (within 0.4 of rounded predicted).
     const played=RESULTS.totals.filter(t=>t.played);
     const matches=played.filter(t=>Math.abs(t.actualTotal-Math.round(t.total))<=0.4).length;
     return {n:played.length,hits:matches,rate:played.length?Math.round(matches/played.length*100):null,total:RESULTS.totals.length,lockAt:null};
@@ -3801,8 +4250,11 @@ function renderResults(){
       tb:fcLockStats('tb'),
       hr:fcLockStats('hr'),
       bb:fcLockStats('bb'),
+      bbat:fcLockStats('bbat'),
       k:fcLockStats('k'),
       pbb:fcLockStats('pbb'),
+      gnoHR:fcLockStats('gnoHR'),
+      gmultiHR:fcLockStats('gmultiHR'),
       tot:fcLockStats('tot')
     };
     // Compute 14-day historical stats too. Triggers background fetch if not cached.
@@ -3812,11 +4264,14 @@ function renderResults(){
       tb:historicalLockStats('tb'),
       hr:historicalLockStats('hr'),
       bb:historicalLockStats('bb'),
+      bbat:historicalLockStats('bbat'),
       k:historicalLockStats('k'),
       pbb:historicalLockStats('pbb'),
+      gnoHR:historicalLockStats('gnoHR'),
+      gmultiHR:historicalLockStats('gmultiHR'),
       tot:historicalLockStats('tot')
     };
-    function statRow(todayStat,histStat){
+    function statRow(todayStat,histStat,prop){
       // Today's row
       let todayHTML;
       if(todayStat.rate==null){
@@ -3834,7 +4289,20 @@ function renderResults(){
         const c=histStat.totalRate>=70?'fcc-stat-g':histStat.totalRate>=50?'fcc-stat-y':'fcc-stat-r';
         histHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">14D</span> <span class="fcc-stat ${c}">${histStat.totalRate}%</span> <span class="fcc-stat-n">(${histStat.totalHits}/${histStat.totalN})</span></div>`;
       }
-      return todayHTML+histHTML;
+      // Top-N row (HR uses top-1; others top-2). Skip for run totals.
+      let topHTML='';
+      if(prop&&prop!=='tot'){
+        const n=prop==='hr'?1:2;
+        const t=historicalTopNStats(prop,n);
+        const lbl=`Top${n}`;
+        if(t.totalN===0){
+          topHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">${lbl}</span> <span class="fcc-stat-none">${HISTORY.loading?'…':'—'}</span></div>`;
+        }else{
+          const c=t.totalRate>=70?'fcc-stat-g':t.totalRate>=50?'fcc-stat-y':'fcc-stat-r';
+          topHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">${lbl}</span> <span class="fcc-stat ${c}">${t.totalRate}%</span> <span class="fcc-stat-n">(${t.totalHits}/${t.totalN})</span></div>`;
+        }
+      }
+      return todayHTML+histHTML+topHTML;
     }
     
     setMain(`
@@ -3860,37 +4328,52 @@ function renderResults(){
         <button class="fcc-card" onclick="RESULTS.prop='hits';renderResults()">
           <div class="fcc-icon">🎯</div>
           <div class="fcc-label">Hits</div>
-          ${statRow(stats.hits,hist.hits)}
+          ${statRow(stats.hits,hist.hits,"hits")}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='tb';renderResults()">
           <div class="fcc-icon">🏟️</div>
           <div class="fcc-label">Total Bases</div>
-          ${statRow(stats.tb,hist.tb)}
+          ${statRow(stats.tb,hist.tb,"tb")}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='hr';renderResults()">
           <div class="fcc-icon">💥</div>
           <div class="fcc-label">Home Runs</div>
-          ${statRow(stats.hr,hist.hr)}
+          ${statRow(stats.hr,hist.hr,"hr")}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='bb';renderResults()">
           <div class="fcc-icon">🚶</div>
           <div class="fcc-label">Walks (BB)</div>
-          ${statRow(stats.bb,hist.bb)}
+          ${statRow(stats.bb,hist.bb,"bb")}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='k';renderResults()">
           <div class="fcc-icon">⚡</div>
           <div class="fcc-label">Strikeouts</div>
-          ${statRow(stats.k,hist.k)}
+          ${statRow(stats.k,hist.k,"k")}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='pbb';renderResults()">
           <div class="fcc-icon">🚶</div>
           <div class="fcc-label">Walks Allowed</div>
-          ${statRow(stats.pbb,hist.pbb)}
+          ${statRow(stats.pbb,hist.pbb,"pbb")}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='bbat';renderResults()">
+          <div class="fcc-icon">⚡</div>
+          <div class="fcc-label">Batter Ks</div>
+          ${statRow(stats.bbat,hist.bbat,"bbat")}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='gnoHR';renderResults()">
+          <div class="fcc-icon">🚫</div>
+          <div class="fcc-label">0-1 HRs (Game)</div>
+          ${statRow(stats.gnoHR,hist.gnoHR,"gnoHR")}
+        </button>
+        <button class="fcc-card" onclick="RESULTS.prop='gmultiHR';renderResults()">
+          <div class="fcc-icon">💥</div>
+          <div class="fcc-label">2+ HRs (Game)</div>
+          ${statRow(stats.gmultiHR,hist.gmultiHR,"gmultiHR")}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='tot';renderResults()">
           <div class="fcc-icon">🎲</div>
           <div class="fcc-label">Run Totals</div>
-          ${statRow(stats.tot,hist.tot)}
+          ${statRow(stats.tot,hist.tot,"tot")}
         </button>
       </div>
       
@@ -3908,6 +4391,9 @@ function renderResults(){
       {prop:'bb',icon:'🚶',name:'Walks (BB)',lockTxt:'BB Score ≥ 72',metric:'Lock hit rate'},
       {prop:'k',icon:'⚡',name:'Strikeouts',lockTxt:'K Grade ≥ 72',metric:'Lock hit rate'},
       {prop:'pbb',icon:'🚶',name:'Walks Allowed',lockTxt:'BB Grade ≥ 72',metric:'Lock hit rate'},
+      {prop:'bbat',icon:'⚡',name:'Batter Strikeouts',lockTxt:'K Score ≥ 72',metric:'Lock hit rate'},
+      {prop:'gnoHR',icon:'🚫',name:'0-1 HRs (Game)',lockTxt:'Score ≥ 72',metric:'Lock hit rate'},
+      {prop:'gmultiHR',icon:'💥',name:'2+ HRs (Game)',lockTxt:'Score ≥ 72',metric:'Lock hit rate'},
       {prop:'tot',icon:'🎲',name:'Run Totals',lockTxt:'No grade — all games',metric:'Match rate (±0.4)'}
     ];
     
@@ -3965,16 +4451,19 @@ function renderFactCheckBody(prop){
   if(prop==='tb')return renderFCBatters('tb');
   if(prop==='hr')return renderFCBatters('hr');
   if(prop==='bb')return renderFCBatters('bb');
+  if(prop==='bbat')return renderFCBatters('bbat');
   if(prop==='k')return renderFCPitchers();
   if(prop==='pbb')return renderFCPitcherBB();
+  if(prop==='gnoHR')return renderFCGameHR('gnoHR');
+  if(prop==='gmultiHR')return renderFCGameHR('gmultiHR');
   if(prop==='tot')return renderFCTotals();
   return '';
 }
 
 function renderFCBatters(type){
-  const scoreKey=type==='hit'?'score':type==='tb'?'tbScore':type==='hr'?'hrScore':'bbScore';
-  const lockAt=type==='hit'?79.5:72;
-  const propLabel=type==='hit'?'🎯 Hit Score':type==='tb'?'🏟️ TB Score':type==='hr'?'💥 HR Score':'🚶 BB Score';
+  const scoreKey=type==='hit'?'score':type==='tb'?'tbScore':type==='hr'?'hrScore':type==='bb'?'bbScore':'batterKScore';
+  const lockAt=type==='hit'?LOCKS.hits:type==='tb'?LOCKS.tb:type==='hr'?LOCKS.hr:type==='bb'?LOCKS.bb:LOCKS.bbat;
+  const propLabel=type==='hit'?'🎯 Hit Score':type==='tb'?'🏟️ TB Score':type==='hr'?'💥 HR Score':type==='bb'?'🚶 BB Score':'⚡ K Score';
   
   const sorted=[...RESULTS.batters]
     .filter(b=>b[scoreKey]!=null)
@@ -4007,6 +4496,14 @@ function renderFCBatters(type){
       const actual=b.actualBB||0;
       const hit=actual>=predWhole;
       return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} BB (pred ${predWhole})`,hit};
+    }
+    if(type==='bbat'){
+      // Batter strikeouts: ✓ if actual K ≥ rounded predicted
+      if(b.batterExpectedK==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualK||0} K · no pred`,hit:null};
+      const predWhole=roundConservative(b.batterExpectedK);
+      const actual=b.actualK||0;
+      const hit=actual>=predWhole;
+      return {icon:hit?'✓':'✗',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} K (pred ${predWhole})`,hit};
     }
   }
   
@@ -4117,7 +4614,7 @@ function renderFCPitcherBB(){
   const played=sorted.filter(p=>p.played&&p.expectedBB!=null);
   const meanError=played.length?(played.reduce((s,p)=>s+Math.abs((p.actualBB||0)-p.expectedBB),0)/played.length).toFixed(2):'—';
   // Lock-only accuracy: conservative round + actual ≥ predicted
-  const lockSet=played.filter(p=>p.bbGrade>=72);
+  const lockSet=played.filter(p=>p.bbGrade>=LOCKS.pbb);
   const lockHits=lockSet.filter(p=>(p.actualBB||0)>=roundConservative(p.expectedBB)).length;
   const lockRate=lockSet.length?(lockHits/lockSet.length*100).toFixed(0)+'%':'—';
   
@@ -4210,11 +4707,82 @@ function renderFCTotals(){
   `;
 }
 
+// Game HR fact-check renderer for both 0-1 HR (gnoHR) and 2+ HR (gmultiHR) bets
+function renderFCGameHR(type){
+  const scoreKey=type==='gnoHR'?'noHRScore':'multiHRScore';
+  const lockAt=type==='gnoHR'?LOCKS.gnoHR:LOCKS.gmultiHR;
+  const propLabel=type==='gnoHR'?'🚫 0-1 HR Score':'💥 2+ HR Score';
+  const winCondition=type==='gnoHR'?(actual=>actual<=1):(actual=>actual>=2);
+  const winText=type==='gnoHR'?'≤1 HR':'≥2 HR';
+  
+  const sorted=[...RESULTS.totals].filter(t=>t[scoreKey]!=null).sort((a,b)=>b[scoreKey]-a[scoreKey]);
+  const played=sorted.filter(t=>t.played&&t.actualGameHR!=null);
+  const lockSet=played.filter(t=>t[scoreKey]>=lockAt);
+  const lockHits=lockSet.filter(t=>winCondition(t.actualGameHR)).length;
+  const lockRate=lockSet.length?Math.round(lockHits/lockSet.length*100)+'%':'—';
+  
+  const rows=sorted.map(t=>{
+    const r=getRat(t[scoreKey],lockAt);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    let icon='—',col='var(--mt)',txt='No final stats';
+    if(t.played&&t.actualGameHR!=null){
+      const win=winCondition(t.actualGameHR);
+      icon=win?'✓':'✗';
+      col=win?'var(--gn)':'var(--rd)';
+      txt=`${t.actualGameHR} HR total`;
+    }
+    return `<tr class="${rc}">
+      <td>${sbar(t[scoreKey])}</td>
+      <td>${bdg(r)}</td>
+      <td><strong style="color:var(--ac)">${t.totalHR?.toFixed(1)||'—'}</strong></td>
+      <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
+      <td style="color:${col};font-size:.62rem">${txt}</td>
+      <td class="l"><strong>${t.away} @ ${t.home}</strong></td>
+    </tr>`;
+  }).join('');
+  
+  return `
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${propLabel.replace(/[^A-Za-z+\- ]/g,'').trim()} ≥ ${lockAt} · n=${lockSet.length}</span></div>
+      <div class="pill"><span class="pn">${sorted.length}</span>Games</div>
+    </div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = game total ${winText} · ✗ = otherwise. xHR = projected total HRs in game.</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Score</th><th>Rating</th><th>xHR</th><th></th><th>Actual</th><th class="l">Game</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
+}
+
 
 /* ---------- SETTINGS TAB ---------- */
 function renderSettings(){
   setMain(`
     <div class="sw-wrap">
+      <div class="sw-grp">
+        <div class="sw-gt">🔄 Override Predictions (today)</div>
+        <div style="font-size:.6rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Predictions are saved to Firebase the first time anyone loads them, so they don't change as the day goes on. Use Override to force-recalculate today's predictions (e.g. after lineups confirm) and overwrite the saved snapshot for everyone.</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn bg" style="font-size:.65rem" onclick="overrideTodayPredictions()">⚠ Override Today's Predictions</button>
+        </div>
+        <div id="override-log" style="margin-top:8px;font-size:.55rem;color:var(--mt);font-family:'DM Mono',monospace"></div>
+      </div>
+      <div class="sw-grp">
+        <div class="sw-gt">🔒 Lock Thresholds (personal)</div>
+        <div style="font-size:.58rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Score required to qualify as a Lock for each prop. Affects live tabs and your personal historical accuracy stats. Not shared.</div>
+        <div class="sw-row"><span class="sw-lbl">🎯 Hits</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hits}" oninput="LOCKS.hits=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🏟️ Total Bases</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.tb}" oninput="LOCKS.tb=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">💥 Home Runs</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hr}" oninput="LOCKS.hr=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🚶 Walks (batter)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.bb}" oninput="LOCKS.bb=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">⚡ Strikeouts (pitcher)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.k}" oninput="LOCKS.k=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🚶 Walks Allowed (pitcher)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.pbb}" oninput="LOCKS.pbb=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">⚡ K's (batter)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.bbat}" oninput="LOCKS.bbat=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🎲 0-1 HRs (game)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.gnoHR}" oninput="LOCKS.gnoHR=+this.value||0;saveLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🎲 2+ HRs (game)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.gmultiHR}" oninput="LOCKS.gmultiHR=+this.value||0;saveLocks();renderTab()"></div>
+        <div style="margin-top:8px"><button class="btn bg" style="font-size:.7rem" onclick="resetLocks();renderSettings()">↻ Reset to defaults (79.5 / 72)</button></div>
+      </div>
       <div class="sw-grp">
         <div class="sw-gt">🔎 Qualification Thresholds</div>
         <div class="sw-row"><span class="sw-lbl">Batter min PA (season)</span><input class="sw-n" type="number" value="${Q.bPA}" oninput="Q.bPA=+this.value||0"></div>
@@ -4276,11 +4844,11 @@ function filtTbl(q,tbId){
 function sv(lbl,val,raw,avgVal,goodDir='high',isPitcher=false){
   let cls='',outline=false;
   if(raw!=null&&avgVal!=null&&avgVal!==0){
-    const pct=goodDir==='high'?(raw-avgVal)/(avgVal*0.25):(avgVal-raw)/(avgVal*0.25);
-    const eff=isPitcher?-pct:pct;
-    if(eff>=0.9){cls='e';outline=true;}
-    else if(eff>=0.3){cls='g';}
-    else if(eff<=-0.3){cls='b';}
+    const pctDiff=goodDir==='high'?(raw-avgVal)/(avgVal*0.25):(avgVal-raw)/(avgVal*0.25);
+    const eff=isPitcher?-pctDiff:pctDiff;
+    if(eff>=0.6){cls='e';outline=true;}      // elite hittable / elite batter
+    else if(eff>=0.15){cls='g';}              // green
+    else if(eff<=-0.15){cls='b';}             // red (good pitcher / bad batter)
   }
   return `<div class="sc2${outline?' sc2-elite':''}"><div class="sc2-l">${lbl}</div><div class="sc2-v ${cls}">${val}</div></div>`;
 }
@@ -4588,7 +5156,7 @@ function renderExplainBB(m){
         log5(batter BB%, pitcher BB%) × ${expectedPA} PA = <b style="color:${ratC}">${xBB!=null?xBB.toFixed(2):'—'} xBB</b>
         ${xBBWhole!=null?` → rounds to <b style="color:var(--tx)">${xBBWhole}</b>`:''}
       </div>
-      ${score>=72&&xBBWhole!=null&&xBBWhole<1?'<div style="font-size:.55rem;color:var(--rd);padding:4px 0">⚠ Lock floor enforced: a true lock would round to ≥1. This was demoted.</div>':''}
+      ${score>=LOCKS.bb&&xBBWhole!=null&&xBBWhole<1?'<div style="font-size:.55rem;color:var(--rd);padding:4px 0">⚠ Lock floor enforced: a true lock would round to ≥1. This was demoted.</div>':''}
     </div>
     
     <div class="why-section">
@@ -4614,7 +5182,7 @@ function renderExplainK(m){
   const L=STATE.leagueAvg;
   const pOv=pit.prev?.isPrevSeason?pit.prev.overall:pit.overall;
   const rec=pit.recent||{};
-  const rat=getRat(m.kGrade);
+  const rat=getRat(m.kGrade,LOCKS.k);
   const ratC=rat.c==='lock'?'var(--rd)':rat.c==='hot'?'var(--gd)':rat.c==='lean'?'var(--ac)':'var(--mt)';
   
   // Recreate the model's per-batter math with TTO + park K mult
@@ -4775,10 +5343,10 @@ function renderBatterCard(batterId,pitcherId,propType){
       ${bdg(getRat(Math.max(m.hitScore||0,m.hrScore||0,m.tbScore||0)))}
     </div>
     <div class="pred-g">
-      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore,79.5))}
-      ${pb('💥 HR',m.hrScore,getRat(m.hrScore))}
-      ${pb('🏟️ Total Bases',m.tbScore,getRat(m.tbScore))}
-      ${pb('🚶 Walks',m.bbScore,getRat(m.bbScore))}
+      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore,LOCKS.hits))}
+      ${pb('💥 HR',m.hrScore,getRat(m.hrScore,LOCKS.hr))}
+      ${pb('🏟️ Total Bases',m.tbScore,getRat(m.tbScore,LOCKS.tb))}
+      ${pb('🚶 Walks',m.bbScore,getRat(m.bbScore,LOCKS.bb))}
     </div>
     
     ${(()=>{
@@ -4839,6 +5407,8 @@ function renderBatterCard(batterId,pitcherId,propType){
       ${sv('WHIP',fmt(pOv.whip,2),pOv.whip,L.p_whip,'low',true)}
       ${sv('K%',pct(pSp?.k_rate??pOv.k_rate,1),pSp?.k_rate??pOv.k_rate,L.p_k,'high',true)}
       ${sv('BB%',pct(pOv.bb_rate,1),pOv.bb_rate,L.p_bb,'low',true)}
+      ${sv('H/IP',fmt(pOv.h_per_ip,2),pOv.h_per_ip,1.0,'low',true)}
+      ${sv('BB/IP',fmt(pOv.bb_per_ip,2),pOv.bb_per_ip,0.35,'low',true)}
       ${sv('HR/9',fmt(pOv.hr9,2),pOv.hr9,1.4,'low',true)}
       ${sv('IP',fmt(pOv.ip,1))}
     </div>`:''}
@@ -4891,10 +5461,10 @@ function renderPitcherCard(pitcherId){
         <div class="pcn">${m.pitcherName}</div>
         <div class="pcm"><span style="color:${hc(m.pHand)}">${m.pHand}HP</span> · ${m.team.abbr||m.team.name} vs ${m.opp.abbr||m.opp.name} · ${m.venue.replace(/(Stadium|Park|Field)/i,'').trim()}</div>
       </div>
-      ${bdg(getRat(m.kGrade))}
+      ${bdg(getRat(m.kGrade,LOCKS.k))}
     </div>
     <div class="pred-g" style="grid-template-columns:repeat(3,1fr)">
-      ${pb('K Grade',m.kGrade,getRat(m.kGrade))}
+      ${pb('K Grade',m.kGrade,getRat(m.kGrade,LOCKS.k))}
       <div class="pred-b"><div class="pred-l">Expected K</div><div class="pred-v" style="color:var(--ac)">${m.expectedK}</div><div class="pred-s">over ${m.expectedIP} IP</div></div>
       <div class="pred-b"><div class="pred-l">Baseline</div><div class="pred-v" style="color:var(--mt)">${m.avgBaseline}</div><div class="pred-s">league avg SP</div></div>
     </div>
