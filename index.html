@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.11 · Prop Intelligence</title>
+<title>Diamond IQ v6.12 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.11 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.12 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -3602,15 +3602,26 @@ function renderTotals(){
         if(!odds)return '';
         const ourTotal=t.total;
         const dkLine=odds.total?.point;
-        const totalEdge=dkLine!=null?(ourTotal-dkLine).toFixed(1):null;
-        const totalEdgeColor=totalEdge==null?'var(--mt)':Math.abs(parseFloat(totalEdge))>=0.5?(parseFloat(totalEdge)>0?'var(--gn)':'var(--rd)'):'var(--mt2)';
+        const totalEdgeNum=dkLine!=null?parseFloat((ourTotal-dkLine).toFixed(1)):null;
+        const totalIsEdge=totalEdgeNum!=null&&Math.abs(totalEdgeNum)>=1.0;
+        const totalEdgeColor=totalIsEdge?(totalEdgeNum>0?'var(--gn)':'var(--rd)'):'var(--ac)';
+        const totalEdgeStr=totalEdgeNum!=null?` · <span style="color:${totalEdgeColor}">model ${totalEdgeNum>0?'+':''}${totalEdgeNum}</span>`:'';
+        
         // Moneyline pick from our model: whichever side has more projected runs
         const ourPick=t.homeRuns>t.awayRuns?'home':t.awayRuns>t.homeRuns?'away':null;
         const dkML=odds.moneyline;
+        // DK favorite = lower (more negative) price. Disagreement = our pick != DK favorite.
+        let mlEdgeColor='var(--ac)';
+        if(ourPick&&dkML&&dkML.home!=null&&dkML.away!=null){
+          const dkFav=dkML.home<dkML.away?'home':'away';
+          if(dkFav!==ourPick)mlEdgeColor='var(--gn)';
+        }
+        const ourPickStr=ourPick?` · we like <b style="color:${mlEdgeColor}">${ourPick==='home'?g.home.abbr:g.away.abbr}</b>`:'';
+        
         return `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--bd);display:flex;flex-wrap:wrap;gap:6px;font-size:.55rem">
-          ${odds.total?`<div class="rtc-f" style="background:rgba(0,212,255,.05)">📊 DK O/U <b>${dkLine}</b> (${fmtML(odds.total.over)}/${fmtML(odds.total.under)})${totalEdge!=null?` · model ${totalEdge>0?'+':''}${totalEdge}`:''}</div>`:''}
-          ${dkML?`<div class="rtc-f" style="background:rgba(0,212,255,.05)">💰 ML ${g.away.abbr} ${fmtML(dkML.away)} / ${g.home.abbr} ${fmtML(dkML.home)}${ourPick?` · we like <b style="color:var(--gd)">${ourPick==='home'?g.home.abbr:g.away.abbr}</b>`:''}</div>`:''}
-          ${odds.spread?.point!=null?`<div class="rtc-f" style="background:rgba(0,212,255,.05)">📐 Spread ${odds.spread.point>0?'+':''}${odds.spread.point}</div>`:''}
+          ${odds.total?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">📊 DK O/U <b>${dkLine}</b> (${fmtML(odds.total.over)}/${fmtML(odds.total.under)})${totalEdgeStr}</div>`:''}
+          ${dkML?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">💰 ML ${g.away.abbr} ${fmtML(dkML.away)} / ${g.home.abbr} ${fmtML(dkML.home)}${ourPickStr}</div>`:''}
+          ${odds.spread?.point!=null?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">📐 Spread ${odds.spread.point>0?'+':''}${odds.spread.point}</div>`:''}
         </div>`;
       })()}
     </div>`;
@@ -3645,16 +3656,19 @@ function renderHRLine(){
     const g=t.game;
     const pickColor=t.hrLinePick==='Over'?'var(--gn)':'var(--ac)';
     const lockTag=t.hrLineScore>=LOCKS.hrLine?'<span style="font-size:.55rem;color:var(--rd);margin-left:4px">🔒</span>':'';
-    // DK total signal: high run total → leans toward more HRs (agrees with Over picks)
+    // DK total signal: only flag if DK's total strongly conflicts with our HR direction.
+    // Picking Over HRs but DK has total ≤ 7.0 (low-scoring game expected) = real conflict.
+    // Picking Under HRs but DK has total ≥ 9.5 (high-scoring game expected) = real conflict.
+    // Anything else = neutral white display.
     const odds=getOddsForGame(STATE.date,g.home.name,g.away.name);
     let dkSignal='—';
     if(odds?.total?.point!=null){
       const pt=odds.total.point;
-      const agreesWithPick=(t.hrLinePick==='Over'&&pt>=9)||(t.hrLinePick==='Under'&&pt<=7.5);
-      const conflictsWithPick=(t.hrLinePick==='Over'&&pt<=7.5)||(t.hrLinePick==='Under'&&pt>=9);
-      const sigColor=agreesWithPick?'var(--gn)':conflictsWithPick?'var(--rd)':'var(--mt2)';
-      const sigIcon=agreesWithPick?'✓':conflictsWithPick?'⚠':'';
-      dkSignal=`<span style="color:${sigColor};font-weight:${agreesWithPick||conflictsWithPick?'700':'400'}">${pt}${sigIcon?' '+sigIcon:''}</span>`;
+      const conflictsWithPick=(t.hrLinePick==='Over'&&pt<=7.0)||(t.hrLinePick==='Under'&&pt>=9.5);
+      const sigColor=conflictsWithPick?'var(--rd)':'var(--ac)';
+      const sigIcon=conflictsWithPick?' ⚠':'';
+      const sigWeight=conflictsWithPick?'700':'400';
+      dkSignal=`<span style="color:${sigColor};font-weight:${sigWeight}">${pt}${sigIcon}</span>`;
     }
     return `<tr class="${rc}" onclick="openHRLineMo('${g.gamePk}')">
       <td><strong style="color:${pickColor};font-size:1rem">${t.hrLinePick}</strong>${lockTag}</td>
@@ -3668,7 +3682,7 @@ function renderHRLine(){
   
   setMain(`
     ${backBar('💥 HR O/U 1.5 (Game)','hrLine')}
-    <div class="info" style="font-size:.6rem;margin-bottom:8px">Bet column = model's call on Over or Under 1.5 total HRs. 🔒 = high-confidence (Lock). xHR = projected total HRs. DK Tot = DraftKings game run total (✓ if it agrees with our HR direction, ⚠ if it conflicts).</div>
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">Bet column = model's call on Over or Under 1.5 total HRs. 🔒 = high-confidence (Lock). xHR = projected total HRs. DK Tot = DraftKings game run total (⚠ in red only when DK strongly disagrees with our HR direction).</div>
     <div class="sum">
       <div class="pill lk"><span class="pn">${lk}</span>🔒 Locks</div>
       <div class="pill"><span class="pn" style="color:var(--gn)">${overCount}</span>Over picks</div>
