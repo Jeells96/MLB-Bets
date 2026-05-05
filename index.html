@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.12 · Prop Intelligence</title>
+<title>Diamond IQ v6.13 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.12 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.13 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -787,6 +787,8 @@ async function fetchOdds(date,force=false){
     ODDS.data[date]={games,fetchedAt:Date.now()};
     oddsSaveCache();
     console.log(`[DIQ] Fetched ${games.length} odds (${ODDS.callsRemaining} calls left)`);
+    // Share with everyone via Firebase so non-PIN users get the same data
+    pushSharedOdds(date);
     return ODDS.data[date];
   }catch(e){
     ODDS.lastError=e.message;
@@ -836,6 +838,48 @@ function getOddsForGame(date,homeName,awayName){
 function fmtML(price){
   if(price==null)return '—';
   return price>0?`+${price}`:`${price}`;
+}
+
+// Push the locally fetched odds snapshot to Firestore so all users share it.
+// Doc key: odds_{date}. Doc body: {date, games, fetchedAt, callsRemaining, fetchedBy}.
+async function pushSharedOdds(date){
+  if(!FB.ready||!ODDS.data[date])return;
+  try{
+    const entry=ODDS.data[date];
+    await FB.db.collection('app_settings').doc(`odds_${date}`).set({
+      date,
+      games:entry.games,
+      fetchedAt:entry.fetchedAt,
+      callsRemaining:ODDS.callsRemaining,
+      updatedAt:Date.now()
+    });
+    console.log(`[DIQ] Pushed shared odds for ${date}`);
+  }catch(e){console.warn('[DIQ] pushSharedOdds failed',e.message);}
+}
+
+// Pull shared odds from Firestore. Always overwrites local cache because Firebase is
+// the canonical "what was DK saying" snapshot — local-only fetches happened too, but
+// Firebase represents what the PIN-holder shared with the group.
+async function pullSharedOdds(date){
+  if(!FB.ready||!date)return;
+  try{
+    const doc=await FB.db.collection('app_settings').doc(`odds_${date}`).get();
+    if(!doc.exists)return;
+    const d=doc.data();
+    if(!d.games||!d.fetchedAt)return;
+    const localFetchedAt=ODDS.data[date]?.fetchedAt||0;
+    // Use Firebase version if it's newer than local (or local doesn't exist)
+    if(d.fetchedAt>=localFetchedAt){
+      ODDS.data[date]={games:d.games,fetchedAt:d.fetchedAt};
+      if(d.callsRemaining!=null)ODDS.callsRemaining=d.callsRemaining;
+      oddsSaveCache();
+      console.log(`[DIQ] Pulled shared odds for ${date} (${d.games.length} games)`);
+      // Re-render if user is on a tab that displays odds
+      if(['tot','hrLine'].includes(UI.tab))renderTab();
+      const panel=document.getElementById('odds-panel');
+      if(panel)panel.innerHTML=renderOddsPanel();
+    }
+  }catch(e){console.warn('[DIQ] pullSharedOdds failed',e.message);}
 }
 
 // ─── FIREBASE: shared 14-day history so all users see the same trends ───
@@ -964,6 +1008,7 @@ async function bootPullWithRetry(){
   }
   await pullSharedHistory();
   await pullSharedLocks();
+  await pullSharedOdds(todayStr());
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
 }
@@ -1108,37 +1153,49 @@ function renderOddsPanel(){
   const callsLeft=ODDS.callsRemaining!=null?ODDS.callsRemaining:'?';
   const cacheAgeMin=entry?.fetchedAt?Math.round((Date.now()-entry.fetchedAt)/60000):null;
   
-  if(!ODDS.unlocked){
-    return `
-      <div style="margin-bottom:8px">DraftKings odds (h2h, totals, spreads) for live cross-checking against model picks. Limited to 500 calls/month.</div>
-      <div style="margin-bottom:8px">Enter PIN to unlock the fetch button:</div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <input id="odds-pin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN" 
-          style="background:var(--bg2);border:1px solid var(--bd);color:var(--ac);padding:6px 8px;border-radius:4px;font-family:'DM Mono',monospace;width:80px;font-size:.7rem">
-        <button class="btn bg" style="font-size:.65rem" onclick="unlockOddsPin()">Unlock</button>
-        <span id="odds-pin-status" style="font-size:.55rem;color:var(--rd)"></span>
-      </div>`;
-  }
-  
-  let statusLine='';
+  // Shared status line — visible to everyone, PIN or not
+  let sharedStatusLine='';
   if(entry){
     const gameCount=entry.games?.length||0;
-    statusLine=`<div style="margin-bottom:6px">✓ Loaded ${gameCount} games · cached ${cacheAgeMin} min ago${fresh?' (fresh)':' (stale)'}</div>`;
+    const ageStr=cacheAgeMin<60?`${cacheAgeMin} min ago`:`${Math.round(cacheAgeMin/60)} hr ago`;
+    const ageColor=cacheAgeMin<60?'var(--gn)':cacheAgeMin<240?'var(--gd)':'var(--rd)';
+    sharedStatusLine=`<div style="margin-bottom:6px">✓ ${gameCount} games loaded · <span style="color:${ageColor}">${ageStr}</span>${fresh?' (fresh)':' (stale)'}</div>`;
   }else{
-    statusLine='<div style="margin-bottom:6px;color:var(--mt)">No odds loaded yet for today</div>';
+    sharedStatusLine='<div style="margin-bottom:6px;color:var(--mt)">No odds loaded yet for today</div>';
+  }
+  
+  if(!ODDS.unlocked){
+    return `
+      <div style="margin-bottom:8px">DraftKings odds (h2h, totals, spreads) shared via Firebase. One pull serves everyone — no need to fetch yourself.</div>
+      ${sharedStatusLine}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        <button class="btn bg" style="font-size:.65rem" onclick="triggerSharedOddsPull()">↓ Pull Latest from Firebase</button>
+      </div>
+      <div style="font-size:.5rem;color:var(--mt);margin-bottom:8px">Don't see today's odds? Ask a PIN-holder to refresh, or pull latest in case they already did.</div>
+      <div style="border-top:1px dashed var(--bd);padding-top:8px;margin-top:6px">
+        <div style="margin-bottom:4px;font-size:.55rem;color:var(--mt2)">PIN required to fetch fresh odds (uses 1 of 500 monthly calls):</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="odds-pin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN" 
+            style="background:var(--bg2);border:1px solid var(--bd);color:var(--ac);padding:6px 8px;border-radius:4px;font-family:'DM Mono',monospace;width:80px;font-size:.7rem">
+          <button class="btn bg" style="font-size:.65rem" onclick="unlockOddsPin()">Unlock</button>
+          <span id="odds-pin-status" style="font-size:.55rem;color:var(--rd)"></span>
+        </div>
+      </div>`;
   }
   
   const errorLine=ODDS.lastError?`<div style="color:var(--rd);font-size:.55rem;margin-bottom:6px">Last error: ${ODDS.lastError}</div>`:'';
   
   return `
-    ${statusLine}
+    ${sharedStatusLine}
     ${errorLine}
     <div style="margin-bottom:6px">📅 Calls remaining this month: <strong style="color:${callsLeft<50?'var(--rd)':callsLeft<150?'var(--gd)':'var(--gn)'}">${callsLeft}</strong> / 500</div>
+    <div style="font-size:.5rem;color:var(--mt2);margin-bottom:8px">Every fetch is auto-shared via Firebase, so other users don't need their own pull.</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
       <button class="btn bg" style="font-size:.65rem" onclick="triggerOddsFetch(false)">${ODDS.loading?'Loading…':'↻ Refresh Odds'}</button>
+      <button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerSharedOddsPull()">↓ Pull from Firebase</button>
       ${entry&&fresh?`<button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerOddsFetch(true)">⚠ Force Refresh (uses 1 call)</button>`:''}
     </div>
-    <div style="font-size:.5rem;color:var(--mt);margin-top:6px">Auto-cached for 30 min. Forces a real call only if cache is stale or you click Force.</div>
+    <div style="font-size:.5rem;color:var(--mt);margin-top:6px">Auto-cached for 30 min. Pulls from API only if cache is stale or you click Force.</div>
   `;
 }
 
@@ -1165,6 +1222,17 @@ async function triggerOddsFetch(force){
   await fetchOdds(date,force);
   if(panel)panel.innerHTML=renderOddsPanel();
   if(['hits','hr','tb','k','bb','pbb','bbat','hrLine','tot'].includes(UI.tab))renderTab();
+}
+
+// Pull the latest shared odds snapshot from Firebase. Available to all users — uses
+// zero API budget. The PIN-holder's most recent fetch is what gets pulled.
+async function triggerSharedOddsPull(){
+  const date=STATE.date||todayStr();
+  const panel=document.getElementById('odds-panel');
+  if(panel)panel.innerHTML='<div style="color:var(--mt);padding:6px">Pulling from Firebase…</div>';
+  await pullSharedOdds(date);
+  if(panel)panel.innerHTML=renderOddsPanel();
+  if(['tot','hrLine'].includes(UI.tab))renderTab();
 }
 
 async function overrideTodayPredictions(){
