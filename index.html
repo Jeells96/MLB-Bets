@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.4 · Prop Intelligence</title>
+<title>Diamond IQ v6.5 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.4 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.5 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -535,7 +535,45 @@ const UI={
 const Q={bPA:40,bSp:15,pIP:10,pTBF:25};
 
 // Lock thresholds — fixed defaults for all users so historical stats are comparable
-const LOCKS=Object.freeze({hits:79.5,tb:72,hr:72,bb:72,k:72,pbb:72,bbat:72,gnoHR:72,gmultiHR:72});
+// Shared lock thresholds — adjustable by any user, synced via Firebase so everyone sees the same.
+// Defaults shown here; live values get pulled from Firestore on boot.
+const LOCKS_DEFAULTS={hits:79.5,tb:72,hr:72,bb:72,k:72,pbb:72,bbat:72,hrLine:72,gnoHR:72,gmultiHR:72};
+const LOCKS={...LOCKS_DEFAULTS};
+// Pull shared lock thresholds on boot (will overwrite defaults if Firebase has values)
+async function pullSharedLocks(){
+  if(!FB.ready)return;
+  try{
+    const doc=await FB.db.collection('app_settings').doc('locks').get();
+    if(!doc.exists)return;
+    const data=doc.data()||{};
+    let changed=false;
+    Object.keys(LOCKS_DEFAULTS).forEach(k=>{
+      if(typeof data[k]==='number'&&data[k]!==LOCKS[k]){
+        LOCKS[k]=data[k];changed=true;
+      }
+    });
+    if(changed){
+      console.log('[DIQ] Pulled shared lock thresholds from Firebase');
+      renderTab();
+    }
+  }catch(e){console.warn('[DIQ] pullSharedLocks failed',e.message);}
+}
+// Push current LOCKS to Firebase so all users see the change. Throttled to avoid spam.
+let pushLocksTimer=null;
+function pushSharedLocks(){
+  if(!FB.ready)return;
+  clearTimeout(pushLocksTimer);
+  pushLocksTimer=setTimeout(async()=>{
+    try{
+      await FB.db.collection('app_settings').doc('locks').set({...LOCKS,updatedAt:Date.now()});
+      console.log('[DIQ] Pushed shared lock thresholds to Firebase');
+    }catch(e){console.warn('[DIQ] pushSharedLocks failed',e.message);}
+  },800);
+}
+function resetLocks(){
+  Object.assign(LOCKS,LOCKS_DEFAULTS);
+  pushSharedLocks();
+}
 // Clean up any leftover localStorage from the previous personalized version
 try{localStorage.removeItem('diq_locks');}catch(e){}
 
@@ -606,7 +644,9 @@ function predSnapshot(){
     venue:t.game.venue,
     totalHR:t.totalHR,
     noHRScore:t.noHRScore,
-    multiHRScore:t.multiHRScore
+    multiHRScore:t.multiHRScore,
+    hrLinePick:t.hrLinePick,
+    hrLineScore:t.hrLineScore
   }));
   PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now(),schemaV:3};
   predSave();
@@ -788,6 +828,7 @@ async function bootPullWithRetry(){
     return;
   }
   await pullSharedHistory();
+  await pullSharedLocks();
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
 }
@@ -2478,12 +2519,22 @@ function buildRunTotals(){
     const awayRuns=estimateTeamRuns(g.aLineup,STATE.pitchers[g.hSP?.id],g.hSPHand||'R',pk,wx,venue);
     const total=homeRuns!=null&&awayRuns!=null?Math.round((homeRuns+awayRuns)*10)/10:null;
     const hrExp=gameHRExpectation(g);
+    // Derive single Over/Under 1.5 pick from the existing scores. Whichever side has higher confidence wins.
+    const noScore=hrExp?.noHRScore;
+    const multiScore=hrExp?.multiHRScore;
+    let hrLinePick=null,hrLineScore=null;
+    if(noScore!=null&&multiScore!=null){
+      if(noScore>=multiScore){hrLinePick='Under';hrLineScore=noScore;}
+      else{hrLinePick='Over';hrLineScore=multiScore;}
+    }
     STATE.totals.push({
       game:g,homeRuns,awayRuns,total,
       park:pk,wx,
       totalHR:hrExp?.totalHR,
-      noHRScore:hrExp?.noHRScore,
-      multiHRScore:hrExp?.multiHRScore,
+      noHRScore:noScore,
+      multiHRScore:multiScore,
+      hrLinePick,
+      hrLineScore,
       hSPhr:hrExp?.hSPhr,aSPhr:hrExp?.aSPhr,
       hrEnvMult:hrExp?.envMult
     });
@@ -2636,7 +2687,7 @@ function sw(tab){
   UI.tab=tab;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   // Map sub-pages back to their parent tab in the visible nav
-  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',bb:'dash',pbb:'dash',tot:'dash',gnoHR:'dash',gmultiHR:'dash',bbat:'dash'};
+  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',bb:'dash',pbb:'dash',tot:'dash',hrLine:'dash',bbat:'dash'};
   const navTab=parentMap[tab]||tab;
   document.getElementById('t-'+navTab)?.classList.add('active');
   renderTab();
@@ -2656,8 +2707,7 @@ function renderTab(){
     case 'bb':renderBatterBB();break;
     case 'pbb':renderPitcherBB();break;
     case 'tot':renderTotals();break;
-    case 'gnoHR':renderGameNoHR();break;
-    case 'gmultiHR':renderGameMultiHR();break;
+    case 'gnoHR':case 'gmultiHR':case 'hrLine':renderHRLine();break;
     case 'bbat':renderBatterKs();break;
     case 'res':renderResults();break;
     case 'srch':renderSrch();break;
@@ -2746,14 +2796,9 @@ function renderDashboard(){
         <span class="hc-prop-label">Run Totals</span>
         <span class="hc-prop-arr">→</span>
       </button>
-      <button class="hc-prop" onclick="goToProp('gnoHR')">
-        <span class="hc-prop-icon">🚫</span>
-        <span class="hc-prop-label">0-1 HRs in Game</span>
-        <span class="hc-prop-arr">→</span>
-      </button>
-      <button class="hc-prop" onclick="goToProp('gmultiHR')">
+      <button class="hc-prop" onclick="goToProp('hrLine')">
         <span class="hc-prop-icon">💥</span>
-        <span class="hc-prop-label">2+ HRs in Game</span>
+        <span class="hc-prop-label">HR O/U 1.5</span>
         <span class="hc-prop-arr">→</span>
       </button>
     </div>
@@ -2794,8 +2839,7 @@ function fcRendererFor(prop){
   if(prop==='bbat')return ()=>renderFCBatters('bbat');
   if(prop==='k')return renderFCPitchers;
   if(prop==='pbb')return renderFCPitcherBB;
-  if(prop==='gnoHR')return ()=>renderFCGameHR('gnoHR');
-  if(prop==='gmultiHR')return ()=>renderFCGameHR('gmultiHR');
+  if(prop==='gnoHR'||prop==='gmultiHR'||prop==='hrLine')return ()=>renderFCHRLine();
   if(prop==='tot')return renderFCTotals;
   return null;
 }
@@ -3357,21 +3401,23 @@ function renderTotals(){
 }
 
 /* ---------- SEARCH TAB ---------- */
-function renderGameNoHR(){
-  if(maybeRenderDrillView('🚫 0-1 HRs (Game)','gnoHR'))return;
-  const data=[...STATE.totals].filter(t=>t.noHRScore!=null).sort((a,b)=>b.noHRScore-a.noHRScore);
-  if(!data.length){setMain(`${backBar('🚫 0-1 HRs (Game)','gnoHR')}<div class="empty">No game HR estimates available</div>`);return;}
+function renderHRLine(){
+  if(maybeRenderDrillView('💥 HR O/U 1.5 (Game)','hrLine'))return;
+  const data=[...STATE.totals].filter(t=>t.hrLineScore!=null).sort((a,b)=>b.hrLineScore-a.hrLineScore);
+  if(!data.length){setMain(`${backBar('💥 HR O/U 1.5 (Game)','hrLine')}<div class="empty">No game HR estimates available</div>`);return;}
   
-  const lk=data.filter(t=>t.noHRScore>=LOCKS.gnoHR).length;
-  const ht=data.filter(t=>t.noHRScore>=62&&t.noHRScore<LOCKS.gnoHR).length;
+  const lk=data.filter(t=>t.hrLineScore>=LOCKS.hrLine).length;
+  const overCount=data.filter(t=>t.hrLinePick==='Over').length;
+  const underCount=data.filter(t=>t.hrLinePick==='Under').length;
   
   const rows=data.map(t=>{
-    const r=getRat(t.noHRScore,LOCKS.gnoHR);
+    const r=getRat(t.hrLineScore,LOCKS.hrLine);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const g=t.game;
+    const pickColor=t.hrLinePick==='Over'?'var(--gn)':'var(--ac)';
+    const lockTag=t.hrLineScore>=LOCKS.hrLine?'<span style="font-size:.55rem;color:var(--rd);margin-left:4px">🔒</span>':'';
     return `<tr class="${rc}" onclick="openGameMo('${g.gamePk}')">
-      <td>${sbar(t.noHRScore)}</td>
-      <td>${bdg(r)}</td>
+      <td><strong style="color:${pickColor};font-size:1rem">${t.hrLinePick}</strong>${lockTag}</td>
       <td><strong style="color:var(--ac)">${t.totalHR.toFixed(1)}</strong></td>
       <td class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
       <td style="color:var(--mt2)">${t.aSPhr?.toFixed(1)||'—'} / ${t.hSPhr?.toFixed(1)||'—'}</td>
@@ -3380,55 +3426,16 @@ function renderGameNoHR(){
   }).join('');
   
   setMain(`
-    ${backBar('🚫 0-1 HRs (Game)','gnoHR')}
-    <div class="info" style="font-size:.6rem;margin-bottom:8px">Score = confidence the game ends with 0 or 1 total HRs. Lower projected total HRs = better.</div>
+    ${backBar('💥 HR O/U 1.5 (Game)','hrLine')}
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">Bet column = model's call on Over or Under 1.5 total HRs. 🔒 = high-confidence (Lock). xHR = projected total HRs.</div>
     <div class="sum">
-      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
-      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
-      <div class="pill"><span class="pn">${data.length}</span>Games</div>
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Locks</div>
+      <div class="pill"><span class="pn" style="color:var(--gn)">${overCount}</span>Over picks</div>
+      <div class="pill"><span class="pn" style="color:var(--ac)">${underCount}</span>Under picks</div>
     </div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Score</th><th>Rating</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>
-  `);
-}
-
-function renderGameMultiHR(){
-  if(maybeRenderDrillView('💥💥 2+ HRs (Game)','gmultiHR'))return;
-  const data=[...STATE.totals].filter(t=>t.multiHRScore!=null).sort((a,b)=>b.multiHRScore-a.multiHRScore);
-  if(!data.length){setMain(`${backBar('💥💥 2+ HRs (Game)','gmultiHR')}<div class="empty">No game HR estimates available</div>`);return;}
-  
-  const lk=data.filter(t=>t.multiHRScore>=LOCKS.gmultiHR).length;
-  const ht=data.filter(t=>t.multiHRScore>=62&&t.multiHRScore<LOCKS.gmultiHR).length;
-  
-  const rows=data.map(t=>{
-    const r=getRat(t.multiHRScore,LOCKS.gmultiHR);
-    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
-    const g=t.game;
-    return `<tr class="${rc}" onclick="openGameMo('${g.gamePk}')">
-      <td>${sbar(t.multiHRScore)}</td>
-      <td>${bdg(r)}</td>
-      <td><strong style="color:var(--ac)">${t.totalHR.toFixed(1)}</strong></td>
-      <td class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
-      <td style="color:var(--mt2)">${t.aSPhr?.toFixed(1)||'—'} / ${t.hSPhr?.toFixed(1)||'—'}</td>
-      <td style="color:var(--mt2)">${t.park?.hr.toFixed(2)||'—'}</td>
-    </tr>`;
-  }).join('');
-  
-  setMain(`
-    ${backBar('💥💥 2+ HRs (Game)','gmultiHR')}
-    <div class="info" style="font-size:.6rem;margin-bottom:8px">Score = confidence the game has 2+ total HRs. Higher projected total HRs = better.</div>
-    <div class="sum">
-      <div class="pill lk"><span class="pn">${lk}</span>🔒 Lock</div>
-      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
-      <div class="pill"><span class="pn">${data.length}</span>Games</div>
-    </div>
-    <div class="tbl-wrap"><table>
-      <thead><tr>
-        <th>Score</th><th>Rating</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th>
+        <th>Bet</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -3904,27 +3911,23 @@ function historicalLockStats(prop){
         const got=(r.k||0)>=predWhole;
         n++;if(got)hits++;outcomes.push(got);
       });
-    }else if(prop==='gnoHR'){
-      // 0-1 HR game bet: ✓ if game total HRs ≤ 1
-      const lockSet=(pred.totals||[]).filter(t=>t.noHRScore>=LOCKS.gnoHR);
-      lockSet.forEach(t=>{
-        const r=hist.games[t.gamePk];
-        if(!r)return;
-        // Need gameHR field — historical fetch doesn't capture it yet, derive from boxscore if missing
-        const totalHR=r.gameHR;
-        if(totalHR==null)return;
-        const got=totalHR<=1;
-        n++;if(got)hits++;outcomes.push(got);
+    }else if(prop==='hrLine'||prop==='gnoHR'||prop==='gmultiHR'){
+      // HR Over/Under 1.5: ✓ if pick was correct
+      // Backward compat: derive pick from old fields if missing
+      const enriched=(pred.totals||[]).map(t=>{
+        if(t.hrLinePick!=null&&t.hrLineScore!=null)return t;
+        if(t.noHRScore!=null&&t.multiHRScore!=null){
+          const pick=t.noHRScore>=t.multiHRScore?'Under':'Over';
+          const score=Math.max(t.noHRScore,t.multiHRScore);
+          return {...t,hrLinePick:pick,hrLineScore:score};
+        }
+        return t;
       });
-    }else if(prop==='gmultiHR'){
-      // 2+ HR game bet: ✓ if game total HRs ≥ 2
-      const lockSet=(pred.totals||[]).filter(t=>t.multiHRScore>=LOCKS.gmultiHR);
+      const lockSet=enriched.filter(t=>t.hrLineScore>=LOCKS.hrLine);
       lockSet.forEach(t=>{
         const r=hist.games[t.gamePk];
-        if(!r)return;
-        const totalHR=r.gameHR;
-        if(totalHR==null)return;
-        const got=totalHR>=2;
+        if(!r||r.gameHR==null)return;
+        const got=t.hrLinePick==='Over'?(r.gameHR>=2):(r.gameHR<=1);
         n++;if(got)hits++;outcomes.push(got);
       });
     }else if(prop==='tot'){
@@ -3956,7 +3959,7 @@ function renderHistoryBadge(prop){
       mainTxt='<span style="color:var(--mt)">calculating…</span>';
     }else{
       // For new bet types added in v6.3, explain why there's no history yet
-      const isNewBetType=['gnoHR','gmultiHR','bbat'].includes(prop);
+      const isNewBetType=['hrLine','gnoHR','gmultiHR','bbat'].includes(prop);
       mainTxt=isNewBetType
         ?'<span style="color:var(--mt)">new — accumulates over time</span>'
         :'<span style="color:var(--mt)">no history</span>';
@@ -4139,19 +4142,25 @@ function fcLockStats(prop){
     const hits=lockSet.filter(p=>(p.actualBB||0)>=roundConservative(p.expectedBB)).length;
     return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.pitchers.length,lockAt:LOCKS.pbb};
   }
-  if(prop==='gnoHR'){
-    // 0-1 HR game bet: ✓ if total HRs in game ≤ 1
-    const played=RESULTS.totals.filter(t=>t.played&&t.noHRScore!=null);
-    const lockSet=played.filter(t=>t.noHRScore>=LOCKS.gnoHR);
-    const hits=lockSet.filter(t=>(t.actualGameHR||0)<=1).length;
-    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.totals.length,lockAt:LOCKS.gnoHR};
-  }
-  if(prop==='gmultiHR'){
-    // 2+ HR game bet: ✓ if total HRs in game ≥ 2
-    const played=RESULTS.totals.filter(t=>t.played&&t.multiHRScore!=null);
-    const lockSet=played.filter(t=>t.multiHRScore>=LOCKS.gmultiHR);
-    const hits=lockSet.filter(t=>(t.actualGameHR||0)>=2).length;
-    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.totals.length,lockAt:LOCKS.gmultiHR};
+  if(prop==='hrLine'||prop==='gnoHR'||prop==='gmultiHR'){
+    // HR Over/Under 1.5: ✓ if pick was correct (Over → ≥2 HR, Under → ≤1 HR)
+    // Backward compat: if old data has noHRScore/multiHRScore but no hrLinePick, derive
+    const enriched=RESULTS.totals.map(t=>{
+      if(t.hrLinePick!=null)return t;
+      if(t.noHRScore!=null&&t.multiHRScore!=null){
+        const pick=t.noHRScore>=t.multiHRScore?'Under':'Over';
+        const score=Math.max(t.noHRScore,t.multiHRScore);
+        return {...t,hrLinePick:pick,hrLineScore:score};
+      }
+      return t;
+    });
+    const played=enriched.filter(t=>t.played&&t.actualGameHR!=null&&t.hrLineScore!=null);
+    const lockSet=played.filter(t=>t.hrLineScore>=LOCKS.hrLine);
+    const hits=lockSet.filter(t=>{
+      if(t.hrLinePick==='Over')return t.actualGameHR>=2;
+      return t.actualGameHR<=1;
+    }).length;
+    return {n:lockSet.length,hits,rate:lockSet.length?Math.round(hits/lockSet.length*100):null,total:RESULTS.totals.length,lockAt:LOCKS.hrLine};
   }
   if(prop==='tot'){
     const played=RESULTS.totals.filter(t=>t.played);
@@ -4265,6 +4274,7 @@ function renderResults(){
       pbb:fcLockStats('pbb'),
       gnoHR:fcLockStats('gnoHR'),
       gmultiHR:fcLockStats('gmultiHR'),
+      hrLine:fcLockStats('hrLine'),
       tot:fcLockStats('tot')
     };
     // Compute 14-day historical stats too. Triggers background fetch if not cached.
@@ -4279,6 +4289,7 @@ function renderResults(){
       pbb:historicalLockStats('pbb'),
       gnoHR:historicalLockStats('gnoHR'),
       gmultiHR:historicalLockStats('gmultiHR'),
+      hrLine:historicalLockStats('hrLine'),
       tot:historicalLockStats('tot')
     };
     function statRow(todayStat,histStat,prop){
@@ -4370,15 +4381,10 @@ function renderResults(){
           <div class="fcc-label">Batter Ks</div>
           ${statRow(stats.bbat,hist.bbat,"bbat")}
         </button>
-        <button class="fcc-card" onclick="RESULTS.prop='gnoHR';renderResults()">
-          <div class="fcc-icon">🚫</div>
-          <div class="fcc-label">0-1 HRs (Game)</div>
-          ${statRow(stats.gnoHR,hist.gnoHR,"gnoHR")}
-        </button>
-        <button class="fcc-card" onclick="RESULTS.prop='gmultiHR';renderResults()">
+        <button class="fcc-card" onclick="RESULTS.prop='hrLine';renderResults()">
           <div class="fcc-icon">💥</div>
-          <div class="fcc-label">2+ HRs (Game)</div>
-          ${statRow(stats.gmultiHR,hist.gmultiHR,"gmultiHR")}
+          <div class="fcc-label">HR O/U 1.5</div>
+          ${statRow(stats.hrLine,hist.hrLine,"hrLine")}
         </button>
         <button class="fcc-card" onclick="RESULTS.prop='tot';renderResults()">
           <div class="fcc-icon">🎲</div>
@@ -4402,8 +4408,7 @@ function renderResults(){
       {prop:'k',icon:'⚡',name:'Strikeouts',lockTxt:'K Grade ≥ 72',metric:'Lock hit rate'},
       {prop:'pbb',icon:'🚶',name:'Walks Allowed',lockTxt:'BB Grade ≥ 72',metric:'Lock hit rate'},
       {prop:'bbat',icon:'⚡',name:'Batter Strikeouts',lockTxt:'K Score ≥ 72',metric:'Lock hit rate'},
-      {prop:'gnoHR',icon:'🚫',name:'0-1 HRs (Game)',lockTxt:'Score ≥ 72',metric:'Lock hit rate'},
-      {prop:'gmultiHR',icon:'💥',name:'2+ HRs (Game)',lockTxt:'Score ≥ 72',metric:'Lock hit rate'},
+      {prop:'hrLine',icon:'💥',name:'HR O/U 1.5 (Game)',lockTxt:`Score ≥ ${LOCKS.hrLine}`,metric:'Lock pick rate'},
       {prop:'tot',icon:'🎲',name:'Run Totals',lockTxt:'No grade — all games',metric:'Match rate (±0.4)'}
     ];
     
@@ -4464,8 +4469,7 @@ function renderFactCheckBody(prop){
   if(prop==='bbat')return renderFCBatters('bbat');
   if(prop==='k')return renderFCPitchers();
   if(prop==='pbb')return renderFCPitcherBB();
-  if(prop==='gnoHR')return renderFCGameHR('gnoHR');
-  if(prop==='gmultiHR')return renderFCGameHR('gmultiHR');
+  if(prop==='gnoHR'||prop==='gmultiHR'||prop==='hrLine')return renderFCHRLine();
   if(prop==='tot')return renderFCTotals();
   return '';
 }
@@ -4718,32 +4722,40 @@ function renderFCTotals(){
 }
 
 // Game HR fact-check renderer for both 0-1 HR (gnoHR) and 2+ HR (gmultiHR) bets
-function renderFCGameHR(type){
-  const scoreKey=type==='gnoHR'?'noHRScore':'multiHRScore';
-  const lockAt=type==='gnoHR'?LOCKS.gnoHR:LOCKS.gmultiHR;
-  const propLabel=type==='gnoHR'?'🚫 0-1 HR Score':'💥 2+ HR Score';
-  const winCondition=type==='gnoHR'?(actual=>actual<=1):(actual=>actual>=2);
-  const winText=type==='gnoHR'?'≤1 HR':'≥2 HR';
+function renderFCHRLine(){
+  // Backward compat: if old saved data has only noHRScore/multiHRScore (no hrLinePick), derive on the fly
+  const sorted=[...RESULTS.totals].map(t=>{
+    if(t.hrLinePick!=null&&t.hrLineScore!=null)return t;
+    if(t.noHRScore!=null&&t.multiHRScore!=null){
+      const pick=t.noHRScore>=t.multiHRScore?'Under':'Over';
+      const score=Math.max(t.noHRScore,t.multiHRScore);
+      return {...t,hrLinePick:pick,hrLineScore:score};
+    }
+    return t;
+  }).filter(t=>t.hrLineScore!=null).sort((a,b)=>b.hrLineScore-a.hrLineScore);
   
-  const sorted=[...RESULTS.totals].filter(t=>t[scoreKey]!=null).sort((a,b)=>b[scoreKey]-a[scoreKey]);
   const played=sorted.filter(t=>t.played&&t.actualGameHR!=null);
-  const lockSet=played.filter(t=>t[scoreKey]>=lockAt);
-  const lockHits=lockSet.filter(t=>winCondition(t.actualGameHR)).length;
+  const lockSet=played.filter(t=>t.hrLineScore>=LOCKS.hrLine);
+  const lockHits=lockSet.filter(t=>{
+    if(t.hrLinePick==='Over')return t.actualGameHR>=2;
+    return t.actualGameHR<=1;
+  }).length;
   const lockRate=lockSet.length?Math.round(lockHits/lockSet.length*100)+'%':'—';
   
   const rows=sorted.map(t=>{
-    const r=getRat(t[scoreKey],lockAt);
+    const r=getRat(t.hrLineScore,LOCKS.hrLine);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const pickColor=t.hrLinePick==='Over'?'var(--gn)':'var(--ac)';
+    const lockTag=t.hrLineScore>=LOCKS.hrLine?'<span style="font-size:.55rem;color:var(--rd);margin-left:4px">🔒</span>':'';
     let icon='—',col='var(--mt)',txt='No final stats';
     if(t.played&&t.actualGameHR!=null){
-      const win=winCondition(t.actualGameHR);
+      const win=t.hrLinePick==='Over'?(t.actualGameHR>=2):(t.actualGameHR<=1);
       icon=win?'✓':'✗';
       col=win?'var(--gn)':'var(--rd)';
-      txt=`${t.actualGameHR} HR total`;
+      txt=`${t.actualGameHR} HR`;
     }
     return `<tr class="${rc}">
-      <td>${sbar(t[scoreKey])}</td>
-      <td>${bdg(r)}</td>
+      <td><strong style="color:${pickColor}">${t.hrLinePick}</strong>${lockTag}</td>
       <td><strong style="color:var(--ac)">${t.totalHR?.toFixed(1)||'—'}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
@@ -4753,13 +4765,13 @@ function renderFCGameHR(type){
   
   return `
     <div class="sum">
-      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${propLabel.replace(/[^A-Za-z+\- ]/g,'').trim()} ≥ ${lockAt} · n=${lockSet.length}</span></div>
+      <div class="pill lk"><span class="pn">${lockRate}</span>🔒 Lock hit rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">HR Score ≥ ${LOCKS.hrLine} · n=${lockSet.length}</span></div>
       <div class="pill"><span class="pn">${sorted.length}</span>Games</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = game total ${winText} · ✗ = otherwise. xHR = projected total HRs in game.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Bet column = model's call. ✓ = pick was correct (Over → ≥2 HR, Under → ≤1 HR). 🔒 = high-confidence (Lock).</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Score</th><th>Rating</th><th>xHR</th><th></th><th>Actual</th><th class="l">Game</th>
+        <th>Bet</th><th>xHR</th><th></th><th>Actual</th><th class="l">Game</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -4771,6 +4783,19 @@ function renderFCGameHR(type){
 function renderSettings(){
   setMain(`
     <div class="sw-wrap">
+      <div class="sw-grp">
+        <div class="sw-gt">🔒 Lock Thresholds (shared)</div>
+        <div style="font-size:.58rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Score required to qualify as a Lock for each prop. Changes sync to Firebase so all users see the same thresholds.</div>
+        <div class="sw-row"><span class="sw-lbl">🎯 Hits</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hits}" oninput="LOCKS.hits=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🏟️ Total Bases</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.tb}" oninput="LOCKS.tb=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">💥 Home Runs (batter)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hr}" oninput="LOCKS.hr=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🚶 Walks (batter)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.bb}" oninput="LOCKS.bb=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">⚡ K's (batter)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.bbat}" oninput="LOCKS.bbat=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">⚡ Strikeouts (pitcher)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.k}" oninput="LOCKS.k=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">🚶 Walks Allowed (pitcher)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.pbb}" oninput="LOCKS.pbb=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div class="sw-row"><span class="sw-lbl">💥 HR O/U 1.5 (game)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hrLine}" oninput="LOCKS.hrLine=+this.value||0;pushSharedLocks();renderTab()"></div>
+        <div style="margin-top:8px"><button class="btn bg" style="font-size:.7rem" onclick="resetLocks();renderSettings()">↻ Reset to defaults (79.5 / 72)</button></div>
+      </div>
       <div class="sw-grp">
         <div class="sw-gt">🔄 Override Predictions (today)</div>
         <div style="font-size:.6rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Predictions are saved to Firebase the first time anyone loads them, so they don't change as the day goes on. Use Override to force-recalculate today's predictions (e.g. after lineups confirm) and overwrite the saved snapshot for everyone.</div>
