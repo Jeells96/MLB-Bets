@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.9 · Prop Intelligence</title>
+<title>Diamond IQ v6.10 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.9 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.10 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -634,21 +634,45 @@ function predSnapshot(){
     expectedBB:m.expectedBB,
     bbGrade:m.bbGrade
   }));
-  const totals=(STATE.totals||[]).filter(t=>t.total!=null).map(t=>({
-    gamePk:String(t.game.gamePk),
-    home:t.game.home.abbr||t.game.home.name,
-    away:t.game.away.abbr||t.game.away.name,
-    total:t.total,
-    homeRuns:t.homeRuns,
-    awayRuns:t.awayRuns,
-    venue:t.game.venue,
-    totalHR:t.totalHR,
-    noHRScore:t.noHRScore,
-    multiHRScore:t.multiHRScore,
-    hrLinePick:t.hrLinePick,
-    hrLineScore:t.hrLineScore
-  }));
-  PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now(),schemaV:3};
+  const totals=(STATE.totals||[]).filter(t=>t.total!=null).map(t=>{
+    const g=t.game;
+    const hSP=STATE.pitchers[g.hSP?.id];
+    const aSP=STATE.pitchers[g.aSP?.id];
+    function spInputs(sp){
+      if(!sp||!sp.overall.ip)return {name:sp?.name||'TBD',hr9:null,sIP:null};
+      const ov=sp.prev?.isPrevSeason?sp.prev.overall:sp.overall;
+      return {
+        name:sp.name,
+        hr9:ov.hr9!=null?Math.round(ov.hr9*100)/100:null,
+        sIP:ov.avgIP!=null?Math.round(ov.avgIP*10)/10:null
+      };
+    }
+    return {
+      gamePk:String(g.gamePk),
+      home:g.home.abbr||g.home.name,
+      away:g.away.abbr||g.away.name,
+      total:t.total,
+      homeRuns:t.homeRuns,
+      awayRuns:t.awayRuns,
+      venue:g.venue,
+      totalHR:t.totalHR,
+      noHRScore:t.noHRScore,
+      multiHRScore:t.multiHRScore,
+      hrLinePick:t.hrLinePick,
+      hrLineScore:t.hrLineScore,
+      // Math inputs (added in v6.10 so past dates can show breakdown)
+      hSPhr:t.hSPhr,
+      aSPhr:t.aSPhr,
+      hSPInputs:spInputs(hSP),
+      aSPInputs:spInputs(aSP),
+      parkHR:t.park?.hr,
+      hrEnvMult:t.hrEnvMult,
+      isDome:DOMED.has(g.venue)&&!DOME_OPENS.has(g.venue),
+      windSpeed:t.wx?.windSpeed,
+      temp:t.wx?.temp
+    };
+  });
+  PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now(),schemaV:4};
   predSave();
   
   // Push to Firebase. For past dates: first-write-wins (so original snapshot is preserved).
@@ -4079,6 +4103,12 @@ function renderHistoryBadge(prop){
     <div class="hist-expanded">
       ${top2Section}
       <div style="font-size:.5rem;color:var(--mt);padding:0 4px 4px;letter-spacing:.06em;text-transform:uppercase">tap a day to view that day's results</div>
+      <div style="font-size:.5rem;color:var(--mt2);padding:0 4px 4px;font-family:'DM Mono',monospace">
+        Lock cutoff: ${(()=>{
+          const m={hits:LOCKS.hits,tb:LOCKS.tb,hr:LOCKS.hr,bb:LOCKS.bb,k:LOCKS.k,pbb:LOCKS.pbb,bbat:LOCKS.bbat,hrLine:LOCKS.hrLine};
+          return m[prop]??'?';
+        })()} · Saved: ${predCount} pred · ${histCount} results
+      </div>
       <table style="width:100%;font-size:.6rem;border-collapse:collapse">
         <tbody>${rows||emptyMsg}${totalLine}</tbody>
       </table>
@@ -4530,7 +4560,7 @@ function renderFCBatters(type){
     const r=getRat(b[scoreKey],lockAt);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const o=outcome(b);
-    return `<tr class="${rc}">
+    return `<tr class="${rc}" onclick="openHistoryRowMo('batter',RESULTS.date,'${b.id}','${type}')" style="cursor:pointer">
       <td>${sbar(b[scoreKey],lockAt)}</td>
       <td style="color:${o.col};font-weight:700;font-size:1rem">${o.icon}</td>
       <td style="color:${o.col};font-size:.62rem">${o.txt}</td>
@@ -4594,7 +4624,7 @@ function renderFCPitchers(){
       txt=`${p.actualKs} K · ${p.actualIP} IP`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
-    return `<tr class="${rc}">
+    return `<tr class="${rc}" onclick="openHistoryRowMo('pitcher',RESULTS.date,'${p.id}','k')" style="cursor:pointer">
       <td>${sbar(p.grade)}</td>
       <td><strong style="color:var(--ac)">${predWhole!=null?predWhole:p.xK}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
@@ -4646,7 +4676,7 @@ function renderFCPitcherBB(){
       txt=`${actual} BB · ${p.actualIP||0} IP`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
-    return `<tr class="${rc}">
+    return `<tr class="${rc}" onclick="openHistoryRowMo('pitcher',RESULTS.date,'${p.id}','pbb')" style="cursor:pointer">
       <td>${sbar(p.bbGrade)}</td>
       <td><strong style="color:var(--ac)">${predWhole!=null?predWhole:(p.expectedBB!=null?p.expectedBB:'—')}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
@@ -4694,7 +4724,7 @@ function renderFCTotals(){
       txt=`${t.actualTotal} (${t.actualAway}-${t.actualHome})`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
-    return `<tr>
+    return `<tr onclick="openHistoryRowMo('total',RESULTS.date,'${t.gamePk}')" style="cursor:pointer">
       <td><strong style="color:var(--gd);font-size:1.1rem">${predWhole}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
@@ -4754,7 +4784,7 @@ function renderFCHRLine(){
       col=win?'var(--gn)':'var(--rd)';
       txt=`${t.actualGameHR} HR`;
     }
-    return `<tr class="${rc}">
+    return `<tr class="${rc}" onclick="openHRLineMo('${t.gamePk}',{fromHistory:true,date:RESULTS.date})" style="cursor:pointer">
       <td><strong style="color:${pickColor}">${t.hrLinePick}</strong>${lockTag}</td>
       <td><strong style="color:var(--ac)">${t.totalHR?.toFixed(1)||'—'}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
@@ -5676,65 +5706,281 @@ function closeMo(){
   document.body.style.overflow='';
 }
 
+// Lightweight history modal for FC drill-down. Shows the saved prediction fields
+// + actual outcome. Less detailed than live matchup modal (we don't save splits/recent form
+// in the snapshot), but enough to verify what the model picked and what happened.
+function openHistoryRowMo(type,date,id,extra){
+  const pred=PRED.byDate[date];
+  const hist=HISTORY.byDate[date];
+  if(!pred){closeMo();return;}
+  
+  const mh=document.getElementById('mh');
+  const mb=document.getElementById('mb');
+  let head='',body='';
+  
+  if(type==='batter'){
+    const propType=extra; // 'hit'|'tb'|'hr'|'bb'|'bbat'
+    const b=(pred.batters||[]).find(x=>String(x.id)===String(id));
+    if(!b){closeMo();return;}
+    const r=hist?.batters?.[b.id];
+    const played=!!r&&(r.ab>0||r.pa>0);
+    const lockMap={hit:LOCKS.hits,tb:LOCKS.tb,hr:LOCKS.hr,bb:LOCKS.bb,bbat:LOCKS.bbat};
+    const scoreMap={hit:b.score,tb:b.tbScore,hr:b.hrScore,bb:b.bbScore,bbat:b.batterKScore};
+    const labelMap={hit:'🎯 Hits',tb:'🏟️ Total Bases',hr:'💥 Home Runs',bb:'🚶 Walks',bbat:'⚡ Strikeouts'};
+    const score=scoreMap[propType];
+    const lockAt=lockMap[propType];
+    const isLock=score!=null&&score>=lockAt;
+    
+    let actualLine='Did not play',outcome=null,outcomeColor='var(--mt)';
+    if(played){
+      if(propType==='hit'){
+        outcome=r.h>0;
+        actualLine=`${r.h} H · ${r.ab} AB · ${r.bb||0} BB${r.hr?' · '+r.hr+' HR':''}`;
+      }else if(propType==='tb'){
+        const pred_=roundConservative(b.expectedTB||0);
+        outcome=(r.tb||0)>=pred_;
+        actualLine=`${r.tb||0} TB (predicted ${pred_})`;
+      }else if(propType==='hr'){
+        outcome=(r.hr||0)>0;
+        actualLine=`${r.hr||0} HR · ${r.ab} AB`;
+      }else if(propType==='bb'){
+        const pred_=roundConservative(b.expectedBB||0);
+        outcome=(r.bb||0)>=pred_;
+        actualLine=`${r.bb||0} BB (predicted ${pred_})`;
+      }else if(propType==='bbat'){
+        const pred_=roundConservative(b.batterExpectedK||0);
+        outcome=(r.k||0)>=pred_;
+        actualLine=`${r.k||0} K (predicted ${pred_})`;
+      }
+      outcomeColor=outcome?'var(--gn)':'var(--rd)';
+    }
+    
+    head=`<div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px">${b.name}</div>
+      <div style="font-size:.58rem;color:var(--mt2);margin-top:2px">${b.bats==='L'?'LHB':b.bats==='S'?'SHB':'RHB'} · #${b.order} · ${b.team} vs <span style="color:${hc(b.pHand)}">${b.pHand}HP</span> ${b.pitcherName}</div>
+      <div style="font-size:.55rem;color:var(--mt);margin-top:2px">${date}</div>
+    </div>
+    <button class="mc" onclick="closeMo()">✕</button>`;
+    
+    body=`<div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:.55rem;color:var(--mt);letter-spacing:.08em;text-transform:uppercase">${labelMap[propType]}</div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:2.5rem;color:var(--ac);line-height:1;margin-top:2px">${score!=null?score.toFixed(1):'—'}${isLock?' 🔒':''}</div>
+      <div style="font-size:.6rem;color:var(--mt2)">Lock at ${lockAt}+</div>
+    </div>
+    
+    <div class="slbl">📊 Prediction Details</div>
+    <div style="background:var(--bg2);padding:8px;border-radius:6px;margin-bottom:10px">
+      <table style="width:100%;font-size:.62rem;border-collapse:collapse">
+        ${propType==='tb'&&b.expectedTB!=null?`<tr><td style="color:var(--mt2);padding:3px 0">Expected TB</td><td style="text-align:right;font-family:'DM Mono',monospace">${b.expectedTB.toFixed(2)}</td></tr>`:''}
+        ${propType==='bb'&&b.expectedBB!=null?`<tr><td style="color:var(--mt2);padding:3px 0">Expected BB</td><td style="text-align:right;font-family:'DM Mono',monospace">${b.expectedBB.toFixed(2)}</td></tr>`:''}
+        ${propType==='bbat'&&b.batterExpectedK!=null?`<tr><td style="color:var(--mt2);padding:3px 0">Expected K</td><td style="text-align:right;font-family:'DM Mono',monospace">${b.batterExpectedK.toFixed(2)}</td></tr>`:''}
+        <tr><td style="color:var(--mt2);padding:3px 0">All scores</td><td style="text-align:right;font-family:'DM Mono',monospace;font-size:.55rem">Hit ${b.score?.toFixed(0)||'—'} · TB ${b.tbScore?.toFixed(0)||'—'} · HR ${b.hrScore?.toFixed(0)||'—'}</td></tr>
+        ${b.bbScore!=null||b.batterKScore!=null?`<tr><td></td><td style="text-align:right;font-family:'DM Mono',monospace;font-size:.55rem">BB ${b.bbScore?.toFixed(0)||'—'} · K ${b.batterKScore?.toFixed(0)||'—'}</td></tr>`:''}
+      </table>
+    </div>
+    
+    <div class="slbl">⚾ Outcome</div>
+    <div style="background:var(--bg2);padding:10px;border-radius:6px;border:${outcome!=null?`2px solid ${outcomeColor}`:'1px solid var(--bd)'}">
+      ${outcome!=null?`<div style="font-size:.7rem;color:${outcomeColor};font-weight:700;margin-bottom:4px">${outcome?'✓ Pick won':'✗ Pick lost'}</div>`:''}
+      <div style="font-size:.62rem;color:var(--mt2)">${actualLine}</div>
+    </div>
+    
+    <div style="font-size:.5rem;color:var(--mt);text-align:center;margin-top:14px;line-height:1.5">
+      Past predictions show summary only.<br>For full split-vs-RHP/LHP math, view today's slate in the betting tab.
+    </div>`;
+  }
+  else if(type==='pitcher'){
+    const propType=extra; // 'k' or 'pbb'
+    const p=(pred.pitchers||[]).find(x=>String(x.id)===String(id));
+    if(!p){closeMo();return;}
+    const r=hist?.pitchers?.[p.id];
+    const played=!!r;
+    const lockAt=propType==='k'?LOCKS.k:LOCKS.pbb;
+    const score=propType==='k'?p.grade:p.bbGrade;
+    const isLock=score!=null&&score>=lockAt;
+    
+    let actualLine='Did not pitch',outcome=null,outcomeColor='var(--mt)';
+    if(played){
+      if(propType==='k'){
+        const pred_=roundConservative(p.xK||0);
+        outcome=r.k>=pred_;
+        actualLine=`${r.k} K · ${r.ip} IP · ${r.bf||'—'} BF (predicted ${pred_} K)`;
+      }else{
+        const pred_=roundConservative(p.expectedBB||0);
+        outcome=(r.bb||0)>=pred_;
+        actualLine=`${r.bb||0} BB · ${r.ip} IP (predicted ${pred_})`;
+      }
+      outcomeColor=outcome?'var(--gn)':'var(--rd)';
+    }
+    
+    head=`<div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px">${p.name}</div>
+      <div style="font-size:.58rem;color:var(--mt2);margin-top:2px"><span style="color:${hc(p.pHand)}">${p.pHand}HP</span> · ${p.team} vs ${p.opp}</div>
+      <div style="font-size:.55rem;color:var(--mt);margin-top:2px">${date}</div>
+    </div>
+    <button class="mc" onclick="closeMo()">✕</button>`;
+    
+    body=`<div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:.55rem;color:var(--mt);letter-spacing:.08em;text-transform:uppercase">${propType==='k'?'⚡ Strikeouts':'🚶 Walks Allowed'}</div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:2.5rem;color:var(--ac);line-height:1;margin-top:2px">${score!=null?score.toFixed(1):'—'}${isLock?' 🔒':''}</div>
+      <div style="font-size:.6rem;color:var(--mt2)">Lock at ${lockAt}+</div>
+    </div>
+    
+    <div class="slbl">📊 Prediction Details</div>
+    <div style="background:var(--bg2);padding:8px;border-radius:6px;margin-bottom:10px">
+      <table style="width:100%;font-size:.62rem;border-collapse:collapse">
+        ${propType==='k'?`
+          <tr><td style="color:var(--mt2);padding:3px 0">Expected K</td><td style="text-align:right;font-family:'DM Mono',monospace">${p.xK?.toFixed(2)||'—'}</td></tr>
+          ${p.lowK!=null?`<tr><td style="color:var(--mt2);padding:3px 0">K Range (±1σ)</td><td style="text-align:right;font-family:'DM Mono',monospace">${p.lowK.toFixed(1)} – ${p.highK.toFixed(1)}</td></tr>`:''}
+        `:`
+          <tr><td style="color:var(--mt2);padding:3px 0">Expected BB</td><td style="text-align:right;font-family:'DM Mono',monospace">${p.expectedBB?.toFixed(2)||'—'}</td></tr>
+        `}
+        <tr><td style="color:var(--mt2);padding:3px 0">All grades</td><td style="text-align:right;font-family:'DM Mono',monospace;font-size:.55rem">K ${p.grade?.toFixed(0)||'—'} · BB ${p.bbGrade?.toFixed(0)||'—'}</td></tr>
+      </table>
+    </div>
+    
+    <div class="slbl">⚾ Outcome</div>
+    <div style="background:var(--bg2);padding:10px;border-radius:6px;border:${outcome!=null?`2px solid ${outcomeColor}`:'1px solid var(--bd)'}">
+      ${outcome!=null?`<div style="font-size:.7rem;color:${outcomeColor};font-weight:700;margin-bottom:4px">${outcome?'✓ Pick won':'✗ Pick lost'}</div>`:''}
+      <div style="font-size:.62rem;color:var(--mt2)">${actualLine}</div>
+    </div>
+    
+    <div style="font-size:.5rem;color:var(--mt);text-align:center;margin-top:14px;line-height:1.5">
+      Past predictions show summary only.<br>For full TTO penalty + opp lineup math, view today's slate in the betting tab.
+    </div>`;
+  }
+  else if(type==='total'){
+    const t=(pred.totals||[]).find(x=>String(x.gamePk)===String(id));
+    if(!t){closeMo();return;}
+    const r=hist?.games?.[t.gamePk];
+    const played=!!r&&r.total!=null;
+    let outcome=null,outcomeColor='var(--mt)',actualLine='No final score';
+    if(played){
+      const predRound=Math.round(t.total);
+      outcome=Math.abs(r.total-predRound)<=0.4;
+      outcomeColor=outcome?'var(--gn)':'var(--rd)';
+      actualLine=`${r.awayRuns}–${r.homeRuns} (final ${r.total}, predicted ${t.total.toFixed(1)})`;
+    }
+    head=`<div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px">🎲 ${t.away} @ ${t.home}</div>
+      <div style="font-size:.58rem;color:var(--mt2);margin-top:2px">${t.venue} · ${date}</div>
+    </div>
+    <button class="mc" onclick="closeMo()">✕</button>`;
+    body=`<div style="text-align:center;margin-bottom:14px">
+      <div style="font-size:.55rem;color:var(--mt);letter-spacing:.08em;text-transform:uppercase">Run Total</div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:2.5rem;color:var(--ac);line-height:1;margin-top:2px">${t.total.toFixed(1)}</div>
+      <div style="font-size:.6rem;color:var(--mt2)">Predicted ${t.awayRuns}–${t.homeRuns}</div>
+    </div>
+    <div class="slbl">⚾ Outcome</div>
+    <div style="background:var(--bg2);padding:10px;border-radius:6px;border:${outcome!=null?`2px solid ${outcomeColor}`:'1px solid var(--bd)'}">
+      ${outcome!=null?`<div style="font-size:.7rem;color:${outcomeColor};font-weight:700;margin-bottom:4px">${outcome?'✓ Within 0.4 of predicted':'✗ Off by more than 0.4'}</div>`:''}
+      <div style="font-size:.62rem;color:var(--mt2)">${actualLine}</div>
+    </div>`;
+  }
+  
+  mh.innerHTML=head;
+  mb.innerHTML=body;
+  document.getElementById('mo').classList.add('open');
+  document.body.style.overflow='hidden';
+}
+
 // Detailed HR Over/Under math breakdown shown when user taps a row in the HR O/U tab.
 // Walks through every input feeding the projection so the user can see why the model
 // picked Over or Under instead of just trusting a black-box pick.
-function openHRLineMo(gamePk){
-  const g=STATE.games.find(g=>String(g.gamePk)===String(gamePk));
-  if(!g)return;
-  const t=STATE.totals.find(t=>String(t.game.gamePk)===String(gamePk));
-  if(!t||t.totalHR==null){closeMo();return;}
+function openHRLineMo(gamePk,opts={}){
+  // Works for both live STATE (today) and saved snapshots (past dates).
+  // If `opts.fromHistory` is true, reads from PRED.byDate[opts.date] instead of STATE.
+  const fromHistory=!!opts.fromHistory;
+  let entry=null,gameLabel='',venue='',homeAbbr='',awayAbbr='';
+  let parkHR=null,windSpeed=null,temp=null,isDome=false;
+  let aSPName='TBD',hSPName='TBD',aSPhr9=null,hSPhr9=null,aSPip=null,hSPip=null;
+  let aSPhr=null,hSPhr=null,totalHR=null,envMult=null;
   
-  const wx=g.weather;
-  const pk=g.parkFactor;
-  const venue=g.venue;
-  const isDome=DOMED.has(venue)&&!DOME_OPENS.has(venue);
-  
-  const parkHR=pk?.hr||1.0;
-  const windF=wx&&!isDome?windHRFactor(venue,wx):1.0;
-  const tempF=wx&&!isDome?(1+(wx.temp-70)*0.005):1.0;
-  const envMult=parkHR*windF*tempF;
-  
-  const lgHR9=1.2;
-  const hSP=STATE.pitchers[g.hSP?.id];
-  const aSP=STATE.pitchers[g.aSP?.id];
-  
-  // Per-team breakdown
-  function teamMath(sp,label){
-    if(!sp||!sp.overall.ip){
-      const ipTotal=9;
-      const hr=lgHR9*ipTotal*envMult/9;
-      return {label,starter:'No SP data — using league avg HR/9 over 9 IP',
-        sIP:'—',hr9:'—',sHR:'—',bpIP:'—',bpHR:'—',totalHR:hr};
+  if(fromHistory){
+    const pred=PRED.byDate[opts.date];
+    if(!pred)return closeMo();
+    entry=(pred.totals||[]).find(t=>String(t.gamePk)===String(gamePk));
+    if(!entry||entry.totalHR==null){closeMo();return;}
+    venue=entry.venue||'';
+    homeAbbr=entry.home; awayAbbr=entry.away;
+    parkHR=entry.parkHR; envMult=entry.hrEnvMult;
+    isDome=!!entry.isDome; windSpeed=entry.windSpeed; temp=entry.temp;
+    aSPName=entry.aSPInputs?.name||'Unknown SP';
+    hSPName=entry.hSPInputs?.name||'Unknown SP';
+    aSPhr9=entry.aSPInputs?.hr9; aSPip=entry.aSPInputs?.sIP;
+    hSPhr9=entry.hSPInputs?.hr9; hSPip=entry.hSPInputs?.sIP;
+    aSPhr=entry.aSPhr; hSPhr=entry.hSPhr;
+    totalHR=entry.totalHR;
+  }else{
+    const g=STATE.games.find(g=>String(g.gamePk)===String(gamePk));
+    if(!g)return;
+    const t=STATE.totals.find(t=>String(t.game.gamePk)===String(gamePk));
+    if(!t||t.totalHR==null){closeMo();return;}
+    venue=g.venue;
+    homeAbbr=g.home.abbr||g.home.name;
+    awayAbbr=g.away.abbr||g.away.name;
+    isDome=DOMED.has(venue)&&!DOME_OPENS.has(venue);
+    parkHR=g.parkFactor?.hr||1.0;
+    if(g.weather){windSpeed=g.weather.windSpeed; temp=g.weather.temp;}
+    const windF=g.weather&&!isDome?windHRFactor(venue,g.weather):1.0;
+    const tempF=g.weather&&!isDome?(1+(g.weather.temp-70)*0.005):1.0;
+    envMult=parkHR*windF*tempF;
+    const hSP=STATE.pitchers[g.hSP?.id];
+    const aSP=STATE.pitchers[g.aSP?.id];
+    aSPName=g.aSP?.name||'TBD'; hSPName=g.hSP?.name||'TBD';
+    if(aSP&&aSP.overall.ip){
+      const ov=aSP.prev?.isPrevSeason?aSP.prev.overall:aSP.overall;
+      aSPhr9=ov.hr9; aSPip=ov.avgIP;
     }
-    const ov=sp.prev?.isPrevSeason?sp.prev.overall:sp.overall;
-    const hr9=ov.hr9||lgHR9;
-    const sIP=clamp(ov.avgIP||5.5,3.5,7.0);
-    const bpIP=Math.max(9-sIP,2);
-    const sHR=hr9*sIP*envMult/9;
-    const bpHR=lgHR9*bpIP*envMult/9;
-    return {label,starter:sp.name,
-      sIP:sIP.toFixed(1),hr9:hr9.toFixed(2),
-      sHR:sHR.toFixed(2),
-      bpIP:bpIP.toFixed(1),bpHR:bpHR.toFixed(2),
-      totalHR:sHR+bpHR};
+    if(hSP&&hSP.overall.ip){
+      const ov=hSP.prev?.isPrevSeason?hSP.prev.overall:hSP.overall;
+      hSPhr9=ov.hr9; hSPip=ov.avgIP;
+    }
+    aSPhr=t.aSPhr; hSPhr=t.hSPhr;
+    totalHR=t.totalHR;
   }
   
-  const homeMath=teamMath(hSP,'Home pitching');
-  const awayMath=teamMath(aSP,'Away pitching');
+  const lgHR9=1.2;
+  const windF=isDome||windSpeed==null?1.0:(envMult&&parkHR&&temp!=null?envMult/(parkHR*(1+(temp-70)*0.005)):1.0);
+  const tempF=isDome||temp==null?1.0:(1+(temp-70)*0.005);
   
-  // Confidence math (matches gameHRExpectation)
-  const totalHR=t.totalHR;
+  // Per-team breakdown for display
+  function teamCard(label,spName,hr9,sIP,sideHR){
+    if(hr9==null||sIP==null){
+      return `<div style="background:var(--bg2);padding:8px;border-radius:6px;margin-bottom:8px">
+        <div style="font-size:.65rem;font-weight:600;color:var(--ac);margin-bottom:4px">${label}</div>
+        <div style="font-size:.58rem;color:var(--mt2)">${spName} — pitcher data unavailable</div>
+        <div style="font-size:.58rem;color:var(--mt);margin-top:4px">Used league avg HR/9 (${lgHR9}) over the full 9 IP for this side.</div>
+        ${sideHR!=null?`<div style="font-size:.6rem;margin-top:6px;color:var(--gd)">→ ${sideHR.toFixed(2)} expected HRs allowed</div>`:''}
+      </div>`;
+    }
+    const sIPClamped=Math.max(3.5,Math.min(7.0,sIP));
+    const bpIP=Math.max(9-sIPClamped,2);
+    const sHR=hr9*sIPClamped*envMult/9;
+    const bpHR=lgHR9*bpIP*envMult/9;
+    return `<div style="background:var(--bg2);padding:8px;border-radius:6px;margin-bottom:8px">
+      <div style="font-size:.65rem;font-weight:600;color:var(--ac);margin-bottom:4px">${label}</div>
+      <div style="font-size:.58rem;color:var(--mt2);margin-bottom:6px">SP: ${spName}</div>
+      <table style="width:100%;font-size:.58rem;border-collapse:collapse">
+        <tr><td style="color:var(--mt2);padding:2px 0">Starter HR/9</td><td style="text-align:right;font-family:'DM Mono',monospace">${hr9.toFixed(2)}</td></tr>
+        <tr><td style="color:var(--mt2);padding:2px 0">Starter IP (typical)</td><td style="text-align:right;font-family:'DM Mono',monospace">${sIPClamped.toFixed(1)}</td></tr>
+        <tr><td style="color:var(--mt2);padding:2px 0">→ Starter HRs allowed</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--ac)"><strong>${sHR.toFixed(2)}</strong></td></tr>
+        <tr><td style="color:var(--mt2);padding:2px 0">Bullpen IP (9 − ${sIPClamped.toFixed(1)})</td><td style="text-align:right;font-family:'DM Mono',monospace">${bpIP.toFixed(1)}</td></tr>
+        <tr><td style="color:var(--mt2);padding:2px 0">→ Bullpen HRs (lg avg ${lgHR9} HR/9)</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--ac)"><strong>${bpHR.toFixed(2)}</strong></td></tr>
+        <tr style="border-top:1px solid var(--bd)"><td style="color:var(--gd);padding:4px 0;font-weight:600">Side total</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--gd);font-weight:700">${(sHR+bpHR).toFixed(2)}</td></tr>
+      </table>
+    </div>`;
+  }
+  
+  // Confidence (matches gameHRExpectation)
   let pickColor,pickLabel,pickMath,confidence;
   if(totalHR>=1.5){
     confidence=Math.max(50,Math.min(100,50+(totalHR-1.5)*16));
-    pickLabel='Over';
-    pickColor='var(--gn)';
+    pickLabel='Over'; pickColor='var(--gn)';
     pickMath=`50 + (${totalHR.toFixed(2)} − 1.5) × 16 = <strong>${confidence.toFixed(0)}</strong>`;
   }else{
     confidence=Math.max(50,Math.min(100,50+(1.5-totalHR)*40));
-    pickLabel='Under';
-    pickColor='var(--ac)';
+    pickLabel='Under'; pickColor='var(--ac)';
     pickMath=`50 + (1.5 − ${totalHR.toFixed(2)}) × 40 = <strong>${confidence.toFixed(0)}</strong>`;
   }
   const isLock=confidence>=LOCKS.hrLine;
@@ -5744,31 +5990,9 @@ function openHRLineMo(gamePk){
   
   mh.innerHTML=`<div>
     <div style="font-family:'Bebas Neue',sans-serif;font-size:1.25rem;letter-spacing:2px">💥 HR O/U 1.5</div>
-    <div style="font-size:.6rem;color:var(--mt2);margin-top:2px">${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name} · ${venue}</div>
+    <div style="font-size:.6rem;color:var(--mt2);margin-top:2px">${awayAbbr} @ ${homeAbbr} · ${venue}${fromHistory?` · ${opts.date}`:''}</div>
   </div>
   <button class="mc" onclick="closeMo()">✕</button>`;
-  
-  function teamCard(m){
-    if(m.sIP==='—'){
-      return `<div style="background:var(--bg2);padding:8px;border-radius:6px;margin-bottom:8px">
-        <div style="font-size:.65rem;font-weight:600;color:var(--ac);margin-bottom:4px">${m.label}</div>
-        <div style="font-size:.58rem;color:var(--mt2)">${m.starter}</div>
-        <div style="font-size:.6rem;margin-top:6px;color:var(--gd)">→ ${m.totalHR.toFixed(2)} expected HRs allowed</div>
-      </div>`;
-    }
-    return `<div style="background:var(--bg2);padding:8px;border-radius:6px;margin-bottom:8px">
-      <div style="font-size:.65rem;font-weight:600;color:var(--ac);margin-bottom:4px">${m.label}</div>
-      <div style="font-size:.58rem;color:var(--mt2);margin-bottom:6px">SP: ${m.starter}</div>
-      <table style="width:100%;font-size:.58rem;border-collapse:collapse">
-        <tr><td style="color:var(--mt2);padding:2px 0">Starter HR/9</td><td style="text-align:right;font-family:'DM Mono',monospace">${m.hr9}</td></tr>
-        <tr><td style="color:var(--mt2);padding:2px 0">Starter IP (typical)</td><td style="text-align:right;font-family:'DM Mono',monospace">${m.sIP}</td></tr>
-        <tr><td style="color:var(--mt2);padding:2px 0">→ Starter HRs allowed</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--ac)"><strong>${m.sHR}</strong></td></tr>
-        <tr><td style="color:var(--mt2);padding:2px 0">Bullpen IP (9 − ${m.sIP})</td><td style="text-align:right;font-family:'DM Mono',monospace">${m.bpIP}</td></tr>
-        <tr><td style="color:var(--mt2);padding:2px 0">→ Bullpen HRs (lg avg ${lgHR9.toFixed(1)} HR/9)</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--ac)"><strong>${m.bpHR}</strong></td></tr>
-        <tr style="border-top:1px solid var(--bd)"><td style="color:var(--gd);padding:4px 0;font-weight:600">Side total</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--gd);font-weight:700">${m.totalHR.toFixed(2)}</td></tr>
-      </table>
-    </div>`;
-  }
   
   mb.innerHTML=`
     <div style="text-align:center;margin-bottom:14px">
@@ -5780,22 +6004,22 @@ function openHRLineMo(gamePk){
     <div class="slbl">⚙️ Environment Multiplier</div>
     <div style="background:var(--bg2);padding:8px;border-radius:6px;margin-bottom:10px">
       <table style="width:100%;font-size:.6rem;border-collapse:collapse">
-        <tr><td style="color:var(--mt2);padding:2px 0">Park HR factor</td><td style="text-align:right;font-family:'DM Mono',monospace">${parkHR.toFixed(2)}</td></tr>
+        <tr><td style="color:var(--mt2);padding:2px 0">Park HR factor</td><td style="text-align:right;font-family:'DM Mono',monospace">${parkHR?parkHR.toFixed(2):'—'}</td></tr>
         ${isDome?'<tr><td style="color:var(--mt2);padding:2px 0">Dome</td><td style="text-align:right;color:var(--gd)">closed roof — no weather</td></tr>':''}
-        ${!isDome&&wx?`<tr><td style="color:var(--mt2);padding:2px 0">Wind → HR (${Math.round(wx.windSpeed)}mph)</td><td style="text-align:right;font-family:'DM Mono',monospace">${windF.toFixed(2)}</td></tr>`:''}
-        ${!isDome&&wx?`<tr><td style="color:var(--mt2);padding:2px 0">Temp → HR (${Math.round(wx.temp)}°F)</td><td style="text-align:right;font-family:'DM Mono',monospace">${tempF.toFixed(2)}</td></tr>`:''}
-        <tr style="border-top:1px solid var(--bd)"><td style="color:var(--gd);padding:4px 0;font-weight:600">Combined envMult</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--gd);font-weight:700">${envMult.toFixed(3)}</td></tr>
+        ${!isDome&&windSpeed!=null?`<tr><td style="color:var(--mt2);padding:2px 0">Wind → HR (${Math.round(windSpeed)}mph)</td><td style="text-align:right;font-family:'DM Mono',monospace">${windF.toFixed(2)}</td></tr>`:''}
+        ${!isDome&&temp!=null?`<tr><td style="color:var(--mt2);padding:2px 0">Temp → HR (${Math.round(temp)}°F)</td><td style="text-align:right;font-family:'DM Mono',monospace">${tempF.toFixed(2)}</td></tr>`:''}
+        <tr style="border-top:1px solid var(--bd)"><td style="color:var(--gd);padding:4px 0;font-weight:600">Combined envMult</td><td style="text-align:right;font-family:'DM Mono',monospace;color:var(--gd);font-weight:700">${envMult?envMult.toFixed(3):'—'}</td></tr>
       </table>
       <div style="font-size:.52rem;color:var(--mt);margin-top:4px">Applied to every IP — multiplies the league baseline.</div>
     </div>
     
     <div class="slbl">⚾ Per-Side Math</div>
-    ${teamCard(awayMath)}
-    ${teamCard(homeMath)}
+    ${teamCard('Away pitching',aSPName,aSPhr9,aSPip,aSPhr)}
+    ${teamCard('Home pitching',hSPName,hSPhr9,hSPip,hSPhr)}
     
     <div style="background:var(--bg2);padding:10px;border-radius:6px;margin-bottom:10px;border:1px solid var(--bd)">
       <div style="font-size:.62rem;color:var(--gd);font-weight:600;margin-bottom:4px">📊 Game Total</div>
-      <div style="font-size:.58rem;color:var(--mt2);font-family:'DM Mono',monospace">${awayMath.totalHR.toFixed(2)} (away) + ${homeMath.totalHR.toFixed(2)} (home) = <strong style="color:var(--ac)">${totalHR.toFixed(2)} HRs</strong></div>
+      <div style="font-size:.58rem;color:var(--mt2);font-family:'DM Mono',monospace">${aSPhr!=null?aSPhr.toFixed(2):'—'} (away) + ${hSPhr!=null?hSPhr.toFixed(2):'—'} (home) = <strong style="color:var(--ac)">${totalHR.toFixed(2)} HRs</strong></div>
     </div>
     
     <div class="slbl">🎯 Confidence Score</div>
@@ -5804,6 +6028,16 @@ function openHRLineMo(gamePk){
       <div style="font-size:.62rem;font-family:'DM Mono',monospace;color:var(--ac)">${pickMath}</div>
       <div style="font-size:.55rem;color:var(--mt);margin-top:6px">Lock threshold: ${LOCKS.hrLine} · ${isLock?'<span style="color:var(--rd);font-weight:700">🔒 Lock-level confidence</span>':'Below lock threshold (lean only)'}</div>
     </div>
+    
+    ${fromHistory&&entry?(()=>{
+      const r=(HISTORY.byDate[opts.date]?.games||{})[gamePk];
+      if(!r||r.gameHR==null)return '';
+      const win=pickLabel==='Over'?(r.gameHR>=2):(r.gameHR<=1);
+      return `<div style="background:var(--bg2);padding:10px;border-radius:6px;margin-bottom:10px;border:2px solid ${win?'var(--gn)':'var(--rd)'}">
+        <div style="font-size:.62rem;color:${win?'var(--gn)':'var(--rd)'};font-weight:700;margin-bottom:4px">${win?'✓ Pick won':'✗ Pick lost'}</div>
+        <div style="font-size:.58rem;color:var(--mt2)">Game ended with <strong style="color:var(--ac)">${r.gameHR} total HRs</strong> · Pick was ${pickLabel}</div>
+      </div>`;
+    })():''}
     
     <div style="font-size:.52rem;color:var(--mt);text-align:center;margin-top:10px;line-height:1.5">
       Over scaling: 1.5 → 50, 2.5 → 66, 3.0 → 74, 4.5 → 98<br>
