@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.6 · Prop Intelligence</title>
+<title>Diamond IQ v6.7 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.6 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.7 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -3777,14 +3777,27 @@ function loadHistoryInBackground(propToRefresh){
   if(HISTORY.loading)return;
   const today=todayStr();
   const savedDates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
-  const todoFetches=savedDates.filter(d=>!HISTORY.fetched[d]);
+  // Re-fetch dates that are unfetched OR have stale cached data missing gameHR
+  // (gameHR field added in v6.3 — older HISTORY caches don't have it, breaks HR O/U accuracy).
+  const todoFetches=savedDates.filter(d=>{
+    if(!HISTORY.fetched[d])return true;
+    const cached=HISTORY.byDate[d];
+    if(!cached)return true;
+    const games=cached.games||{};
+    const gamePks=Object.keys(games);
+    if(gamePks.length===0)return false;
+    // If ANY cached game lacks gameHR, treat the whole day as stale
+    const hasStale=gamePks.some(pk=>games[pk]?.gameHR==null);
+    if(hasStale){
+      HISTORY.fetched[d]=false; // allow refetch
+      return true;
+    }
+    return false;
+  });
   if(!todoFetches.length)return;
   HISTORY.loading=true;
-  // Fire all in parallel but don't block UI
   Promise.all(todoFetches.map(fetchHistoryForDate)).then(()=>{
     HISTORY.loading=false;
-    // Re-render the currently active tab so updated stats appear automatically.
-    // This works for both prop tabs (hits/hr/tb/k/tot) and the FC chooser ('res').
     renderTab();
   });
 }
@@ -3799,7 +3812,8 @@ function historicalTop2HitsStats(){
 }
 
 // Generalized top-N historical accuracy across saved 14 days for any prop.
-// For each day, takes the n highest-scored picks of that prop and checks if they hit.
+// For each day, takes the top picks that meet lock threshold (capped at n).
+// If only 1 lock exists, evaluates 1/1 — never pulls in non-lock picks to fill the slot.
 function historicalTopNStats(prop,n){
   const today=todayStr();
   const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
@@ -3814,18 +3828,18 @@ function historicalTopNStats(prop,n){
     }
     let topPicks=[],pickType='batter';
     if(prop==='hits'){
-      topPicks=(pred.batters||[]).filter(b=>b.score!=null).sort((a,b)=>b.score-a.score).slice(0,n);
+      topPicks=(pred.batters||[]).filter(b=>b.score!=null&&b.score>=LOCKS.hits).sort((a,b)=>b.score-a.score).slice(0,n);
     }else if(prop==='tb'){
-      topPicks=(pred.batters||[]).filter(b=>b.tbScore!=null).sort((a,b)=>b.tbScore-a.tbScore).slice(0,n);
+      topPicks=(pred.batters||[]).filter(b=>b.tbScore!=null&&b.tbScore>=LOCKS.tb).sort((a,b)=>b.tbScore-a.tbScore).slice(0,n);
     }else if(prop==='hr'){
-      topPicks=(pred.batters||[]).filter(b=>b.hrScore!=null).sort((a,b)=>b.hrScore-a.hrScore).slice(0,n);
+      topPicks=(pred.batters||[]).filter(b=>b.hrScore!=null&&b.hrScore>=LOCKS.hr).sort((a,b)=>b.hrScore-a.hrScore).slice(0,n);
     }else if(prop==='bb'){
-      topPicks=(pred.batters||[]).filter(b=>b.bbScore!=null&&b.expectedBB!=null).sort((a,b)=>b.bbScore-a.bbScore).slice(0,n);
+      topPicks=(pred.batters||[]).filter(b=>b.bbScore!=null&&b.expectedBB!=null&&b.bbScore>=LOCKS.bb).sort((a,b)=>b.bbScore-a.bbScore).slice(0,n);
     }else if(prop==='k'){
-      topPicks=(pred.pitchers||[]).filter(p=>p.grade!=null).sort((a,b)=>b.grade-a.grade).slice(0,n);
+      topPicks=(pred.pitchers||[]).filter(p=>p.grade!=null&&p.grade>=LOCKS.k).sort((a,b)=>b.grade-a.grade).slice(0,n);
       pickType='pitcher';
     }else if(prop==='pbb'){
-      topPicks=(pred.pitchers||[]).filter(p=>p.bbGrade!=null&&p.expectedBB!=null).sort((a,b)=>b.bbGrade-a.bbGrade).slice(0,n);
+      topPicks=(pred.pitchers||[]).filter(p=>p.bbGrade!=null&&p.expectedBB!=null&&p.bbGrade>=LOCKS.pbb).sort((a,b)=>b.bbGrade-a.bbGrade).slice(0,n);
       pickType='pitcher';
     }else if(prop==='tot'){
       // For totals, pick the top n games by predicted total — "top" doesn't mean much, skip
@@ -4022,12 +4036,13 @@ function renderHistoryBadge(prop){
     const c=d.rate>=70?'var(--gn)':d.rate>=50?'var(--gd)':'var(--rd)';
     const marks=d.outcomes.slice(0,12).map(o=>`<span style="color:${o?'var(--gn)':'var(--rd)'};font-weight:700">${o?'✓':'✗'}</span>`).join('');
     
-    // Top-2 cell (Hits only): green if 2/2, red if 1/2 or 0/2
+    // Top-2 cell (Hits only): green if all lock-level picks hit, red if any missed.
+    // If only 1 lock pick existed, evaluates as 1/1 not 1/2 — never inflates the denominator.
     let top2Cell='';
     if(prop==='hits'){
       const t2d=t2ByDate[d.date];
       if(t2d&&t2d.n>0){
-        const t2Color=t2d.hits===2?'var(--gn)':'var(--rd)';
+        const t2Color=t2d.hits===t2d.n?'var(--gn)':'var(--rd)';
         top2Cell=`<td style="font-size:.62rem;letter-spacing:.04em;padding:6px 4px;color:${t2Color};font-weight:700;text-align:center">${t2d.hits}/${t2d.n}</td>`;
       }else{
         top2Cell='<td style="padding:6px 4px;color:var(--mt);text-align:center">—</td>';
@@ -4066,20 +4081,21 @@ function renderHistoryBadge(prop){
     </tr>`;
   }
   
-  // For Hits only: also show the "Top 2 Picks" rate as a mini-section above the per-day table
+  // For Hits only: also show the "Top 2 Locks" rate as a mini-section above the per-day table.
+  // Only counts lock-level picks — if a day had only 1 lock, it counts as 1/1 not 1/2.
   let top2Section='';
   if(prop==='hits'){
     const t2=historicalTop2HitsStats();
     if(t2.totalN>0){
       const c=t2.totalRate>=70?'var(--gn)':t2.totalRate>=50?'var(--gd)':'var(--rd)';
       top2Section=`<div class="hist-top2">
-        <span class="hist-top2-l">14D Top-2 Picks Hit Rate:</span>
+        <span class="hist-top2-l">14D Top-2 Locks Hit Rate:</span>
         <b style="color:${c}">${t2.totalRate}%</b>
         <span style="color:var(--mt2);font-size:.55rem">(${t2.totalHits}/${t2.totalN})</span>
-        <span class="hist-top2-note">— each day's 2 highest Hit Scores</span>
+        <span class="hist-top2-note">— top 🔒 picks, all-or-nothing per day</span>
       </div>`;
     }else if(HISTORY.loading){
-      top2Section=`<div class="hist-top2"><span class="hist-top2-l">14D Top-2 Picks Hit Rate:</span> <span style="color:var(--mt)">calculating…</span></div>`;
+      top2Section=`<div class="hist-top2"><span class="hist-top2-l">14D Top-2 Locks Hit Rate:</span> <span style="color:var(--mt)">calculating…</span></div>`;
     }
   }
   
@@ -4335,12 +4351,12 @@ function renderResults(){
         const c=histStat.totalRate>=70?'fcc-stat-g':histStat.totalRate>=50?'fcc-stat-y':'fcc-stat-r';
         histHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">14D</span> <span class="fcc-stat ${c}">${histStat.totalRate}%</span> <span class="fcc-stat-n">(${histStat.totalHits}/${histStat.totalN})</span></div>`;
       }
-      // Top-N row (HR uses top-1; others top-2). Skip for run totals.
+      // Top-N row (HR uses top-1 lock; others top-2 locks). Lock-filtered: never inflates by including non-locks.
       let topHTML='';
       if(prop&&prop!=='tot'){
         const n=prop==='hr'?1:2;
         const t=historicalTopNStats(prop,n);
-        const lbl=`Top${n}`;
+        const lbl=`Top${n}🔒`;
         if(t.totalN===0){
           topHTML=`<div class="fcc-stat-row"><span class="fcc-stat-lbl">${lbl}</span> <span class="fcc-stat-none">${HISTORY.loading?'…':'—'}</span></div>`;
         }else{
