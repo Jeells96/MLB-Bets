@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.7 · Prop Intelligence</title>
+<title>Diamond IQ v6.8 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.7 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.8 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -712,59 +712,26 @@ async function pullSharedHistory(){
   if(!FB.ready)return;
   try{
     const snap=await FB.db.collection('shared_history').orderBy('date','desc').limit(14).get();
-    let pulled=0,overwritten=0;
-    const today=todayStr();
+    let pulled=0;
     snap.forEach(doc=>{
       const d=doc.data();
       if(!d.date)return;
-      // For PAST dates: Firebase predictions win (canonical snapshot from when bets were placed).
-      // For TODAY: local wins (user wants their fresh predictions).
-      if(d.predictions){
-        const localPred=PRED.byDate[d.date];
-        // Don't overwrite if user has explicitly overridden today's predictions
-        if(PRED.overrides&&PRED.overrides[d.date])return;
-        
-        // Pick whichever side has the richer prediction snapshot.
-        // "Richer" = more batters/pitchers and more fields per row. Protects against
-        // a stale snapshot from another device clobbering current good local data.
-        function richness(p){
-          if(!p)return -1;
-          const bCount=(p.batters||[]).length;
-          const pCount=(p.pitchers||[]).length;
-          const tCount=(p.totals||[]).length;
-          // Sample a batter to see how many fields it has
-          const fieldCount=(p.batters||[])[0]?Object.keys(p.batters[0]).length:0;
-          return bCount*10+pCount*5+tCount*3+fieldCount;
-        }
-        const localR=richness(localPred);
-        const remoteR=richness(d.predictions);
-        
-        if(d.date<today){
-          // Past date — Firebase is canonical IF its data is at least as rich as local.
-          // This protects against a partial/stale Firebase doc overwriting better local data.
-          if(remoteR>=localR){
-            const isNew=!localPred;
-            PRED.byDate[d.date]=d.predictions;
-            if(isNew)pulled++;else overwritten++;
-          }
-        }else{
-          // Today/future — only seed if local is empty or local is much weaker
-          if(!localPred||remoteR>localR+5){
-            PRED.byDate[d.date]=d.predictions;
-            pulled++;
-          }
-        }
+      // Seed PRED.byDate only if local doesn't have anything for that date.
+      // Local always wins — the user's device is the source of truth for predictions.
+      if(!PRED.byDate[d.date]&&d.predictions){
+        PRED.byDate[d.date]=d.predictions;
+        pulled++;
       }
-      // Seed HISTORY.byDate (results) — Firebase always wins since results are factual
-      if(d.results){
+      // Seed HISTORY.byDate only if local doesn't have it yet. Same principle.
+      if(!HISTORY.byDate[d.date]&&d.results){
         HISTORY.byDate[d.date]=d.results;
         HISTORY.fetched[d.date]=true;
       }
     });
-    if(pulled>0||overwritten>0){
-      console.log(`[DIQ] Pulled ${pulled} new + ${overwritten} canonical predictions from Firebase`);
+    if(pulled>0){
+      console.log(`[DIQ] Seeded ${pulled} new history days from Firebase`);
       predSave();
-      if(['hits','hr','tb','k','bb','pbb','bbat','gnoHR','gmultiHR','tot','res'].includes(UI.tab))renderTab();
+      renderTab();
     }
   }catch(e){console.warn('[DIQ] pullSharedHistory failed',e.message);}
 }
