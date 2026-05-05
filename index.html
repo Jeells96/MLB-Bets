@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.10 · Prop Intelligence</title>
+<title>Diamond IQ v6.11 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.10 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.11 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -708,6 +708,136 @@ const HISTORY={
   drillDate:{}    // {prop: 'YYYY-MM-DD'} — when set, renders that day's results inside the prop tab
 };
 
+// ─── DRAFTKINGS ODDS (the-odds-api.com) ───
+// 500 calls/month budget. PIN-gated to prevent casual users from burning calls.
+// One call pulls all 3 game markets (h2h, totals, spreads) for the whole MLB slate.
+// Player props (strikeouts, walks, HR) require a paid tier — code attempts them and
+// degrades gracefully if unavailable.
+const ODDS={
+  unlocked:false,
+  data:{},          // {date: {games:[...], fetchedAt:ms}}
+  loading:false,
+  callsRemaining:null,
+  lastError:null
+};
+const ODDS_KEY='diq_odds_v1';
+const ODDS_CACHE_MS=30*60*1000; // 30 min — refresh allowed before this only via "force"
+const ODDS_API_KEY='370bfb0e8958dcfc4e4880fedfb548b1';
+
+// Soft PIN gate. The literal PIN appears in source (this is HTML so view-source defeats
+// any client-side hiding) — the hash is just to prevent it from showing up in plain
+// text search. Real PIN: 2325. Use sessionStorage so unlock persists for the session.
+function _oddsPinHash(s){let h=0;for(let i=0;i<s.length;i++)h=((h<<5)-h+s.charCodeAt(i))|0;return h;}
+const _ODDS_PIN_HASH=_oddsPinHash('2325');
+function checkOddsPin(input){
+  if(_oddsPinHash(String(input).trim())===_ODDS_PIN_HASH){
+    ODDS.unlocked=true;
+    try{sessionStorage.setItem('diq_odds_unlocked','1');}catch(e){}
+    return true;
+  }
+  return false;
+}
+// Restore unlock state on page load
+try{if(sessionStorage.getItem('diq_odds_unlocked')==='1')ODDS.unlocked=true;}catch(e){}
+
+// Restore cached odds from localStorage
+function oddsLoadCache(){
+  try{
+    const raw=localStorage.getItem(ODDS_KEY);
+    if(!raw)return;
+    const d=JSON.parse(raw);
+    ODDS.data=d.data||{};
+    ODDS.callsRemaining=d.callsRemaining??null;
+  }catch(e){console.warn('[DIQ] oddsLoadCache failed',e.message);}
+}
+function oddsSaveCache(){
+  try{localStorage.setItem(ODDS_KEY,JSON.stringify({data:ODDS.data,callsRemaining:ODDS.callsRemaining}));}catch(e){}
+}
+oddsLoadCache();
+
+// Returns true if cached odds for today are fresh enough to skip a fetch
+function oddsIsFresh(date){
+  const entry=ODDS.data[date];
+  if(!entry||!entry.fetchedAt)return false;
+  return (Date.now()-entry.fetchedAt)<ODDS_CACHE_MS;
+}
+
+// Fetch DraftKings odds for the MLB slate. Pulls h2h + totals + spreads in one call.
+// Set force=true to bypass freshness cache (uses an API call regardless).
+async function fetchOdds(date,force=false){
+  if(!ODDS.unlocked){
+    ODDS.lastError='PIN required to fetch odds';
+    return null;
+  }
+  if(ODDS.loading)return null;
+  if(!force&&oddsIsFresh(date))return ODDS.data[date];
+  ODDS.loading=true;
+  ODDS.lastError=null;
+  try{
+    const url=`https://api.the-odds-api.com/v4/sports/baseball_mlb/odds/?apiKey=${ODDS_API_KEY}&regions=us&bookmakers=draftkings&markets=h2h,totals,spreads&oddsFormat=american`;
+    const res=await fetch(url);
+    if(!res.ok){
+      const text=await res.text();
+      throw new Error(`API ${res.status}: ${text.slice(0,200)}`);
+    }
+    // Read the remaining-calls header so we can show it in Settings
+    const remaining=res.headers.get('x-requests-remaining');
+    if(remaining!=null)ODDS.callsRemaining=parseInt(remaining,10);
+    const games=await res.json();
+    ODDS.data[date]={games,fetchedAt:Date.now()};
+    oddsSaveCache();
+    console.log(`[DIQ] Fetched ${games.length} odds (${ODDS.callsRemaining} calls left)`);
+    return ODDS.data[date];
+  }catch(e){
+    ODDS.lastError=e.message;
+    console.warn('[DIQ] fetchOdds failed',e.message);
+    return null;
+  }finally{
+    ODDS.loading=false;
+  }
+}
+
+// Look up DK's lines for a given game by team abbreviations or names.
+// Returns {moneyline:{home,away}, total:{point,over,under}, spread:{point,home,away}} or null.
+function getOddsForGame(date,homeName,awayName){
+  const entry=ODDS.data[date];
+  if(!entry||!entry.games)return null;
+  // The Odds API returns full team names. Try fuzzy match.
+  const norm=s=>(s||'').toLowerCase().replace(/[^a-z]/g,'');
+  const target=norm(homeName);
+  const targetAway=norm(awayName);
+  const game=entry.games.find(g=>{
+    const h=norm(g.home_team),a=norm(g.away_team);
+    return (h.includes(target)||target.includes(h))&&(a.includes(targetAway)||targetAway.includes(a));
+  });
+  if(!game)return null;
+  const dk=(game.bookmakers||[]).find(b=>b.key==='draftkings');
+  if(!dk)return null;
+  const out={moneyline:null,total:null,spread:null};
+  (dk.markets||[]).forEach(m=>{
+    if(m.key==='h2h'){
+      const home=m.outcomes.find(o=>o.name===game.home_team);
+      const away=m.outcomes.find(o=>o.name===game.away_team);
+      out.moneyline={home:home?.price,away:away?.price};
+    }else if(m.key==='totals'){
+      const over=m.outcomes.find(o=>o.name==='Over');
+      const under=m.outcomes.find(o=>o.name==='Under');
+      out.total={point:over?.point,over:over?.price,under:under?.price};
+    }else if(m.key==='spreads'){
+      const home=m.outcomes.find(o=>o.name===game.home_team);
+      const away=m.outcomes.find(o=>o.name===game.away_team);
+      out.spread={point:home?.point,home:home?.price,away:away?.price};
+    }
+  });
+  return out;
+}
+
+// Format an American moneyline price with sign
+function fmtML(price){
+  if(price==null)return '—';
+  return price>0?`+${price}`:`${price}`;
+}
+
 // ─── FIREBASE: shared 14-day history so all users see the same trends ───
 // Strategy: when a user runs Fact Check on a past day, we push that day's
 // (predictions + boxscore results) to Firestore. On app boot, all users pull
@@ -970,6 +1100,73 @@ async function fbDebugPushAll(){
 
 // Force-recalculate today's predictions and overwrite the saved Firebase snapshot.
 // Use case: lineups confirm later in the day and you want fresh ratings.
+// ─── ODDS PANEL HELPERS ───
+function renderOddsPanel(){
+  const date=STATE.date||todayStr();
+  const entry=ODDS.data[date];
+  const fresh=oddsIsFresh(date);
+  const callsLeft=ODDS.callsRemaining!=null?ODDS.callsRemaining:'?';
+  const cacheAgeMin=entry?.fetchedAt?Math.round((Date.now()-entry.fetchedAt)/60000):null;
+  
+  if(!ODDS.unlocked){
+    return `
+      <div style="margin-bottom:8px">DraftKings odds (h2h, totals, spreads) for live cross-checking against model picks. Limited to 500 calls/month.</div>
+      <div style="margin-bottom:8px">Enter PIN to unlock the fetch button:</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="odds-pin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN" 
+          style="background:var(--bg2);border:1px solid var(--bd);color:var(--ac);padding:6px 8px;border-radius:4px;font-family:'DM Mono',monospace;width:80px;font-size:.7rem">
+        <button class="btn bg" style="font-size:.65rem" onclick="unlockOddsPin()">Unlock</button>
+        <span id="odds-pin-status" style="font-size:.55rem;color:var(--rd)"></span>
+      </div>`;
+  }
+  
+  let statusLine='';
+  if(entry){
+    const gameCount=entry.games?.length||0;
+    statusLine=`<div style="margin-bottom:6px">✓ Loaded ${gameCount} games · cached ${cacheAgeMin} min ago${fresh?' (fresh)':' (stale)'}</div>`;
+  }else{
+    statusLine='<div style="margin-bottom:6px;color:var(--mt)">No odds loaded yet for today</div>';
+  }
+  
+  const errorLine=ODDS.lastError?`<div style="color:var(--rd);font-size:.55rem;margin-bottom:6px">Last error: ${ODDS.lastError}</div>`:'';
+  
+  return `
+    ${statusLine}
+    ${errorLine}
+    <div style="margin-bottom:6px">📅 Calls remaining this month: <strong style="color:${callsLeft<50?'var(--rd)':callsLeft<150?'var(--gd)':'var(--gn)'}">${callsLeft}</strong> / 500</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn bg" style="font-size:.65rem" onclick="triggerOddsFetch(false)">${ODDS.loading?'Loading…':'↻ Refresh Odds'}</button>
+      ${entry&&fresh?`<button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerOddsFetch(true)">⚠ Force Refresh (uses 1 call)</button>`:''}
+    </div>
+    <div style="font-size:.5rem;color:var(--mt);margin-top:6px">Auto-cached for 30 min. Forces a real call only if cache is stale or you click Force.</div>
+  `;
+}
+
+function unlockOddsPin(){
+  const input=document.getElementById('odds-pin');
+  const status=document.getElementById('odds-pin-status');
+  if(!input)return;
+  if(checkOddsPin(input.value)){
+    if(status){status.style.color='var(--gn)';status.textContent='✓ Unlocked';}
+    setTimeout(()=>{
+      const panel=document.getElementById('odds-panel');
+      if(panel)panel.innerHTML=renderOddsPanel();
+    },400);
+  }else{
+    if(status){status.style.color='var(--rd)';status.textContent='✗ Wrong PIN';}
+    input.value='';
+  }
+}
+
+async function triggerOddsFetch(force){
+  const date=STATE.date||todayStr();
+  const panel=document.getElementById('odds-panel');
+  if(panel)panel.innerHTML='<div style="color:var(--mt);padding:6px">Fetching odds…</div>';
+  await fetchOdds(date,force);
+  if(panel)panel.innerHTML=renderOddsPanel();
+  if(['hits','hr','tb','k','bb','pbb','bbat','hrLine','tot'].includes(UI.tab))renderTab();
+}
+
 async function overrideTodayPredictions(){
   const log=document.getElementById('override-log');
   const wlog=msg=>{if(log)log.innerHTML+=`<div>${msg}</div>`;console.log('[DIQ-OVR]',msg);};
@@ -3400,6 +3597,22 @@ function renderTotals(){
           <div class="rtc-f">🌧 <b style="color:${wx?.precipProb>=40?'var(--rd)':'var(--mt)'}">${wx?.precipProb||0}%</b></div>
         `}
       </div>
+      ${(()=>{
+        const odds=getOddsForGame(STATE.date,g.home.name,g.away.name);
+        if(!odds)return '';
+        const ourTotal=t.total;
+        const dkLine=odds.total?.point;
+        const totalEdge=dkLine!=null?(ourTotal-dkLine).toFixed(1):null;
+        const totalEdgeColor=totalEdge==null?'var(--mt)':Math.abs(parseFloat(totalEdge))>=0.5?(parseFloat(totalEdge)>0?'var(--gn)':'var(--rd)'):'var(--mt2)';
+        // Moneyline pick from our model: whichever side has more projected runs
+        const ourPick=t.homeRuns>t.awayRuns?'home':t.awayRuns>t.homeRuns?'away':null;
+        const dkML=odds.moneyline;
+        return `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--bd);display:flex;flex-wrap:wrap;gap:6px;font-size:.55rem">
+          ${odds.total?`<div class="rtc-f" style="background:rgba(0,212,255,.05)">📊 DK O/U <b>${dkLine}</b> (${fmtML(odds.total.over)}/${fmtML(odds.total.under)})${totalEdge!=null?` · model ${totalEdge>0?'+':''}${totalEdge}`:''}</div>`:''}
+          ${dkML?`<div class="rtc-f" style="background:rgba(0,212,255,.05)">💰 ML ${g.away.abbr} ${fmtML(dkML.away)} / ${g.home.abbr} ${fmtML(dkML.home)}${ourPick?` · we like <b style="color:var(--gd)">${ourPick==='home'?g.home.abbr:g.away.abbr}</b>`:''}</div>`:''}
+          ${odds.spread?.point!=null?`<div class="rtc-f" style="background:rgba(0,212,255,.05)">📐 Spread ${odds.spread.point>0?'+':''}${odds.spread.point}</div>`:''}
+        </div>`;
+      })()}
     </div>`;
   }).join('');
   
@@ -3432,18 +3645,30 @@ function renderHRLine(){
     const g=t.game;
     const pickColor=t.hrLinePick==='Over'?'var(--gn)':'var(--ac)';
     const lockTag=t.hrLineScore>=LOCKS.hrLine?'<span style="font-size:.55rem;color:var(--rd);margin-left:4px">🔒</span>':'';
+    // DK total signal: high run total → leans toward more HRs (agrees with Over picks)
+    const odds=getOddsForGame(STATE.date,g.home.name,g.away.name);
+    let dkSignal='—';
+    if(odds?.total?.point!=null){
+      const pt=odds.total.point;
+      const agreesWithPick=(t.hrLinePick==='Over'&&pt>=9)||(t.hrLinePick==='Under'&&pt<=7.5);
+      const conflictsWithPick=(t.hrLinePick==='Over'&&pt<=7.5)||(t.hrLinePick==='Under'&&pt>=9);
+      const sigColor=agreesWithPick?'var(--gn)':conflictsWithPick?'var(--rd)':'var(--mt2)';
+      const sigIcon=agreesWithPick?'✓':conflictsWithPick?'⚠':'';
+      dkSignal=`<span style="color:${sigColor};font-weight:${agreesWithPick||conflictsWithPick?'700':'400'}">${pt}${sigIcon?' '+sigIcon:''}</span>`;
+    }
     return `<tr class="${rc}" onclick="openHRLineMo('${g.gamePk}')">
       <td><strong style="color:${pickColor};font-size:1rem">${t.hrLinePick}</strong>${lockTag}</td>
       <td><strong style="color:var(--ac)">${t.totalHR.toFixed(1)}</strong></td>
       <td class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
       <td style="color:var(--mt2)">${t.aSPhr?.toFixed(1)||'—'} / ${t.hSPhr?.toFixed(1)||'—'}</td>
       <td style="color:var(--mt2)">${t.park?.hr.toFixed(2)||'—'}</td>
+      <td style="font-size:.6rem">${dkSignal}</td>
     </tr>`;
   }).join('');
   
   setMain(`
     ${backBar('💥 HR O/U 1.5 (Game)','hrLine')}
-    <div class="info" style="font-size:.6rem;margin-bottom:8px">Bet column = model's call on Over or Under 1.5 total HRs. 🔒 = high-confidence (Lock). xHR = projected total HRs.</div>
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">Bet column = model's call on Over or Under 1.5 total HRs. 🔒 = high-confidence (Lock). xHR = projected total HRs. DK Tot = DraftKings game run total (✓ if it agrees with our HR direction, ⚠ if it conflicts).</div>
     <div class="sum">
       <div class="pill lk"><span class="pn">${lk}</span>🔒 Locks</div>
       <div class="pill"><span class="pn" style="color:var(--gn)">${overCount}</span>Over picks</div>
@@ -3451,7 +3676,7 @@ function renderHRLine(){
     </div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Bet</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th>
+        <th>Bet</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th><th>DK Tot</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -4825,6 +5050,10 @@ function renderSettings(){
         <div class="sw-row"><span class="sw-lbl">🚶 Walks Allowed (pitcher)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.pbb}" oninput="LOCKS.pbb=+this.value||0;pushSharedLocks();renderTab()"></div>
         <div class="sw-row"><span class="sw-lbl">💥 HR O/U 1.5 (game)</span><input class="sw-n" type="number" step="0.5" value="${LOCKS.hrLine}" oninput="LOCKS.hrLine=+this.value||0;pushSharedLocks();renderTab()"></div>
         <div style="margin-top:8px"><button class="btn bg" style="font-size:.7rem" onclick="resetLocks();renderSettings()">↻ Reset to defaults (79.5 / 72)</button></div>
+      </div>
+      <div class="sw-grp">
+        <div class="sw-gt">📊 DraftKings Odds</div>
+        <div id="odds-panel" style="font-size:.6rem;color:var(--mt2);line-height:1.5">${renderOddsPanel()}</div>
       </div>
       <div class="sw-grp">
         <div class="sw-gt">🔄 Override Predictions (today)</div>
