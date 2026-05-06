@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.13 · Prop Intelligence</title>
+<title>Diamond IQ v6.14 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.13 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.14 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -715,8 +715,10 @@ const HISTORY={
 // degrades gracefully if unavailable.
 const ODDS={
   unlocked:false,
-  data:{},          // {date: {games:[...], fetchedAt:ms}}
+  data:{},          // game-level: {date: {games:[...], fetchedAt:ms}}
+  props:{},         // player props: {date: {events:{eventId:{markets,fetchedAt}}, fetchedAt:ms}}
   loading:false,
+  loadingProps:false,
   callsRemaining:null,
   lastError:null
 };
@@ -747,11 +749,12 @@ function oddsLoadCache(){
     if(!raw)return;
     const d=JSON.parse(raw);
     ODDS.data=d.data||{};
+    ODDS.props=d.props||{};
     ODDS.callsRemaining=d.callsRemaining??null;
   }catch(e){console.warn('[DIQ] oddsLoadCache failed',e.message);}
 }
 function oddsSaveCache(){
-  try{localStorage.setItem(ODDS_KEY,JSON.stringify({data:ODDS.data,callsRemaining:ODDS.callsRemaining}));}catch(e){}
+  try{localStorage.setItem(ODDS_KEY,JSON.stringify({data:ODDS.data,props:ODDS.props,callsRemaining:ODDS.callsRemaining}));}catch(e){}
 }
 oddsLoadCache();
 
@@ -801,6 +804,207 @@ async function fetchOdds(date,force=false){
 
 // Look up DK's lines for a given game by team abbreviations or names.
 // Returns {moneyline:{home,away}, total:{point,over,under}, spread:{point,home,away}} or null.
+// Player prop markets — these come from the per-event endpoint, NOT the slate-wide odds endpoint.
+// One call per event. With ~15 MLB games per day, a full pull = ~15 API calls.
+const PLAYER_PROP_MARKETS=[
+  'batter_total_bases',
+  'batter_walks',
+  'batter_strikeouts',
+  'pitcher_strikeouts',
+  'pitcher_hits_allowed',
+  'pitcher_walks'
+];
+
+// Returns true if cached props for date are fresh enough to skip a fetch
+function propsAreFresh(date){
+  const entry=ODDS.props[date];
+  if(!entry||!entry.fetchedAt)return false;
+  return (Date.now()-entry.fetchedAt)<ODDS_CACHE_MS;
+}
+
+// Fetch player props for all events on the given date. Heavy operation: 1 API call per event.
+// Pulls all 6 markets per event in a single call for that event.
+async function fetchPlayerProps(date,force=false){
+  if(!ODDS.unlocked){
+    ODDS.lastError='PIN required to fetch player props';
+    return null;
+  }
+  if(ODDS.loadingProps)return null;
+  if(!force&&propsAreFresh(date))return ODDS.props[date];
+  
+  // First we need event IDs. They're in the game-level odds response, OR we can fetch /events.
+  // If we already have game-level odds with valid IDs, reuse them. Else fetch /events first.
+  let events=ODDS.data[date]?.games;
+  if(!events||!events.length){
+    try{
+      const evRes=await fetch(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=${ODDS_API_KEY}`);
+      if(!evRes.ok)throw new Error(`Events API ${evRes.status}`);
+      events=await evRes.json();
+      const remaining=evRes.headers.get('x-requests-remaining');
+      if(remaining!=null)ODDS.callsRemaining=parseInt(remaining,10);
+    }catch(e){
+      ODDS.lastError=`Failed to fetch event list: ${e.message}`;
+      return null;
+    }
+  }
+  
+  // Filter to only events on the requested date (in user's local time roughly)
+  const dateEvents=events.filter(ev=>{
+    if(!ev.commence_time)return false;
+    const evDate=new Date(ev.commence_time);
+    const y=evDate.getFullYear();
+    const m=String(evDate.getMonth()+1).padStart(2,'0');
+    const d=String(evDate.getDate()).padStart(2,'0');
+    return `${y}-${m}-${d}`===date;
+  });
+  
+  if(!dateEvents.length){
+    ODDS.lastError=`No MLB events found for ${date}`;
+    return null;
+  }
+  
+  ODDS.loadingProps=true;
+  ODDS.lastError=null;
+  const results={};
+  let succeeded=0,failed=0;
+  
+  try{
+    const marketsParam=PLAYER_PROP_MARKETS.join(',');
+    // Sequential fetches to avoid overwhelming the API and to track call count accurately
+    for(const ev of dateEvents){
+      try{
+        const url=`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${ev.id}/odds?apiKey=${ODDS_API_KEY}&regions=us&bookmakers=draftkings&markets=${marketsParam}&oddsFormat=american`;
+        const res=await fetch(url);
+        const remaining=res.headers.get('x-requests-remaining');
+        if(remaining!=null)ODDS.callsRemaining=parseInt(remaining,10);
+        if(!res.ok){
+          failed++;
+          console.warn(`[DIQ] props fetch failed for ${ev.home_team} vs ${ev.away_team}: ${res.status}`);
+          continue;
+        }
+        const data=await res.json();
+        results[ev.id]={
+          home_team:ev.home_team,
+          away_team:ev.away_team,
+          commence_time:ev.commence_time,
+          markets:data.bookmakers?.[0]?.markets||[],
+          fetchedAt:Date.now()
+        };
+        succeeded++;
+      }catch(e){
+        failed++;
+        console.warn(`[DIQ] props fetch error for ${ev.id}:`,e.message);
+      }
+    }
+    ODDS.props[date]={events:results,fetchedAt:Date.now()};
+    oddsSaveCache();
+    console.log(`[DIQ] Player props: ${succeeded} ok, ${failed} failed (${ODDS.callsRemaining} calls left)`);
+    pushSharedProps(date);
+    return ODDS.props[date];
+  }finally{
+    ODDS.loadingProps=false;
+  }
+}
+
+// Push player props to Firebase. Larger doc than game odds (one entry per event with multiple markets).
+async function pushSharedProps(date){
+  if(!FB.ready||!ODDS.props[date])return;
+  try{
+    const entry=ODDS.props[date];
+    const payload={date,events:entry.events,fetchedAt:entry.fetchedAt,updatedAt:Date.now()};
+    const sizeKB=Math.round(JSON.stringify(payload).length/1024);
+    if(sizeKB>900){
+      ODDS.lastError=`Props doc too large (${sizeKB}KB) for Firebase — saved locally only`;
+      console.warn('[DIQ] pushSharedProps: doc too big',sizeKB);
+      return;
+    }
+    await FB.db.collection('app_settings').doc(`props_${date}`).set(payload);
+    console.log(`[DIQ] Pushed player props for ${date} (${sizeKB}KB)`);
+  }catch(e){
+    ODDS.lastError=`Props push failed: ${e.message}`;
+    console.error('[DIQ] pushSharedProps failed',e);
+  }
+}
+
+async function pullSharedProps(date){
+  if(!FB.ready||!date)return;
+  try{
+    const doc=await FB.db.collection('app_settings').doc(`props_${date}`).get();
+    if(!doc.exists)return;
+    const d=doc.data();
+    if(!d.events||!d.fetchedAt)return;
+    const localFetchedAt=ODDS.props[date]?.fetchedAt||0;
+    if(d.fetchedAt>=localFetchedAt){
+      ODDS.props[date]={events:d.events,fetchedAt:d.fetchedAt};
+      oddsSaveCache();
+      console.log(`[DIQ] Pulled shared player props for ${date}`);
+      if(['k','pbb','bbat','bb','tb'].includes(UI.tab))renderTab();
+      const panel=document.getElementById('odds-panel');
+      if(panel)panel.innerHTML=renderOddsPanel();
+    }
+  }catch(e){
+    console.error('[DIQ] pullSharedProps failed',e);
+  }
+}
+
+// Look up player props for a specific player. Returns markets keyed by market type, with
+// outcomes (Over/Under lines and prices). Used by the prop bet tabs to show DK lines.
+// Renders a DK line cell with bet recommendation. Returns HTML string.
+// modelExpected = our projected stat. marketKey = e.g. 'pitcher_strikeouts'.
+// lockMargin = abs diff that triggers Lock recommendation. leanMargin = triggers Lean.
+// date defaults to today's loaded slate; FC drill views should pass the past date explicitly.
+function dkCellFor(playerName,marketKey,modelExpected,lockMargin,leanMargin,date){
+  if(modelExpected==null)return '<span style="color:var(--mt)">—</span>';
+  const lookupDate=date||STATE.date;
+  const props=getPlayerProps(lookupDate,playerName);
+  const market=props?.markets?.[marketKey];
+  if(market?.line==null)return '<span style="color:var(--mt)">—</span>';
+  const edge=modelExpected-market.line;
+  const absEdge=Math.abs(edge);
+  if(absEdge>=lockMargin){
+    const side=edge>0?'O':'U';
+    const color=edge>0?'var(--gn)':'var(--rd)';
+    return `<span style="color:${color}"><strong>${market.line}</strong> 🔒${side}</span>`;
+  }
+  if(absEdge>=leanMargin){
+    const sideText=edge>0?'lean O':'lean U';
+    return `<span style="color:var(--gd)">${market.line} ${sideText}</span>`;
+  }
+  return `<span style="color:var(--ac)">${market.line}</span>`;
+}
+
+function getPlayerProps(date,playerName){
+  const entry=ODDS.props[date];
+  if(!entry||!entry.events)return null;
+  const norm=s=>(s||'').toLowerCase().replace(/[^a-z]/g,'');
+  const target=norm(playerName);
+  // Search every event's markets for an outcome with this player's name
+  for(const evId in entry.events){
+    const ev=entry.events[evId];
+    if(!ev.markets)continue;
+    const matched={};
+    for(const market of ev.markets){
+      const marketKey=market.key;
+      // Outcomes typically: [{name:'Over', description:'Player Name', point:1.5, price:-110}, ...]
+      const playerOutcomes=(market.outcomes||[]).filter(o=>norm(o.description)===target);
+      if(!playerOutcomes.length)continue;
+      const over=playerOutcomes.find(o=>o.name==='Over');
+      const under=playerOutcomes.find(o=>o.name==='Under');
+      if(over||under){
+        matched[marketKey]={
+          line:over?.point??under?.point,
+          over:over?.price,
+          under:under?.price
+        };
+      }
+    }
+    if(Object.keys(matched).length){
+      return {eventId:evId,markets:matched};
+    }
+  }
+  return null;
+}
+
 function getOddsForGame(date,homeName,awayName){
   const entry=ODDS.data[date];
   if(!entry||!entry.games)return null;
@@ -843,43 +1047,63 @@ function fmtML(price){
 // Push the locally fetched odds snapshot to Firestore so all users share it.
 // Doc key: odds_{date}. Doc body: {date, games, fetchedAt, callsRemaining, fetchedBy}.
 async function pushSharedOdds(date){
-  if(!FB.ready||!ODDS.data[date])return;
+  if(!FB.ready){
+    ODDS.lastError='Firebase not ready — odds saved locally only';
+    console.warn('[DIQ] pushSharedOdds: FB not ready');
+    return;
+  }
+  if(!ODDS.data[date]){
+    console.warn('[DIQ] pushSharedOdds: no local data for',date);
+    return;
+  }
   try{
     const entry=ODDS.data[date];
-    await FB.db.collection('app_settings').doc(`odds_${date}`).set({
+    const payload={
       date,
       games:entry.games,
       fetchedAt:entry.fetchedAt,
       callsRemaining:ODDS.callsRemaining,
       updatedAt:Date.now()
-    });
-    console.log(`[DIQ] Pushed shared odds for ${date}`);
-  }catch(e){console.warn('[DIQ] pushSharedOdds failed',e.message);}
+    };
+    // Estimate doc size — Firestore limit is 1MB
+    const sizeKB=Math.round(JSON.stringify(payload).length/1024);
+    if(sizeKB>900){
+      ODDS.lastError=`Odds doc too large (${sizeKB}KB) for Firebase — saved locally only`;
+      console.warn('[DIQ] pushSharedOdds: doc too big',sizeKB);
+      return;
+    }
+    await FB.db.collection('app_settings').doc(`odds_${date}`).set(payload);
+    console.log(`[DIQ] Pushed shared odds for ${date} (${sizeKB}KB)`);
+  }catch(e){
+    ODDS.lastError=`Firebase push failed: ${e.message}. Check Firestore rules allow app_settings/* writes.`;
+    console.error('[DIQ] pushSharedOdds failed',e);
+  }
 }
 
-// Pull shared odds from Firestore. Always overwrites local cache because Firebase is
-// the canonical "what was DK saying" snapshot — local-only fetches happened too, but
-// Firebase represents what the PIN-holder shared with the group.
 async function pullSharedOdds(date){
   if(!FB.ready||!date)return;
   try{
     const doc=await FB.db.collection('app_settings').doc(`odds_${date}`).get();
-    if(!doc.exists)return;
+    if(!doc.exists){
+      console.log(`[DIQ] No shared odds in Firebase for ${date}`);
+      return;
+    }
     const d=doc.data();
     if(!d.games||!d.fetchedAt)return;
     const localFetchedAt=ODDS.data[date]?.fetchedAt||0;
-    // Use Firebase version if it's newer than local (or local doesn't exist)
     if(d.fetchedAt>=localFetchedAt){
       ODDS.data[date]={games:d.games,fetchedAt:d.fetchedAt};
       if(d.callsRemaining!=null)ODDS.callsRemaining=d.callsRemaining;
       oddsSaveCache();
       console.log(`[DIQ] Pulled shared odds for ${date} (${d.games.length} games)`);
-      // Re-render if user is on a tab that displays odds
-      if(['tot','hrLine'].includes(UI.tab))renderTab();
+      if(['tot','hrLine','k','pbb','bbat','bb','tb'].includes(UI.tab))renderTab();
       const panel=document.getElementById('odds-panel');
       if(panel)panel.innerHTML=renderOddsPanel();
     }
-  }catch(e){console.warn('[DIQ] pullSharedOdds failed',e.message);}
+  }catch(e){
+    ODDS.lastError=`Firebase pull failed: ${e.message}`;
+    console.error('[DIQ] pullSharedOdds failed',e);
+  }
 }
 
 // ─── FIREBASE: shared 14-day history so all users see the same trends ───
@@ -1009,6 +1233,7 @@ async function bootPullWithRetry(){
   await pullSharedHistory();
   await pullSharedLocks();
   await pullSharedOdds(todayStr());
+  await pullSharedProps(todayStr());
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
 }
@@ -1149,31 +1374,46 @@ async function fbDebugPushAll(){
 function renderOddsPanel(){
   const date=STATE.date||todayStr();
   const entry=ODDS.data[date];
+  const propsEntry=ODDS.props[date];
   const fresh=oddsIsFresh(date);
+  const propsFresh=propsAreFresh(date);
   const callsLeft=ODDS.callsRemaining!=null?ODDS.callsRemaining:'?';
   const cacheAgeMin=entry?.fetchedAt?Math.round((Date.now()-entry.fetchedAt)/60000):null;
+  const propsAgeMin=propsEntry?.fetchedAt?Math.round((Date.now()-propsEntry.fetchedAt)/60000):null;
   
-  // Shared status line — visible to everyone, PIN or not
-  let sharedStatusLine='';
+  // Game odds status
+  let oddsStatusLine='';
   if(entry){
     const gameCount=entry.games?.length||0;
-    const ageStr=cacheAgeMin<60?`${cacheAgeMin} min ago`:`${Math.round(cacheAgeMin/60)} hr ago`;
+    const ageStr=cacheAgeMin<60?`${cacheAgeMin}m`:`${Math.round(cacheAgeMin/60)}h`;
     const ageColor=cacheAgeMin<60?'var(--gn)':cacheAgeMin<240?'var(--gd)':'var(--rd)';
-    sharedStatusLine=`<div style="margin-bottom:6px">✓ ${gameCount} games loaded · <span style="color:${ageColor}">${ageStr}</span>${fresh?' (fresh)':' (stale)'}</div>`;
+    oddsStatusLine=`<div style="margin-bottom:4px">✓ <b>Game odds:</b> ${gameCount} games · <span style="color:${ageColor}">${ageStr} ago</span>${fresh?' (fresh)':''}</div>`;
   }else{
-    sharedStatusLine='<div style="margin-bottom:6px;color:var(--mt)">No odds loaded yet for today</div>';
+    oddsStatusLine='<div style="margin-bottom:4px;color:var(--mt)">⚠ <b>Game odds:</b> not loaded</div>';
+  }
+  
+  // Player props status
+  let propsStatusLine='';
+  if(propsEntry){
+    const eventCount=Object.keys(propsEntry.events||{}).length;
+    const ageStr=propsAgeMin<60?`${propsAgeMin}m`:`${Math.round(propsAgeMin/60)}h`;
+    const ageColor=propsAgeMin<60?'var(--gn)':propsAgeMin<240?'var(--gd)':'var(--rd)';
+    propsStatusLine=`<div style="margin-bottom:6px">✓ <b>Player props:</b> ${eventCount} games · <span style="color:${ageColor}">${ageStr} ago</span>${propsFresh?' (fresh)':''}</div>`;
+  }else{
+    propsStatusLine='<div style="margin-bottom:6px;color:var(--mt)">⚠ <b>Player props:</b> not loaded</div>';
   }
   
   if(!ODDS.unlocked){
     return `
-      <div style="margin-bottom:8px">DraftKings odds (h2h, totals, spreads) shared via Firebase. One pull serves everyone — no need to fetch yourself.</div>
-      ${sharedStatusLine}
+      <div style="margin-bottom:8px">DraftKings odds shared via Firebase. One PIN-holder pull serves everyone — no need to fetch yourself.</div>
+      ${oddsStatusLine}${propsStatusLine}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-        <button class="btn bg" style="font-size:.65rem" onclick="triggerSharedOddsPull()">↓ Pull Latest from Firebase</button>
+        <button class="btn bg" style="font-size:.62rem" onclick="triggerSharedOddsPull()">↓ Pull Game Odds</button>
+        <button class="btn bg" style="font-size:.62rem" onclick="triggerSharedPropsPull()">↓ Pull Player Props</button>
       </div>
       <div style="font-size:.5rem;color:var(--mt);margin-bottom:8px">Don't see today's odds? Ask a PIN-holder to refresh, or pull latest in case they already did.</div>
       <div style="border-top:1px dashed var(--bd);padding-top:8px;margin-top:6px">
-        <div style="margin-bottom:4px;font-size:.55rem;color:var(--mt2)">PIN required to fetch fresh odds (uses 1 of 500 monthly calls):</div>
+        <div style="margin-bottom:4px;font-size:.55rem;color:var(--mt2)">PIN required to fetch fresh odds:</div>
         <div style="display:flex;gap:6px;align-items:center">
           <input id="odds-pin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN" 
             style="background:var(--bg2);border:1px solid var(--bd);color:var(--ac);padding:6px 8px;border-radius:4px;font-family:'DM Mono',monospace;width:80px;font-size:.7rem">
@@ -1183,19 +1423,33 @@ function renderOddsPanel(){
       </div>`;
   }
   
-  const errorLine=ODDS.lastError?`<div style="color:var(--rd);font-size:.55rem;margin-bottom:6px">Last error: ${ODDS.lastError}</div>`:'';
+  const errorLine=ODDS.lastError?`<div style="color:var(--rd);font-size:.55rem;margin-bottom:6px;background:rgba(255,71,87,.08);padding:4px 6px;border-radius:3px">⚠ ${ODDS.lastError}</div>`:'';
+  const eventCount=entry?.games?.length||0;
   
   return `
-    ${sharedStatusLine}
+    ${oddsStatusLine}${propsStatusLine}
     ${errorLine}
     <div style="margin-bottom:6px">📅 Calls remaining this month: <strong style="color:${callsLeft<50?'var(--rd)':callsLeft<150?'var(--gd)':'var(--gn)'}">${callsLeft}</strong> / 500</div>
     <div style="font-size:.5rem;color:var(--mt2);margin-bottom:8px">Every fetch is auto-shared via Firebase, so other users don't need their own pull.</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-      <button class="btn bg" style="font-size:.65rem" onclick="triggerOddsFetch(false)">${ODDS.loading?'Loading…':'↻ Refresh Odds'}</button>
+    
+    <div style="margin-top:10px;font-size:.6rem;color:var(--ac);font-weight:600;letter-spacing:.05em">GAME ODDS (1 call)</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+      <button class="btn bg" style="font-size:.62rem" onclick="triggerOddsFetch(false)">${ODDS.loading?'Loading…':'↻ Refresh'}</button>
       <button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerSharedOddsPull()">↓ Pull from Firebase</button>
-      ${entry&&fresh?`<button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerOddsFetch(true)">⚠ Force Refresh (uses 1 call)</button>`:''}
+      ${entry&&fresh?`<button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerOddsFetch(true)">⚠ Force Refresh</button>`:''}
     </div>
-    <div style="font-size:.5rem;color:var(--mt);margin-top:6px">Auto-cached for 30 min. Pulls from API only if cache is stale or you click Force.</div>
+    
+    <div style="margin-top:10px;font-size:.6rem;color:var(--ac);font-weight:600;letter-spacing:.05em">PLAYER PROPS (~${eventCount||15} calls — one per game)</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+      <button class="btn bg" style="font-size:.62rem" onclick="triggerPropsFetch(false)">${ODDS.loadingProps?'Loading…':'↻ Refresh Props'}</button>
+      <button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerSharedPropsPull()">↓ Pull from Firebase</button>
+      ${propsEntry&&propsFresh?`<button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerPropsFetch(true)">⚠ Force Refresh</button>`:''}
+    </div>
+    <div style="font-size:.5rem;color:var(--mt);margin-top:6px;line-height:1.4">
+      Player props uses 1 call per game. With ~15 MLB games per day, this consumes ~15 calls.<br>
+      Markets pulled: pitcher_strikeouts, pitcher_walks, pitcher_hits_allowed, batter_total_bases, batter_walks, batter_strikeouts.<br>
+      30-min cache. Auto-shared via Firebase.
+    </div>
   `;
 }
 
@@ -1233,6 +1487,28 @@ async function triggerSharedOddsPull(){
   await pullSharedOdds(date);
   if(panel)panel.innerHTML=renderOddsPanel();
   if(['tot','hrLine'].includes(UI.tab))renderTab();
+}
+
+// Fetch player props from API for all events on the date. WARNING: ~15 calls.
+async function triggerPropsFetch(force){
+  const date=STATE.date||todayStr();
+  const eventCount=ODDS.data[date]?.games?.length||15;
+  if(!confirm(`Player props uses ~${eventCount} API calls (one per game).\n\nCalls remaining: ${ODDS.callsRemaining ?? '?'}\n\nProceed?`))return;
+  const panel=document.getElementById('odds-panel');
+  if(panel)panel.innerHTML=`<div style="color:var(--mt);padding:6px">Fetching player props (${eventCount} calls)… this takes 30-60 sec</div>`;
+  await fetchPlayerProps(date,force);
+  if(panel)panel.innerHTML=renderOddsPanel();
+  if(['k','pbb','bbat','bb','tb'].includes(UI.tab))renderTab();
+}
+
+// Pull shared player props snapshot from Firebase. Free (no API call).
+async function triggerSharedPropsPull(){
+  const date=STATE.date||todayStr();
+  const panel=document.getElementById('odds-panel');
+  if(panel)panel.innerHTML='<div style="color:var(--mt);padding:6px">Pulling player props from Firebase…</div>';
+  await pullSharedProps(date);
+  if(panel)panel.innerHTML=renderOddsPanel();
+  if(['k','pbb','bbat','bb','tb'].includes(UI.tab))renderTab();
 }
 
 async function overrideTodayPredictions(){
@@ -3366,6 +3642,7 @@ function renderTB(){
       <td>${sbar(m.tbScore)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${m.expectedTB!=null?roundConservative(m.expectedTB):'—'}</strong></td>
+      <td style="font-size:.62rem">${dkCellFor(m.batterName,'batter_total_bases',m.expectedTB,0.6,0.3)}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
       <td style="color:var(--mt2)">${m.order||''}</td>
@@ -3399,6 +3676,7 @@ function renderTB(){
         <th onclick="sortTB('sc')">TB Score${UI.tbSort.c==='sc'?' '+(UI.tbSort.d>0?'↑':'↓'):''}</th>
         <th>Rating</th>
         <th>xTB</th>
+        <th>DK Line</th>
         <th class="l" onclick="sortTB('n')">Batter</th>
         <th>Team</th>
         <th onclick="sortTB('ord')">#</th>
@@ -3436,6 +3714,9 @@ function renderKs(){
     const oppKs=m.oppLineup.map(b=>{const bp=STATE.players[b.id];return bp?.overall?.k_rate;}).filter(v=>v!=null);
     const oppAvgK=oppKs.length?oppKs.reduce((a,b)=>a+b,0)/oppKs.length:null;
     
+    // DK pitcher strikeouts line
+    const dkCell=dkCellFor(m.pitcherName,'pitcher_strikeouts',m.expectedK,1.5,0.8);
+    
     return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
       <td>${sbar(m.kGrade)}</td>
       <td>${bdg(r)}</td>
@@ -3443,6 +3724,7 @@ function renderKs(){
       <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${m.opp.abbr||m.opp.name}</td>
       <td><strong style="color:var(--ac)">${m.expectedK}</strong></td>
+      <td style="font-size:.62rem">${dkCell}</td>
       <td style="color:var(--mt2);font-size:.62rem">${m.lowK!=null?m.lowK+'–'+m.highK:'—'}</td>
       <td>${m.expectedIP}</td>
       <td>${pct(ov.k_rate,1)}</td>
@@ -3472,6 +3754,7 @@ function renderKs(){
         <th>Hand</th>
         <th class="l">Opp</th>
         <th onclick="sortK('eK')">Expected Strikeouts</th>
+        <th>DK Line</th>
         <th>Range</th>
         <th>xIP</th>
         <th>K%</th><th>K/9</th><th>ERA</th><th>WHIP</th><th>Opp K%</th>
@@ -3504,10 +3787,12 @@ function renderBatterBB(){
     const r=getRat(m.bbScore,LOCKS.bb);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
+    const dkCell=dkCellFor(m.batterName,'batter_walks',m.expectedBB,0.5,0.25);
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','bb')">
       <td>${sbar(m.bbScore)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
+      <td style="font-size:.62rem">${dkCell}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||m.team.name}</td>
       <td style="color:var(--mt2)">${m.order}</td>
@@ -3532,6 +3817,7 @@ function renderBatterBB(){
         <th onclick="sortBB('sc')">BB Score${UI.bbSort.c==='sc'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
         <th>Rating</th>
         <th onclick="sortBB('xbb')">xBB${UI.bbSort.c==='xbb'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
+        <th>DK Line</th>
         <th class="l" onclick="sortBB('n')">Batter</th>
         <th>Team</th>
         <th>#</th>
@@ -3565,10 +3851,12 @@ function renderPitcherBB(){
     const r=getRat(m.bbGrade,LOCKS.pbb);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
+    const dkCell=dkCellFor(m.pitcherName,'pitcher_walks',m.expectedBB,1.0,0.5);
     return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
       <td>${sbar(m.bbGrade)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
+      <td style="font-size:.62rem">${dkCell}</td>
       <td class="l"><strong>${m.pitcherName}</strong></td>
       <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">vs ${m.opp.abbr||m.opp.name}</td>
@@ -3592,6 +3880,7 @@ function renderPitcherBB(){
         <th onclick="sortPBB('sc')">BB Grade${UI.pbbSort.c==='sc'?' '+(UI.pbbSort.d>0?'↑':'↓'):''}</th>
         <th>Rating</th>
         <th onclick="sortPBB('xbb')">xBB${UI.pbbSort.c==='xbb'?' '+(UI.pbbSort.d>0?'↑':'↓'):''}</th>
+        <th>DK Line</th>
         <th class="l" onclick="sortPBB('n')">Pitcher</th>
         <th>Hand</th>
         <th class="l">Opp</th>
@@ -3675,6 +3964,24 @@ function renderTotals(){
         const totalEdgeColor=totalIsEdge?(totalEdgeNum>0?'var(--gn)':'var(--rd)'):'var(--ac)';
         const totalEdgeStr=totalEdgeNum!=null?` · <span style="color:${totalEdgeColor}">model ${totalEdgeNum>0?'+':''}${totalEdgeNum}</span>`:'';
         
+        // Explicit O/U bet recommendation:
+        // - Lock if model differs from DK line by ≥ 1.0 runs (strong edge)
+        // - Lean if differs by 0.5-0.99 runs (moderate edge)
+        // - No bet if difference < 0.5 (no edge)
+        let betRec='';
+        if(totalEdgeNum!=null){
+          const absEdge=Math.abs(totalEdgeNum);
+          if(absEdge>=1.0){
+            const side=totalEdgeNum>0?'OVER':'UNDER';
+            betRec=`<div style="background:rgba(46,213,115,.15);border:1.5px solid var(--gn);color:var(--gn);padding:4px 10px;border-radius:4px;font-size:.7rem;font-weight:700;letter-spacing:.5px;display:inline-block">🔒 BET ${side} ${dkLine}</div>`;
+          }else if(absEdge>=0.5){
+            const side=totalEdgeNum>0?'OVER':'UNDER';
+            betRec=`<div style="background:rgba(255,184,0,.1);border:1px solid var(--gd);color:var(--gd);padding:3px 8px;border-radius:4px;font-size:.62rem;font-weight:600;display:inline-block">📊 LEAN ${side} ${dkLine}</div>`;
+          }else{
+            betRec=`<div style="color:var(--mt2);font-size:.55rem;font-style:italic;padding:3px 0">No edge — pass</div>`;
+          }
+        }
+        
         // Moneyline pick from our model: whichever side has more projected runs
         const ourPick=t.homeRuns>t.awayRuns?'home':t.awayRuns>t.homeRuns?'away':null;
         const dkML=odds.moneyline;
@@ -3686,10 +3993,13 @@ function renderTotals(){
         }
         const ourPickStr=ourPick?` · we like <b style="color:${mlEdgeColor}">${ourPick==='home'?g.home.abbr:g.away.abbr}</b>`:'';
         
-        return `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--bd);display:flex;flex-wrap:wrap;gap:6px;font-size:.55rem">
-          ${odds.total?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">📊 DK O/U <b>${dkLine}</b> (${fmtML(odds.total.over)}/${fmtML(odds.total.under)})${totalEdgeStr}</div>`:''}
-          ${dkML?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">💰 ML ${g.away.abbr} ${fmtML(dkML.away)} / ${g.home.abbr} ${fmtML(dkML.home)}${ourPickStr}</div>`:''}
-          ${odds.spread?.point!=null?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">📐 Spread ${odds.spread.point>0?'+':''}${odds.spread.point}</div>`:''}
+        return `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--bd)">
+          ${betRec?`<div style="margin-bottom:6px">${betRec}</div>`:''}
+          <div style="display:flex;flex-wrap:wrap;gap:6px;font-size:.55rem">
+            ${odds.total?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">📊 DK O/U <b>${dkLine}</b> (${fmtML(odds.total.over)}/${fmtML(odds.total.under)})${totalEdgeStr}</div>`:''}
+            ${dkML?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">💰 ML ${g.away.abbr} ${fmtML(dkML.away)} / ${g.home.abbr} ${fmtML(dkML.home)}${ourPickStr}</div>`:''}
+            ${odds.spread?.point!=null?`<div class="rtc-f" style="background:rgba(0,212,255,.05);color:var(--ac)">📐 Spread ${odds.spread.point>0?'+':''}${odds.spread.point}</div>`:''}
+          </div>
         </div>`;
       })()}
     </div>`;
@@ -3778,10 +4088,12 @@ function renderBatterKs(){
     const r=getRat(m.batterKScore,LOCKS.bbat);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const xK=m.batterExpectedK!=null?roundConservative(m.batterExpectedK):null;
+    const dkCell=dkCellFor(m.batterName,'batter_strikeouts',m.batterExpectedK,0.5,0.25);
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
       <td>${sbar(m.batterKScore)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xK!=null?xK:'—'}</strong></td>
+      <td style="font-size:.62rem">${dkCell}</td>
       <td class="l"><strong>${m.batterName}</strong></td>
       <td style="color:var(--mt2)">${m.team.abbr||m.team.name}</td>
       <td style="color:var(--mt2)">${m.order}</td>
@@ -3800,7 +4112,7 @@ function renderBatterKs(){
     </div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>K Score</th><th>Rating</th><th>xK</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Hand</th>
+        <th>K Score</th><th>Rating</th><th>xK</th><th>DK Line</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Hand</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -3872,8 +4184,12 @@ async function loadResults(date){
   RESULTS.batters=[];
   RESULTS.pitchers=[];
   RESULTS.loaded=false;
-  // If a drill is active for the current prop tab, render via the prop tab so the drill view shows.
-  // Otherwise render the standalone Fact Check page as before.
+  // Kick off shared odds pull for this date so FC tables can show DK lines for past games.
+  // Doesn't block rendering — it'll re-render when complete.
+  if(FB.ready){
+    pullSharedOdds(date);
+    pullSharedProps(date);
+  }
   const renderResultsOrTab=()=>{
     const drillActive=Object.keys(HISTORY.drillDate||{}).length>0&&UI.tab!=='res';
     if(drillActive)renderTab();else renderResults();
@@ -4024,6 +4340,11 @@ async function loadResults(date){
 async function fetchHistoryForDate(date){
   if(HISTORY.fetched[date])return;
   HISTORY.fetched[date]=true; // mark immediately to prevent double-fetches
+  // Pull shared DK odds for this date so historical accuracy can use them
+  if(FB.ready){
+    pullSharedOdds(date);
+    pullSharedProps(date);
+  }
   try{
     const sched=await fetchJSON(`${MLB}/api/v1/schedule?sportId=1&date=${date}`);
     const games=sched?.dates?.[0]?.games||[];
@@ -4867,10 +5188,20 @@ function renderFCBatters(type){
     const r=getRat(b[scoreKey],lockAt);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const o=outcome(b);
+    // DK line for the prop type (only for markets DK offers as props)
+    let dkCell='';
+    if(type==='tb'){
+      dkCell=`<td style="font-size:.6rem">${dkCellFor(b.name,'batter_total_bases',b.expectedTB,0.6,0.3,RESULTS.date)}</td>`;
+    }else if(type==='bb'){
+      dkCell=`<td style="font-size:.6rem">${dkCellFor(b.name,'batter_walks',b.expectedBB,0.5,0.25,RESULTS.date)}</td>`;
+    }else if(type==='bbat'){
+      dkCell=`<td style="font-size:.6rem">${dkCellFor(b.name,'batter_strikeouts',b.batterExpectedK,0.5,0.25,RESULTS.date)}</td>`;
+    }
     return `<tr class="${rc}" onclick="openHistoryRowMo('batter',RESULTS.date,'${b.id}','${type}')" style="cursor:pointer">
       <td>${sbar(b[scoreKey],lockAt)}</td>
       <td style="color:${o.col};font-weight:700;font-size:1rem">${o.icon}</td>
       <td style="color:${o.col};font-size:.62rem">${o.txt}</td>
+      ${dkCell}
       <td class="l"><strong>${b.name}</strong></td>
       <td style="color:var(--mt2)">${b.team}</td>
       <td style="color:var(--mt2)">${b.order||''}</td>
@@ -4900,7 +5231,7 @@ function renderFCBatters(type){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':type==='hr'?'hit a HR':'actual BB ≥ rounded predicted (conservative)'} · ✗ = no · — = didn't play.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>${propLabel}</th><th></th><th>Result</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Rating</th>
+        <th>${propLabel}</th><th></th><th>Result</th>${type==='tb'||type==='bb'||type==='bbat'?'<th>DK Line</th>':''}<th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Rating</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -4931,12 +5262,14 @@ function renderFCPitchers(){
       txt=`${p.actualKs} K · ${p.actualIP} IP`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
+    const dkCell=dkCellFor(p.name,'pitcher_strikeouts',p.xK,1.5,0.8,RESULTS.date);
     return `<tr class="${rc}" onclick="openHistoryRowMo('pitcher',RESULTS.date,'${p.id}','k')" style="cursor:pointer">
       <td>${sbar(p.grade)}</td>
       <td><strong style="color:var(--ac)">${predWhole!=null?predWhole:p.xK}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td style="font-size:.6rem">${dkCell}</td>
       <td class="l"><strong>${p.name}</strong></td>
       <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
@@ -4953,7 +5286,7 @@ function renderFCPitchers(){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted xK. Predicted rounded conservatively (only rounds up at .7+). ✓ = actual ≥ predicted · ✗ = below. Diff = actual − raw prediction.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Grade</th><th>Expected Strikeouts</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
+        <th>Grade</th><th>Expected Strikeouts</th><th></th><th>Actual</th><th>Diff</th><th>DK Line</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -4989,6 +5322,7 @@ function renderFCPitcherBB(){
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td style="font-size:.6rem">${dkCellFor(p.name,'pitcher_walks',p.expectedBB,1.0,0.5,RESULTS.date)}</td>
       <td class="l"><strong>${p.name}</strong></td>
       <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
@@ -5005,7 +5339,7 @@ function renderFCPitcherBB(){
     <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted BB grade. Predicted rounded conservatively (only rounds up at .7+). ✓ = actual ≥ predicted · ✗ = below. Diff = actual − raw prediction.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>BB Grade</th><th>Expected Walks</th><th></th><th>Actual</th><th>Diff</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
+        <th>BB Grade</th><th>Expected Walks</th><th></th><th>Actual</th><th>Diff</th><th>DK Line</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -5031,27 +5365,67 @@ function renderFCTotals(){
       txt=`${t.actualTotal} (${t.actualAway}-${t.actualHome})`;
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
+    // DK O/U comparison: show DK line + our bet recommendation + outcome of that bet
+    const odds=getOddsForGame(RESULTS.date,t.home,t.away);
+    let dkLineStr='—',dkRecStr='—',dkOutcomeStr='—',dkOutcomeColor='var(--mt)';
+    if(odds?.total?.point!=null){
+      const dkLine=odds.total.point;
+      const edge=t.total-dkLine;
+      const absEdge=Math.abs(edge);
+      dkLineStr=`<span style="color:var(--ac)">${dkLine}</span>`;
+      let recSide=null;
+      if(absEdge>=1.0){recSide=edge>0?'OVER':'UNDER';dkRecStr=`<span style="color:var(--gn);font-weight:700">🔒 ${recSide}</span>`;}
+      else if(absEdge>=0.5){recSide=edge>0?'OVER':'UNDER';dkRecStr=`<span style="color:var(--gd)">lean ${recSide}</span>`;}
+      else dkRecStr='<span style="color:var(--mt)">pass</span>';
+      // If we made a recommendation and game is final, score it
+      if(recSide&&t.played){
+        const won=recSide==='OVER'?(t.actualTotal>dkLine):(t.actualTotal<dkLine);
+        dkOutcomeStr=won?'✓':'✗';
+        dkOutcomeColor=won?'var(--gn)':'var(--rd)';
+      }else if(t.played&&!recSide){
+        dkOutcomeStr='—';
+      }
+    }
     return `<tr onclick="openHistoryRowMo('total',RESULTS.date,'${t.gamePk}')" style="cursor:pointer">
       <td><strong style="color:var(--gd);font-size:1.1rem">${predWhole}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
       <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td style="font-size:.62rem">${dkLineStr}</td>
+      <td style="font-size:.6rem">${dkRecStr}</td>
+      <td style="color:${dkOutcomeColor};font-weight:700;font-size:1rem">${dkOutcomeStr}</td>
       <td class="l"><strong>${t.away} @ ${t.home}</strong></td>
       <td class="l" style="color:var(--mt2);font-size:.6rem">${t.venue?.replace(/(Stadium|Park|Field)/i,'').trim()||''}</td>
       <td style="color:var(--mt2);font-size:.62rem">${t.awayRuns}-${t.homeRuns}</td>
     </tr>`;
   }).join('');
   
+  // Compute DK O/U bet success rate for FC summary pill
+  let dkBetN=0,dkBetWon=0;
+  sorted.forEach(t=>{
+    if(!t.played)return;
+    const odds=getOddsForGame(RESULTS.date,t.home,t.away);
+    if(!odds?.total?.point)return;
+    const edge=t.total-odds.total.point;
+    if(Math.abs(edge)<0.5)return; // we said pass, no bet
+    const recSide=edge>0?'OVER':'UNDER';
+    const won=recSide==='OVER'?(t.actualTotal>odds.total.point):(t.actualTotal<odds.total.point);
+    dkBetN++;if(won)dkBetWon++;
+  });
+  const dkBetRate=dkBetN?Math.round(dkBetWon/dkBetN*100)+'%':'—';
+  const dkBetColor=dkBetN&&dkBetWon/dkBetN>=0.55?'var(--gn)':dkBetN&&dkBetWon/dkBetN>=0.45?'var(--gd)':'var(--rd)';
+  
   return `
     <div class="sum">
       <div class="pill"><span class="pn">${correctRate}</span>Match rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">Within 0.4 of rounded predicted</span></div>
       <div class="pill ln"><span class="pn">${meanError}</span>Avg run error</div>
+      <div class="pill" style="border-color:var(--ac)"><span class="pn" style="color:${dkBetColor}">${dkBetRate}</span>📊 DK O/U bet rate<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${dkBetWon}/${dkBetN} when we recommended a side</span></div>
       <div class="pill"><span class="pn">${sorted.length}</span>Games</div>
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. Predicted rounded to nearest whole. ✓ = actual within 0.4 of rounded predicted · ✗ = off. Diff = actual − rounded predicted.</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Sorted by predicted total. ✓/✗ Match = actual within 0.4 of predicted. DK Rec = bet recommendation when |model − DK line| ≥ 0.5. DK ✓ = bet won.</div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Expected Runs</th><th></th><th>Actual</th><th>Diff</th><th class="l">Game</th><th class="l">Venue</th><th>Pred Split</th>
+        <th>xRuns</th><th></th><th>Actual</th><th>Diff</th><th>DK Line</th><th>DK Rec</th><th>DK ✓</th><th class="l">Game</th><th class="l">Venue</th><th>Score</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
