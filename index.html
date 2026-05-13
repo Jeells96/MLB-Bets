@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.15 · Prop Intelligence</title>
+<title>Diamond IQ v6.16 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.15 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.16 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -429,6 +429,7 @@ details summary:hover{color:var(–tx)}
 <div class="tw">
   <div class="tabs">
     <div class="tab active" id="t-dash" onclick="sw('dash')">🏠 Home</div>
+    <div class="tab" id="t-locks" onclick="sw('locks')">🔒 Locks</div>
     <div class="tab" id="t-res" onclick="sw('res')">📊 Fact Check</div>
     <div class="tab" id="t-srch" onclick="sw('srch')">🔍 Player</div>
     <div class="tab" id="t-set" onclick="sw('set')">⚙️</div>
@@ -527,6 +528,7 @@ const UI={
   kSort:{c:'sc',d:-1},
   bbSort:{c:'sc',d:-1},
   pbbSort:{c:'sc',d:-1},
+  bbatSort:{c:'sc',d:-1},
   totSort:{c:'total',d:-1},
   filt:{hits:'',hr:'',k:''},
 };
@@ -705,6 +707,7 @@ const HISTORY={
   byDate:{},      // {date: {batters:{}, pitchers:{}, games:{}}}
   loading:false,
   expanded:{},    // {prop: bool} — track which prop's history badge is expanded
+  dkExpanded:{},  // {prop: bool} — track DK bet rate badge expanded state
   drillDate:{}    // {prop: 'YYYY-MM-DD'} — when set, renders that day's results inside the prop tab
 };
 
@@ -3308,6 +3311,7 @@ function renderTab(){
     case 'gnoHR':case 'gmultiHR':case 'hrLine':renderHRLine();break;
     case 'bbat':renderBatterKs();break;
     case 'res':renderResults();break;
+    case 'locks':renderLocks();break;
     case 'srch':renderSrch();break;
     case 'set':renderSettings();break;
   }
@@ -3425,7 +3429,14 @@ function goToProp(prop){
 function backBar(label,prop){
   // Kick off background fetch of historical results if a prop key was provided
   if(prop)setTimeout(()=>loadHistoryInBackground(prop),50);
-  const histPart=prop?`<div class="back-hist">${renderHistoryBadge(prop)}</div>`:'';
+  let histPart='';
+  if(prop){
+    histPart+=`<div class="back-hist">${renderHistoryBadge(prop)}</div>`;
+    // Separate DK badge for props that have DK lines
+    if(['tot','k','pbb','tb','bb','bbat','hrLine'].includes(prop)){
+      histPart+=`<div class="back-hist">${renderDKBadge(prop)}</div>`;
+    }
+  }
   return `<div class="back-bar"><button class="back-btn" onclick="sw('dash')">← Home</button><span class="back-sep">·</span><span class="back-cur">${label}</span></div>${histPart}`;
 }
 
@@ -3524,8 +3535,9 @@ function renderHits(){
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.hitScore!=null);
   if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
   
-  const sortKey={sc:'hitScore',n:'batterName',ord:'order'}[UI.hitsSort.c]||'hitScore';
+  const sortKey={sc:'hitScore',n:'batterName',ord:'order',tm:'team'}[UI.hitsSort.c]||'hitScore';
   data.sort((a,b)=>{
+    if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.hitsSort.d;}
     if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.hitsSort.d;
     const av=a[sortKey]??-1,bv=b[sortKey]??-1;
     return (bv-av)*UI.hitsSort.d;
@@ -3574,7 +3586,7 @@ function renderHits(){
         <th onclick="sortHits('sc')">Hit Score${UI.hitsSort.c==='sc'?' '+(UI.hitsSort.d>0?'↑':'↓'):''}</th>
         <th>Rating</th>
         <th class="l" onclick="sortHits('n')">Batter</th>
-        <th>Team</th>
+        <th onclick="sortHits('tm')">Team${UI.hitsSort.c==='tm'?' '+(UI.hitsSort.d>0?'↑':'↓'):''}</th>
         <th onclick="sortHits('ord')">#</th>
         <th>Matchup</th>
         <th class="l">Pitcher</th>
@@ -3592,8 +3604,9 @@ function renderHRs(){
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.hrScore!=null);
   if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
   
-  const sortKey={sc:'hrScore',n:'batterName',ord:'order'}[UI.hrSort.c]||'hrScore';
+  const sortKey={sc:'hrScore',n:'batterName',ord:'order',tm:'team'}[UI.hrSort.c]||'hrScore';
   data.sort((a,b)=>{
+    if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.hrSort.d;}
     if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.hrSort.d;
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.hrSort.d;
   });
@@ -3643,7 +3656,7 @@ function renderHRs(){
         <th onclick="sortHR('sc')">HR Score${UI.hrSort.c==='sc'?' '+(UI.hrSort.d>0?'↑':'↓'):''}</th>
         <th>Rating</th>
         <th class="l" onclick="sortHR('n')">Batter</th>
-        <th>Team</th>
+        <th onclick="sortHR('tm')">Team${UI.hrSort.c==='tm'?' '+(UI.hrSort.d>0?'↑':'↓'):''}</th>
         <th onclick="sortHR('ord')">#</th>
         <th class="l">Pitcher</th>
         <th>xSLG</th><th>ISO</th><th>SLG</th><th>HR</th><th>Park HR</th><th>Wind</th>
@@ -3660,8 +3673,9 @@ function renderTB(){
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.tbScore!=null);
   if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
   
-  const sortKey={sc:'tbScore',n:'batterName',ord:'order'}[UI.tbSort.c]||'tbScore';
+  const sortKey={sc:'tbScore',n:'batterName',ord:'order',tm:'team'}[UI.tbSort.c]||'tbScore';
   data.sort((a,b)=>{
+    if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.tbSort.d;}
     if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.tbSort.d;
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.tbSort.d;
   });
@@ -3720,7 +3734,7 @@ function renderTB(){
         <th>xTB</th>
         <th>DK Line</th>
         <th class="l" onclick="sortTB('n')">Batter</th>
-        <th>Team</th>
+        <th onclick="sortTB('tm')">Team${UI.tbSort.c==='tm'?' '+(UI.tbSort.d>0?'↑':'↓'):''}</th>
         <th onclick="sortTB('ord')">#</th>
         <th>Matchup</th>
         <th class="l">Pitcher</th>
@@ -3738,8 +3752,9 @@ function renderKs(){
   const data=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null);
   if(!data.length){setMain(`<div class="empty">No pitcher matchups loaded</div>`);return;}
   
-  const sortKey={sc:'kGrade',n:'pitcherName',eK:'expectedK'}[UI.kSort.c]||'kGrade';
+  const sortKey={sc:'kGrade',n:'pitcherName',eK:'expectedK',tm:'team'}[UI.kSort.c]||'kGrade';
   data.sort((a,b)=>{
+    if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.kSort.d;}
     if(sortKey==='pitcherName')return a.pitcherName.localeCompare(b.pitcherName)*UI.kSort.d;
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.kSort.d;
   });
@@ -3814,8 +3829,9 @@ function renderBatterBB(){
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.expectedBB!=null);
   if(!data.length){setMain(`${backBar('🚶 Walks (BB)','bb')}<div class="empty">No batter matchups loaded</div>`);return;}
   
-  const sortKey={sc:'bbScore',n:'batterName',xbb:'expectedBB'}[UI.bbSort.c]||'bbScore';
+  const sortKey={sc:'bbScore',n:'batterName',xbb:'expectedBB',tm:'team'}[UI.bbSort.c]||'bbScore';
   data.sort((a,b)=>{
+    if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.bbSort.d;}
     if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.bbSort.d;
     const av=a[sortKey]??-Infinity,bv=b[sortKey]??-Infinity;
     return (bv-av)*UI.bbSort.d;
@@ -3861,7 +3877,7 @@ function renderBatterBB(){
         <th onclick="sortBB('xbb')">xBB${UI.bbSort.c==='xbb'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
         <th>DK Line</th>
         <th class="l" onclick="sortBB('n')">Batter</th>
-        <th>Team</th>
+        <th onclick="sortBB('tm')">Team${UI.bbSort.c==='tm'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
         <th>#</th>
         <th class="l">Pitcher</th>
         <th>Hand</th>
@@ -3879,8 +3895,9 @@ function renderPitcherBB(){
   const data=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.expectedBB!=null);
   if(!data.length){setMain(`${backBar('🚶 Walks Allowed (BB)','pbb')}<div class="empty">No pitcher matchups loaded</div>`);return;}
   
-  const sortKey={sc:'bbGrade',n:'pitcherName',xbb:'expectedBB'}[UI.pbbSort.c]||'bbGrade';
+  const sortKey={sc:'bbGrade',n:'pitcherName',xbb:'expectedBB',tm:'team'}[UI.pbbSort.c]||'bbGrade';
   data.sort((a,b)=>{
+    if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.pbbSort.d;}
     if(sortKey==='pitcherName')return a.pitcherName.localeCompare(b.pitcherName)*UI.pbbSort.d;
     const av=a[sortKey]??-Infinity,bv=b[sortKey]??-Infinity;
     return (bv-av)*UI.pbbSort.d;
@@ -3933,6 +3950,7 @@ function renderPitcherBB(){
   `);
 }
 function sortPBB(c){if(UI.pbbSort.c===c)UI.pbbSort.d*=-1;else{UI.pbbSort.c=c;UI.pbbSort.d=c==='n'?1:-1;}renderPitcherBB();}
+function sortBBat(c){if(UI.bbatSort.c===c)UI.bbatSort.d*=-1;else{UI.bbatSort.c=c;UI.bbatSort.d=c==='n'?1:-1;}renderBatterKs();}
 
 
 /* ---------- TOTALS TAB ---------- */
@@ -4121,7 +4139,13 @@ function renderBatterKs(){
   if(maybeRenderDrillView('⚡ Strikeouts (Batter)','bbat'))return;
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.batterKScore!=null);
   if(!data.length){setMain(`${backBar('⚡ Strikeouts (Batter)','bbat')}<div class="empty">No batter strikeout matchups loaded — recompute in Settings</div>`);return;}
-  data.sort((a,b)=>(b.batterKScore||0)-(a.batterKScore||0));
+  
+  const sortKey={sc:'batterKScore',n:'batterName',ord:'order',tm:'team',xk:'batterExpectedK'}[UI.bbatSort.c]||'batterKScore';
+  data.sort((a,b)=>{
+    if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.bbatSort.d;}
+    if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.bbatSort.d;
+    return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.bbatSort.d;
+  });
   
   const lk=data.filter(m=>m.batterKScore>=LOCKS.bbat).length;
   const ht=data.filter(m=>m.batterKScore>=62&&m.batterKScore<LOCKS.bbat).length;
@@ -4154,7 +4178,7 @@ function renderBatterKs(){
     </div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>K Score</th><th>Rating</th><th>xK</th><th>DK Line</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Hand</th>
+        <th onclick="sortBBat('sc')">K Score${UI.bbatSort.c==='sc'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th>Rating</th><th onclick="sortBBat('xk')">xK${UI.bbatSort.c==='xk'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th>DK Line</th><th class="l" onclick="sortBBat('n')">Batter</th><th onclick="sortBBat('tm')">Team${UI.bbatSort.c==='tm'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th onclick="sortBBat('ord')">#</th><th class="l">Pitcher</th><th>Hand</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -4883,28 +4907,9 @@ function renderHistoryBadge(prop){
     <span style="font-size:.5rem;color:var(--mt2)">Predictions saved: ${predCount} · Results cached: ${histCount}</span>
   </td></tr>`;
   
-  // DK bet rate summary section — for any prop where we have DK lines (game totals + player props)
-  let dkBetSection='';
-  if(['tot','k','pbb','tb','bb','bbat'].includes(prop)){
-    const dkStats=historicalDKBetStats(prop);
-    if(dkStats.totalBets>0){
-      const c=dkStats.totalRate>=55?'var(--gn)':dkStats.totalRate>=45?'var(--gd)':'var(--rd)';
-      dkBetSection=`<div style="margin-bottom:6px;padding:6px 8px;background:rgba(0,212,255,.06);border-radius:4px;border-left:2px solid var(--ac)">
-        <div style="font-size:.55rem;color:var(--mt2);letter-spacing:.05em;text-transform:uppercase">14D DK Bet Win Rate</div>
-        <div style="font-size:.7rem"><b style="color:${c}">${dkStats.totalRate}%</b> <span style="color:var(--mt2);font-size:.6rem">(${dkStats.totalWon}/${dkStats.totalBets} bets we recommended)</span></div>
-      </div>`;
-    }else{
-      dkBetSection=`<div style="margin-bottom:6px;padding:6px 8px;background:rgba(0,212,255,.04);border-radius:4px;border-left:2px solid var(--mt)">
-        <div style="font-size:.55rem;color:var(--mt2);letter-spacing:.05em;text-transform:uppercase">14D DK Bet Win Rate</div>
-        <div style="font-size:.6rem;color:var(--mt)">No DK-graded bets yet — need past days with DK lines saved + recommendations made.</div>
-      </div>`;
-    }
-  }
-  
   return `${collapsed}
     <div class="hist-expanded">
       ${top2Section}
-      ${dkBetSection}
       <div style="font-size:.5rem;color:var(--mt);padding:0 4px 4px;letter-spacing:.06em;text-transform:uppercase">tap a day to view that day's results</div>
       <div style="font-size:.5rem;color:var(--mt2);padding:0 4px 4px;font-family:'DM Mono',monospace">
         Lock cutoff: ${(()=>{
@@ -4914,6 +4919,64 @@ function renderHistoryBadge(prop){
       </div>
       <table style="width:100%;font-size:.6rem;border-collapse:collapse">
         <tbody>${rows||emptyMsg}${totalLine}</tbody>
+      </table>
+    </div>`;
+}
+
+// Separate DK Bet Win Rate badge. Collapsible like the history badge.
+// HISTORY.dkExpanded[prop] tracks open/closed.
+function renderDKBadge(prop){
+  HISTORY.dkExpanded=HISTORY.dkExpanded||{};
+  const expanded=HISTORY.dkExpanded[prop];
+  const dkStats=historicalDKBetStats(prop);
+  
+  let mainTxt;
+  if(dkStats.totalBets===0){
+    mainTxt='<span style="color:var(--mt)">no DK bets yet</span>';
+  }else{
+    const c=dkStats.totalRate>=55?'var(--gn)':dkStats.totalRate>=45?'var(--gd)':'var(--rd)';
+    mainTxt=`<b style="color:${c}">${dkStats.totalRate}%</b> <span style="color:var(--mt2)">(${dkStats.totalWon}/${dkStats.totalBets})</span>`;
+  }
+  
+  const collapsed=`<button class="hist-badge" style="border-left:2px solid var(--ac)" onclick="HISTORY.dkExpanded['${prop}']=!HISTORY.dkExpanded['${prop}'];renderTab()">
+    <span class="hist-badge-l">14D DK Bet Win Rate:</span> ${mainTxt} <span class="hist-badge-arr">${expanded?'▴':'▾'}</span>
+  </button>`;
+  
+  if(!expanded)return collapsed;
+  
+  // Per-day DK bet breakdown
+  let rows='';
+  if(dkStats.days.length===0){
+    rows='<tr><td colspan="3" style="color:var(--mt);text-align:center;padding:8px">No past days</td></tr>';
+  }else{
+    dkStats.days.forEach(d=>{
+      const dateLabel=d.date.slice(5).replace('-','/'); // MM/DD
+      if(d.pending){
+        rows+=`<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:5px 4px">no results yet</td></tr>`;
+      }else if(d.noOdds||d.bets===0){
+        rows+=`<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:5px 4px">${d.noOdds?'no DK lines saved':'no qualifying bets'}</td></tr>`;
+      }else{
+        const c=d.rate>=55?'var(--gn)':d.rate>=45?'var(--gd)':'var(--rd)';
+        rows+=`<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td>
+          <td style="color:${c};font-weight:700;padding:5px 4px;text-align:right">${d.rate}%</td>
+          <td style="color:var(--mt2);padding:5px 4px;text-align:right">${d.won}/${d.bets}</td></tr>`;
+      }
+    });
+  }
+  
+  const totalRow=dkStats.totalBets>0?`<tr style="border-top:1px solid var(--bd);font-weight:700">
+    <td style="padding:5px 4px;color:var(--ac)">14D Total</td>
+    <td style="padding:5px 4px;text-align:right;color:${dkStats.totalRate>=55?'var(--gn)':dkStats.totalRate>=45?'var(--gd)':'var(--rd)'}">${dkStats.totalRate}%</td>
+    <td style="padding:5px 4px;text-align:right;color:var(--mt2)">${dkStats.totalWon}/${dkStats.totalBets}</td>
+  </tr>`:'';
+  
+  return `${collapsed}
+    <div class="hist-expanded" style="border-left:2px solid var(--ac)">
+      <div style="font-size:.5rem;color:var(--mt2);padding:0 4px 4px;line-height:1.4">
+        Counts bets where |model − DK line| ≥ lean margin for this prop. ✓ when actual finished on our side of the line.
+      </div>
+      <table style="width:100%;font-size:.6rem;border-collapse:collapse">
+        <tbody>${rows}${totalRow}</tbody>
       </table>
     </div>`;
 }
@@ -5009,6 +5072,197 @@ function fcLockStats(prop){
     return {n:played.length,hits:matches,rate:played.length?Math.round(matches/played.length*100):null,total:RESULTS.totals.length,lockAt:null};
   }
   return {n:0,hits:0,rate:null,total:0,lockAt:null};
+}
+
+// ─── LOCKS TAB ───
+// Shows every Lock-level pick for today across all prop types, plus the 14D
+// success rate for each prop so the user can see how reliable each category has been.
+// Three sections: Batter, Pitcher, Game. Each section pulls its locks live from STATE.
+function renderLocks(){
+  if(!STATE.ready||!STATE.matchups.length){
+    setMain(`<div class="empty"><b>No slate loaded</b>Pick a date and tap ▶ Load on Home</div>`);
+    return;
+  }
+  
+  // Helper: tiny success rate badge for a given prop
+  function rateBadge(prop,labelOverride){
+    const lock=historicalLockStats(prop);
+    const dk=historicalDKBetStats(prop);
+    let parts=[];
+    if(lock.totalN>0){
+      const c=lock.totalRate>=70?'var(--gn)':lock.totalRate>=50?'var(--gd)':'var(--rd)';
+      parts.push(`<span title="Lock-grade success rate">🔒 <b style="color:${c}">${lock.totalRate}%</b> <span style="color:var(--mt2)">(${lock.totalHits}/${lock.totalN})</span></span>`);
+    }
+    if(dk&&dk.totalBets>0){
+      const c=dk.totalRate>=55?'var(--gn)':dk.totalRate>=45?'var(--gd)':'var(--rd)';
+      parts.push(`<span title="DK bet win rate">📊 <b style="color:${c}">${dk.totalRate}%</b> <span style="color:var(--mt2)">(${dk.totalWon}/${dk.totalBets})</span></span>`);
+    }
+    if(!parts.length)return '<span style="color:var(--mt);font-size:.55rem">no 14D history</span>';
+    return parts.join(' · ');
+  }
+  
+  // Collect picks per section
+  const batterMatchups=STATE.matchups.filter(m=>m.kind==='batter');
+  const pitcherMatchups=STATE.matchups.filter(m=>m.kind==='pitcher');
+  
+  // ── BATTER LOCKS ──
+  const hitLocks=batterMatchups.filter(m=>m.hitScore>=LOCKS.hits).sort((a,b)=>b.hitScore-a.hitScore);
+  const hrLocks=batterMatchups.filter(m=>m.hrScore>=LOCKS.hr).sort((a,b)=>b.hrScore-a.hrScore);
+  
+  // DK locks (need DK lines pulled). For each, compute pick and edge.
+  function dkLockPicks(items,marketKey,modelField,lockMargin,nameField,extraInfo){
+    return items.map(m=>{
+      const playerName=m[nameField];
+      const props=getPlayerProps(STATE.date,playerName);
+      const market=props?.markets?.[marketKey];
+      if(market?.line==null)return null;
+      const modelVal=m[modelField];
+      if(modelVal==null)return null;
+      const edge=modelVal-market.line;
+      if(Math.abs(edge)<lockMargin)return null;
+      return {m,marketLine:market.line,edge,pick:edge>0?'OVER':'UNDER',modelVal,extra:extraInfo?extraInfo(m):''};
+    }).filter(x=>x).sort((a,b)=>Math.abs(b.edge)-Math.abs(a.edge));
+  }
+  
+  const tbLocks=dkLockPicks(batterMatchups,'batter_total_bases','expectedTB',0.6,'batterName');
+  const batBBLocks=dkLockPicks(batterMatchups,'batter_walks','expectedBB',0.5,'batterName');
+  const batKLocks=dkLockPicks(batterMatchups,'batter_strikeouts','batterExpectedK',0.5,'batterName');
+  
+  // ── PITCHER LOCKS ──
+  const pKLocks=dkLockPicks(pitcherMatchups,'pitcher_strikeouts','expectedK',1.5,'pitcherName');
+  const pBBLocks=dkLockPicks(pitcherMatchups,'pitcher_walks','expectedBB',1.0,'pitcherName');
+  
+  // ── GAME LOCKS ──
+  // Run totals: |model − DK line| ≥ 1.0
+  const runTotalLocks=[];
+  (STATE.totals||[]).forEach(t=>{
+    const odds=getOddsForGame(STATE.date,t.game.home.name,t.game.away.name);
+    if(!odds?.total?.point)return;
+    const edge=t.total-odds.total.point;
+    if(Math.abs(edge)<1.0)return;
+    runTotalLocks.push({t,dkLine:odds.total.point,edge,pick:edge>0?'OVER':'UNDER'});
+  });
+  runTotalLocks.sort((a,b)=>Math.abs(b.edge)-Math.abs(a.edge));
+  
+  // HR totals: model totalHR locks for Over/Under 1.5
+  const hrTotalLocks=(STATE.totals||[]).filter(t=>t.hrLineScore!=null&&t.hrLineScore>=LOCKS.hrLine)
+    .sort((a,b)=>b.hrLineScore-a.hrLineScore);
+  
+  // Helper to render a generic pick row
+  function lockRow(label,picks,builder){
+    if(!picks.length){
+      return `<div style="background:var(--bg2);padding:8px 10px;border-radius:4px;margin-bottom:6px;font-size:.6rem;color:var(--mt)">${label}: none</div>`;
+    }
+    return picks.map(builder).join('');
+  }
+  
+  function batterLockRow(m,scoreVal,scoreType){
+    return `<tr onclick="openBatterMo('${m.batterId}','${m.pitcherId}','${scoreType}')" style="cursor:pointer">
+      <td style="padding:4px 6px"><strong style="color:var(--rd)">${scoreVal.toFixed(1)}</strong></td>
+      <td style="padding:4px 6px" class="l"><strong>${m.batterName}</strong></td>
+      <td style="padding:4px 6px;color:var(--mt2)">${m.team.abbr||m.team.name}</td>
+      <td style="padding:4px 6px;color:var(--mt2);font-size:.55rem">vs ${m.pitcherName}</td>
+    </tr>`;
+  }
+  
+  function dkPickRow(item){
+    const m=item.m;
+    const isPitcher=m.kind==='pitcher';
+    const name=isPitcher?m.pitcherName:m.batterName;
+    const pickColor=item.pick==='OVER'?'var(--gn)':'var(--ac)';
+    const clickHandler=isPitcher?`openPitcherMo('${m.pitcherId}')`:`openBatterMo('${m.batterId}','${m.pitcherId}','hit')`;
+    return `<tr onclick="${clickHandler}" style="cursor:pointer">
+      <td style="padding:4px 6px"><strong style="color:${pickColor}">${item.pick}</strong> <span style="color:var(--ac);font-size:.6rem">${item.marketLine}</span></td>
+      <td style="padding:4px 6px;color:var(--mt2);font-size:.55rem">model ${item.modelVal.toFixed(2)} (${item.edge>0?'+':''}${item.edge.toFixed(1)})</td>
+      <td style="padding:4px 6px" class="l"><strong>${name}</strong></td>
+      <td style="padding:4px 6px;color:var(--mt2)">${m.team.abbr||m.team.name}</td>
+    </tr>`;
+  }
+  
+  function gameTotalRow(item){
+    const t=item.t;
+    const g=t.game;
+    const pickColor=item.pick==='OVER'?'var(--gn)':'var(--ac)';
+    return `<tr onclick="openGameMo('${g.gamePk}')" style="cursor:pointer">
+      <td style="padding:4px 6px"><strong style="color:${pickColor}">${item.pick}</strong> <span style="color:var(--ac);font-size:.6rem">${item.dkLine}</span></td>
+      <td style="padding:4px 6px;color:var(--mt2);font-size:.55rem">model ${t.total.toFixed(1)} (${item.edge>0?'+':''}${item.edge.toFixed(1)})</td>
+      <td style="padding:4px 6px" class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
+    </tr>`;
+  }
+  
+  function hrTotalRow(t){
+    const g=t.game;
+    const pickColor=t.hrLinePick==='Over'?'var(--gn)':'var(--ac)';
+    return `<tr onclick="openHRLineMo('${g.gamePk}')" style="cursor:pointer">
+      <td style="padding:4px 6px"><strong style="color:${pickColor}">${t.hrLinePick.toUpperCase()}</strong> <span style="color:var(--ac);font-size:.6rem">1.5</span></td>
+      <td style="padding:4px 6px;color:var(--mt2);font-size:.55rem">xHR ${t.totalHR.toFixed(1)} · score ${t.hrLineScore.toFixed(0)}</td>
+      <td style="padding:4px 6px" class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
+    </tr>`;
+  }
+  
+  // Build each section
+  function section(title,items){
+    if(!items.length)return '';
+    return `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:8px">
+      <div style="padding:6px 10px;border-bottom:1px solid var(--bdr);background:var(--bg2)">
+        <div style="font-size:.62rem;font-weight:700;color:var(--ac);letter-spacing:.04em;text-transform:uppercase">${title}</div>
+      </div>
+      ${items.join('')}
+    </div>`;
+  }
+  
+  function subSection(label,rateProp,scoreType,rowsHtml){
+    return `<div style="padding:6px 10px;border-bottom:1px dashed var(--bdr)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:4px">
+        <div style="font-size:.6rem;font-weight:600;color:var(--gd)">${label}</div>
+        <div style="font-size:.55rem">${rateBadge(rateProp)}</div>
+      </div>
+      ${rowsHtml||'<div style="color:var(--mt);font-size:.6rem;padding:4px 0">none today</div>'}
+    </div>`;
+  }
+  
+  const batterSection=section('⚾ Batter Locks',[
+    subSection('🎯 Hits (Lock Grade)','hits','hit',
+      hitLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${hitLocks.map(m=>batterLockRow(m,m.hitScore,'hit')).join('')}</table>`:''),
+    subSection('💥 HR (Lock Grade)','hr','hr',
+      hrLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${hrLocks.map(m=>batterLockRow(m,m.hrScore,'hr')).join('')}</table>`:''),
+    subSection('🏟️ Total Bases (DK Lock)','tb','tb',
+      tbLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${tbLocks.map(dkPickRow).join('')}</table>`:''),
+    subSection('🚶 Walks (DK Lock)','bb','bb',
+      batBBLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${batBBLocks.map(dkPickRow).join('')}</table>`:''),
+    subSection('⚡ Strikeouts (DK Lock)','bbat','hit',
+      batKLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${batKLocks.map(dkPickRow).join('')}</table>`:'')
+  ]);
+  
+  const pitcherSection=section('🎯 Pitcher Locks',[
+    subSection('⚡ Strikeouts (DK Lock)','k','k',
+      pKLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${pKLocks.map(dkPickRow).join('')}</table>`:''),
+    subSection('🚶 Walks Allowed (DK Lock)','pbb','pbb',
+      pBBLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${pBBLocks.map(dkPickRow).join('')}</table>`:'')
+  ]);
+  
+  const gameSection=section('🎲 Game Locks',[
+    subSection('🎯 Run Totals (DK Lock)','tot','tot',
+      runTotalLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${runTotalLocks.map(gameTotalRow).join('')}</table>`:''),
+    subSection('💥 HR Total O/U 1.5 (Score Lock)','hrLine','hrLine',
+      hrTotalLocks.length?`<table style="width:100%;font-size:.6rem;border-collapse:collapse">${hrTotalLocks.map(hrTotalRow).join('')}</table>`:'')
+  ]);
+  
+  const totalLocks=hitLocks.length+hrLocks.length+tbLocks.length+batBBLocks.length+batKLocks.length+pKLocks.length+pBBLocks.length+runTotalLocks.length+hrTotalLocks.length;
+  
+  setMain(`
+    <div style="margin-bottom:10px">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;letter-spacing:2px">🔒 Today's Locks</div>
+      <div style="font-size:.6rem;color:var(--mt2);margin-top:2px">${totalLocks} total locks · 🔒 = model score ≥ Lock threshold · 📊 = |model − DK| ≥ Lock margin</div>
+    </div>
+    ${batterSection||'<div style="color:var(--mt);font-size:.7rem;padding:10px">No batter locks today</div>'}
+    ${pitcherSection||'<div style="color:var(--mt);font-size:.7rem;padding:10px">No pitcher locks today</div>'}
+    ${gameSection||'<div style="color:var(--mt);font-size:.7rem;padding:10px">No game locks today</div>'}
+    <div style="font-size:.5rem;color:var(--mt);text-align:center;margin-top:14px;line-height:1.5">
+      Tap any row to see the math. DK locks require DK lines pulled in Settings.<br>
+      Success rates show last 14 days where data was saved.
+    </div>
+  `);
 }
 
 function renderResults(){
