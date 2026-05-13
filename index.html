@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.14 · Prop Intelligence</title>
+<title>Diamond IQ v6.15 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -415,7 +415,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.14 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.15 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -1450,6 +1450,11 @@ function renderOddsPanel(){
       Markets pulled: pitcher_strikeouts, pitcher_walks, pitcher_hits_allowed, batter_total_bases, batter_walks, batter_strikeouts.<br>
       30-min cache. Auto-shared via Firebase.
     </div>
+    
+    <div style="margin-top:12px;padding-top:8px;border-top:1px dashed var(--bd)">
+      <div style="font-size:.55rem;color:var(--mt2);margin-bottom:4px">🔧 Debug — odds not saving across sessions?</div>
+      <button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="testFirebaseWrite()">⚙ Test Firebase Write</button>
+    </div>
   `;
 }
 
@@ -1509,6 +1514,42 @@ async function triggerSharedPropsPull(){
   await pullSharedProps(date);
   if(panel)panel.innerHTML=renderOddsPanel();
   if(['k','pbb','bbat','bb','tb'].includes(UI.tab))renderTab();
+}
+
+// Manually test Firebase write capability. Surfaces the precise failure mode.
+async function testFirebaseWrite(){
+  const panel=document.getElementById('odds-panel');
+  const log=msg=>{if(panel)panel.innerHTML=`<div style="font-family:'DM Mono',monospace;font-size:.55rem;padding:6px;background:var(--bg2);border-radius:4px;white-space:pre-wrap">${msg}</div>`;};
+  let out=`[Firebase Write Test]\n`;
+  out+=`FB.ready: ${FB.ready}\n`;
+  if(!FB.ready){out+=`✗ Firebase not initialized\n`;log(out);return;}
+  out+=`Project: ${FB.app?.options?.projectId}\n`;
+  out+=`Attempting write to app_settings/test_write…\n`;
+  log(out);
+  try{
+    await FB.db.collection('app_settings').doc('test_write').set({
+      timestamp:Date.now(),
+      message:'test from diamond-iq'
+    });
+    out+=`✓ Write succeeded!\n`;
+    out+=`\nNow attempting read…\n`;log(out);
+    const doc=await FB.db.collection('app_settings').doc('test_write').get();
+    if(doc.exists){
+      out+=`✓ Read succeeded. Data: ${JSON.stringify(doc.data())}\n`;
+      out+=`\nFirebase is working correctly.\n`;
+      out+=`If DK odds still aren't saving, check console for [DIQ] errors.\n`;
+    }else{
+      out+=`✗ Read returned no document.\n`;
+    }
+  }catch(e){
+    out+=`✗ FAILED: ${e.message}\n`;
+    out+=`\nCode: ${e.code}\n`;
+    out+=`\nMost likely cause: Firestore rules don't allow writes to app_settings/*.\n`;
+    out+=`\nFix in Firebase console — Firestore Database → Rules:\n`;
+    out+=`match /app_settings/{doc} {\n  allow read,write: if true;\n}`;
+  }
+  log(out);
+  setTimeout(()=>{if(panel)panel.innerHTML=renderOddsPanel();},10000);
 }
 
 async function overrideTodayPredictions(){
@@ -3275,6 +3316,7 @@ function renderTab(){
 function sbar(s,lockAt){
   if(s==null)return '<span style="color:#1e3050">—</span>';
   const lk=lockAt??72;
+  // Color scheme: red ONLY for Lock-level. Gold/amber for Strong (≥62). Cyan for Lean (≥52). Muted otherwise.
   const c=s>=lk?'var(--rd)':s>=62?'var(--gd)':s>=52?'var(--ac)':s<=32?'var(--mt)':'var(--mt2)';
   return `<div class="sb"><span class="sn" style="color:${c}">${s}</span><div class="st"><div class="sf" style="width:${Math.min(100,s)}%;background:${c}"></div></div></div>`;
 }
@@ -3500,7 +3542,7 @@ function renderHits(){
     const ov=p?.overall||{};
     const sp=p?batterSplit(p,m.pHand):{};
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
-      <td>${sbar(m.hitScore,79.5)}</td>
+      <td>${sbar(m.hitScore,LOCKS.hits)}</td>
       <td>${bdg(r)}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
@@ -3571,7 +3613,7 @@ function renderHRs(){
     const windC=windFactor>1.03?'var(--gn)':windFactor<0.97?'var(--rd)':'var(--mt)';
     
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','hr')">
-      <td>${sbar(m.hrScore)}</td>
+      <td>${sbar(m.hrScore,LOCKS.hr)}</td>
       <td>${bdg(r)}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
@@ -3639,7 +3681,7 @@ function renderTB(){
     const windC=windFactor>1.03?'var(--gn)':windFactor<0.97?'var(--rd)':'var(--mt)';
     
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','tb')">
-      <td>${sbar(m.tbScore)}</td>
+      <td>${sbar(m.tbScore,LOCKS.tb)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${m.expectedTB!=null?roundConservative(m.expectedTB):'—'}</strong></td>
       <td style="font-size:.62rem">${dkCellFor(m.batterName,'batter_total_bases',m.expectedTB,0.6,0.3)}</td>
@@ -3718,7 +3760,7 @@ function renderKs(){
     const dkCell=dkCellFor(m.pitcherName,'pitcher_strikeouts',m.expectedK,1.5,0.8);
     
     return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
-      <td>${sbar(m.kGrade)}</td>
+      <td>${sbar(m.kGrade,LOCKS.k)}</td>
       <td>${bdg(r)}</td>
       <td class="l"><strong>${m.pitcherName}</strong></td>
       <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
@@ -3789,7 +3831,7 @@ function renderBatterBB(){
     const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
     const dkCell=dkCellFor(m.batterName,'batter_walks',m.expectedBB,0.5,0.25);
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','bb')">
-      <td>${sbar(m.bbScore)}</td>
+      <td>${sbar(m.bbScore,LOCKS.bb)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
       <td style="font-size:.62rem">${dkCell}</td>
@@ -3853,7 +3895,7 @@ function renderPitcherBB(){
     const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
     const dkCell=dkCellFor(m.pitcherName,'pitcher_walks',m.expectedBB,1.0,0.5);
     return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
-      <td>${sbar(m.bbGrade)}</td>
+      <td>${sbar(m.bbGrade,LOCKS.pbb)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
       <td style="font-size:.62rem">${dkCell}</td>
@@ -4090,7 +4132,7 @@ function renderBatterKs(){
     const xK=m.batterExpectedK!=null?roundConservative(m.batterExpectedK):null;
     const dkCell=dkCellFor(m.batterName,'batter_strikeouts',m.batterExpectedK,0.5,0.25);
     return `<tr class="${rc}" onclick="openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
-      <td>${sbar(m.batterKScore)}</td>
+      <td>${sbar(m.batterKScore,LOCKS.bbat)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xK!=null?xK:'—'}</strong></td>
       <td style="font-size:.62rem">${dkCell}</td>
@@ -4493,6 +4535,120 @@ function historicalTopNStats(prop,n){
   return {days,totalHits,totalN,totalRate:totalN?Math.round(totalHits/totalN*100):null};
 }
 
+// Historical DK bet success rate. For each past date, compute the win/loss of every bet
+// recommendation we made (based on |model - DK line| ≥ lean margin). Returns 14-day rolling stats.
+function historicalDKBetStats(prop){
+  const today=todayStr();
+  const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
+  const days=[];
+  let totalWon=0,totalBets=0;
+  
+  // Per-prop config: market key, model field, lean margin, lock margin, outcome field
+  const cfg={
+    tot:{marketKey:'total',modelField:'total',leanMargin:0.5,getResult:(t,r)=>r?.total,gamesKeyed:true},
+    k:{marketKey:'pitcher_strikeouts',modelField:'xK',leanMargin:0.8,getResult:(p,r)=>r?.k},
+    pbb:{marketKey:'pitcher_walks',modelField:'expectedBB',leanMargin:0.5,getResult:(p,r)=>r?.bb},
+    tb:{marketKey:'batter_total_bases',modelField:'expectedTB',leanMargin:0.3,getResult:(b,r)=>r?.tb},
+    bb:{marketKey:'batter_walks',modelField:'expectedBB',leanMargin:0.25,getResult:(b,r)=>r?.bb},
+    bbat:{marketKey:'batter_strikeouts',modelField:'batterExpectedK',leanMargin:0.25,getResult:(b,r)=>r?.k}
+  }[prop];
+  if(!cfg)return {totalWon:0,totalBets:0,totalRate:null,days:[]};
+  
+  for(const date of dates){
+    const pred=PRED.byDate[date];
+    const hist=HISTORY.byDate[date];
+    const oddsForDay=ODDS.data[date]?.games||[];
+    const propsForDay=ODDS.props[date]?.events||{};
+    if(!hist){days.push({date,won:null,bets:null,rate:null,pending:true});continue;}
+    if(!oddsForDay.length&&!Object.keys(propsForDay).length){
+      days.push({date,won:0,bets:0,rate:null,noOdds:true});continue;
+    }
+    
+    let won=0,bets=0;
+    
+    if(prop==='tot'){
+      (pred.totals||[]).forEach(t=>{
+        const norm=s=>(s||'').toLowerCase().replace(/[^a-z]/g,'');
+        const game=oddsForDay.find(g=>{
+          const h=norm(g.home_team),a=norm(g.away_team);
+          return (h.includes(norm(t.home))||norm(t.home).includes(h))&&(a.includes(norm(t.away))||norm(t.away).includes(a));
+        });
+        const dk=game?.bookmakers?.find(b=>b.key==='draftkings');
+        const market=dk?.markets?.find(m=>m.key==='totals');
+        const line=market?.outcomes?.find(o=>o.name==='Over')?.point;
+        if(line==null)return;
+        const edge=t.total-line;
+        if(Math.abs(edge)<cfg.leanMargin)return;
+        const recOver=edge>0;
+        const actual=hist.games?.[t.gamePk]?.total;
+        if(actual==null)return;
+        const winBet=recOver?actual>line:actual<line;
+        bets++;if(winBet)won++;
+      });
+    }else if(prop==='k'||prop==='pbb'){
+      (pred.pitchers||[]).forEach(p=>{
+        const propsLookup=lookupPlayerInProps(propsForDay,p.name);
+        const market=propsLookup?.markets?.[cfg.marketKey];
+        if(market?.line==null)return;
+        const modelVal=p[cfg.modelField];
+        if(modelVal==null)return;
+        const edge=modelVal-market.line;
+        if(Math.abs(edge)<cfg.leanMargin)return;
+        const recOver=edge>0;
+        const r=hist.pitchers?.[p.id];
+        const actual=cfg.getResult(p,r);
+        if(actual==null)return;
+        const winBet=recOver?actual>market.line:actual<market.line;
+        bets++;if(winBet)won++;
+      });
+    }else if(prop==='tb'||prop==='bb'||prop==='bbat'){
+      (pred.batters||[]).forEach(b=>{
+        const propsLookup=lookupPlayerInProps(propsForDay,b.name);
+        const market=propsLookup?.markets?.[cfg.marketKey];
+        if(market?.line==null)return;
+        const modelVal=b[cfg.modelField];
+        if(modelVal==null)return;
+        const edge=modelVal-market.line;
+        if(Math.abs(edge)<cfg.leanMargin)return;
+        const recOver=edge>0;
+        const r=hist.batters?.[b.id];
+        if(!r||(r.ab===0&&r.pa===0))return;
+        const actual=cfg.getResult(b,r);
+        if(actual==null)return;
+        const winBet=recOver?actual>market.line:actual<market.line;
+        bets++;if(winBet)won++;
+      });
+    }
+    
+    days.push({date,won,bets,rate:bets?Math.round(won/bets*100):null});
+    totalWon+=won;totalBets+=bets;
+  }
+  
+  return {totalWon,totalBets,totalRate:totalBets?Math.round(totalWon/totalBets*100):null,days};
+}
+
+// Helper: look up a player by name across events in a props snapshot
+function lookupPlayerInProps(eventsObj,playerName){
+  const norm=s=>(s||'').toLowerCase().replace(/[^a-z]/g,'');
+  const target=norm(playerName);
+  for(const evId in eventsObj){
+    const ev=eventsObj[evId];
+    if(!ev.markets)continue;
+    const matched={};
+    for(const market of ev.markets){
+      const playerOutcomes=(market.outcomes||[]).filter(o=>norm(o.description)===target);
+      if(!playerOutcomes.length)continue;
+      const over=playerOutcomes.find(o=>o.name==='Over');
+      const under=playerOutcomes.find(o=>o.name==='Under');
+      if(over||under){
+        matched[market.key]={line:over?.point??under?.point,over:over?.price,under:under?.price};
+      }
+    }
+    if(Object.keys(matched).length)return {markets:matched};
+  }
+  return null;
+}
+
 function historicalLockStats(prop){
   const today=todayStr();
   const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
@@ -4727,9 +4883,28 @@ function renderHistoryBadge(prop){
     <span style="font-size:.5rem;color:var(--mt2)">Predictions saved: ${predCount} · Results cached: ${histCount}</span>
   </td></tr>`;
   
+  // DK bet rate summary section — for any prop where we have DK lines (game totals + player props)
+  let dkBetSection='';
+  if(['tot','k','pbb','tb','bb','bbat'].includes(prop)){
+    const dkStats=historicalDKBetStats(prop);
+    if(dkStats.totalBets>0){
+      const c=dkStats.totalRate>=55?'var(--gn)':dkStats.totalRate>=45?'var(--gd)':'var(--rd)';
+      dkBetSection=`<div style="margin-bottom:6px;padding:6px 8px;background:rgba(0,212,255,.06);border-radius:4px;border-left:2px solid var(--ac)">
+        <div style="font-size:.55rem;color:var(--mt2);letter-spacing:.05em;text-transform:uppercase">14D DK Bet Win Rate</div>
+        <div style="font-size:.7rem"><b style="color:${c}">${dkStats.totalRate}%</b> <span style="color:var(--mt2);font-size:.6rem">(${dkStats.totalWon}/${dkStats.totalBets} bets we recommended)</span></div>
+      </div>`;
+    }else{
+      dkBetSection=`<div style="margin-bottom:6px;padding:6px 8px;background:rgba(0,212,255,.04);border-radius:4px;border-left:2px solid var(--mt)">
+        <div style="font-size:.55rem;color:var(--mt2);letter-spacing:.05em;text-transform:uppercase">14D DK Bet Win Rate</div>
+        <div style="font-size:.6rem;color:var(--mt)">No DK-graded bets yet — need past days with DK lines saved + recommendations made.</div>
+      </div>`;
+    }
+  }
+  
   return `${collapsed}
     <div class="hist-expanded">
       ${top2Section}
+      ${dkBetSection}
       <div style="font-size:.5rem;color:var(--mt);padding:0 4px 4px;letter-spacing:.06em;text-transform:uppercase">tap a day to view that day's results</div>
       <div style="font-size:.5rem;color:var(--mt2);padding:0 4px 4px;font-family:'DM Mono',monospace">
         Lock cutoff: ${(()=>{
@@ -5264,7 +5439,7 @@ function renderFCPitchers(){
     }
     const dkCell=dkCellFor(p.name,'pitcher_strikeouts',p.xK,1.5,0.8,RESULTS.date);
     return `<tr class="${rc}" onclick="openHistoryRowMo('pitcher',RESULTS.date,'${p.id}','k')" style="cursor:pointer">
-      <td>${sbar(p.grade)}</td>
+      <td>${sbar(p.grade,LOCKS.k)}</td>
       <td><strong style="color:var(--ac)">${predWhole!=null?predWhole:p.xK}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
@@ -5317,7 +5492,7 @@ function renderFCPitcherBB(){
       diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
     return `<tr class="${rc}" onclick="openHistoryRowMo('pitcher',RESULTS.date,'${p.id}','pbb')" style="cursor:pointer">
-      <td>${sbar(p.bbGrade)}</td>
+      <td>${sbar(p.bbGrade,LOCKS.pbb)}</td>
       <td><strong style="color:var(--ac)">${predWhole!=null?predWhole:(p.expectedBB!=null?p.expectedBB:'—')}</strong></td>
       <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
       <td style="color:${col};font-size:.62rem">${txt}</td>
@@ -6331,7 +6506,7 @@ function openGameMo(gamePk){
       <thead><tr><th>Score</th><th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th></tr></thead>
       <tbody>
         ${topHit.map(m=>`<tr onclick="closeMo();openBatterMo('${m.batterId}','${m.pitcherId}','hit')">
-          <td>${sbar(m.hitScore,79.5)}</td>
+          <td>${sbar(m.hitScore,LOCKS.hits)}</td>
           <td class="l"><strong>${m.batterName}</strong></td>
           <td style="color:var(--mt2)">${m.team.abbr||''}</td>
           <td style="color:var(--mt2)">${m.order}</td>
@@ -6345,7 +6520,7 @@ function openGameMo(gamePk){
       <thead><tr><th>Score</th><th class="l">Batter</th><th>Team</th><th>xSLG</th></tr></thead>
       <tbody>
         ${topHR.map(m=>{const p=STATE.players[m.batterId];return `<tr onclick="closeMo();openBatterMo('${m.batterId}','${m.pitcherId}','hr')">
-          <td>${sbar(m.hrScore)}</td>
+          <td>${sbar(m.hrScore,LOCKS.hr)}</td>
           <td class="l"><strong>${m.batterName}</strong></td>
           <td style="color:var(--mt2)">${m.team.abbr||''}</td>
           <td>${fmt(p?.overall?.xSLG,3)}</td>
@@ -6358,7 +6533,7 @@ function openGameMo(gamePk){
       <thead><tr><th>Score</th><th class="l">Batter</th><th>Team</th><th>xSLG</th><th>xBA</th></tr></thead>
       <tbody>
         ${topTB.map(m=>{const p=STATE.players[m.batterId];return `<tr onclick="closeMo();openBatterMo('${m.batterId}','${m.pitcherId}','tb')">
-          <td>${sbar(m.tbScore)}</td>
+          <td>${sbar(m.tbScore,LOCKS.tb)}</td>
           <td class="l"><strong>${m.batterName}</strong></td>
           <td style="color:var(--mt2)">${m.team.abbr||''}</td>
           <td>${fmt(p?.overall?.xSLG,3)}</td>
@@ -6372,7 +6547,7 @@ function openGameMo(gamePk){
       <thead><tr><th>Grade</th><th class="l">Pitcher</th><th>xK</th><th>xIP</th><th>K%</th></tr></thead>
       <tbody>
         ${pitchers.map(m=>{const p=STATE.pitchers[m.pitcherId];return `<tr onclick="closeMo();openPitcherMo('${m.pitcherId}')">
-          <td>${sbar(m.kGrade)}</td>
+          <td>${sbar(m.kGrade,LOCKS.k)}</td>
           <td class="l"><strong>${m.pitcherName}</strong></td>
           <td><strong style="color:var(--ac)">${m.expectedK}</strong></td>
           <td>${m.expectedIP}</td>
