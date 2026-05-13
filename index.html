@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.18 · Prop Intelligence</title>
+<title>Diamond IQ v6.19 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.18 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.19 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -5410,7 +5410,7 @@ function buildLocksSection(){
   // Banner when DK not loaded explaining why most categories are sparse
   const dkBanner=(!dkPropsLoaded||!dkOddsLoaded)?
     `<div style="padding:8px 12px;background:rgba(255,184,0,.08);border-bottom:1px solid var(--bdr2);font-size:.55rem;color:var(--gd);line-height:1.4">
-      ⚠ DK ${!dkPropsLoaded&&!dkOddsLoaded?'odds and props':!dkPropsLoaded?'player props':'game odds'} not loaded — DK-driven locks skipped. Pull in Settings → DraftKings Odds.
+      ⚠ DK ${!dkPropsLoaded&&!dkOddsLoaded?'odds and props':!dkPropsLoaded?'player props':'game odds'} not loaded
     </div>`:'';
   
   return `
