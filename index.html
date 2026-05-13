@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.17 · Prop Intelligence</title>
+<title>Diamond IQ v6.18 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -177,6 +177,8 @@ tbody td.l{text-align:left}
 button.locks-cat-header{width:100%;background:transparent !important;border:none !important;padding:10px 14px !important;display:flex;align-items:center;cursor:pointer;color:var(–ac) !important;text-align:left}
 button.locks-cat-header:hover{background:rgba(0,212,255,.04) !important}
 .locks-cat-body{background:var(–bg2);border-top:1px solid var(–bdr2)}
+button.locks-rate-btn{background:transparent !important;border:1px solid var(–bdr2) !important;color:var(–ac) !important;padding:3px 7px !important;border-radius:4px;cursor:pointer;font-size:.55rem !important;font-family:inherit;line-height:1.2}
+button.locks-rate-btn:hover{border-color:var(–ac) !important;background:rgba(0,212,255,.06) !important}
 .home-section-h{font-family:‘Barlow Condensed’,sans-serif;font-size:.66rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(–mt);text-align:center;margin-bottom:10px}
 .home-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:6px}
 .home-card{background:var(–s1);border:1px solid var(–bdr2);border-radius:14px;padding:22px 12px 18px;cursor:pointer;text-align:center;transition:all .2s;user-select:none;position:relative}
@@ -422,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.17 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.18 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -537,6 +539,7 @@ const UI={
   bbatSort:{c:'sc',d:-1},
   totSort:{c:'total',d:-1},
   locksExpanded:{batter:false,pitcher:false,game:false},
+  locksRateExpanded:{}, // {`${prop}_${preferDK?'dk':'score'}`:bool}
   filt:{hits:'',hr:'',k:''},
 };
 
@@ -5175,21 +5178,78 @@ function collectDKLocks(items,marketKey,modelField,lockMargin,nameField){
 
 // Picks the right rate badge for a sub-section.
 // preferDK=true → show DK win rate. preferDK=false → show score lock rate.
+// Badge is tappable to toggle a per-day breakdown.
 function locksRateBadge(prop,preferDK){
+  const key=`${prop}_${preferDK?'dk':'score'}`;
+  const expanded=UI.locksRateExpanded[key];
+  const arrow=`<span style="margin-left:4px;color:var(--mt2);font-size:.6rem">${expanded?'▴':'▾'}</span>`;
   if(preferDK){
     const dk=historicalDKBetStats(prop);
     if(dk&&dk.totalBets>0){
       const c=dk.totalRate>=55?'var(--gn)':dk.totalRate>=45?'var(--gd)':'var(--rd)';
-      return `<span style="font-size:.55rem">📊 <b style="color:${c}">${dk.totalRate}%</b> <span style="color:var(--mt2)">(${dk.totalWon}/${dk.totalBets})</span></span>`;
+      return `<button class="locks-rate-btn" onclick="UI.locksRateExpanded['${key}']=!UI.locksRateExpanded['${key}'];renderTab()">📊 <b style="color:${c}">${dk.totalRate}%</b> <span style="color:var(--mt2)">(${dk.totalWon}/${dk.totalBets})</span>${arrow}</button>`;
     }
     return '<span style="color:var(--mt);font-size:.55rem">📊 no 14D DK history</span>';
   }
   const lock=historicalLockStats(prop);
   if(lock.totalN>0){
     const c=lock.totalRate>=70?'var(--gn)':lock.totalRate>=50?'var(--gd)':'var(--rd)';
-    return `<span style="font-size:.55rem">🔒 <b style="color:${c}">${lock.totalRate}%</b> <span style="color:var(--mt2)">(${lock.totalHits}/${lock.totalN})</span></span>`;
+    return `<button class="locks-rate-btn" onclick="UI.locksRateExpanded['${key}']=!UI.locksRateExpanded['${key}'];renderTab()">🔒 <b style="color:${c}">${lock.totalRate}%</b> <span style="color:var(--mt2)">(${lock.totalHits}/${lock.totalN})</span>${arrow}</button>`;
   }
   return '<span style="color:var(--mt);font-size:.55rem">🔒 no 14D history</span>';
+}
+
+// Per-day breakdown table for the rate badge dropdown.
+// preferDK chooses which stats source to use.
+function locksRateBreakdown(prop,preferDK){
+  const key=`${prop}_${preferDK?'dk':'score'}`;
+  if(!UI.locksRateExpanded[key])return '';
+  
+  const stats=preferDK?historicalDKBetStats(prop):historicalLockStats(prop);
+  const days=stats.days||[];
+  if(!days.length){
+    return `<div style="padding:6px 8px;font-size:.55rem;color:var(--mt);text-align:center;background:rgba(0,0,0,.15);border-radius:4px;margin-top:4px">No past day data yet</div>`;
+  }
+  
+  const totalRate=preferDK?stats.totalRate:stats.totalRate;
+  const totalNum=preferDK?stats.totalWon:stats.totalHits;
+  const totalDen=preferDK?stats.totalBets:stats.totalN;
+  const icon=preferDK?'📊':'🔒';
+  
+  let rows='';
+  days.forEach(d=>{
+    const dateLabel=d.date.slice(5).replace('-','/'); // MM/DD
+    if(d.pending){
+      rows+=`<tr><td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no results yet</td></tr>`;
+    }else if(d.noOdds){
+      rows+=`<tr><td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no DK lines saved</td></tr>`;
+    }else if((d.bets??d.n)===0){
+      rows+=`<tr><td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no qualifying ${preferDK?'bets':'locks'}</td></tr>`;
+    }else{
+      const num=preferDK?d.won:d.hits;
+      const den=preferDK?d.bets:d.n;
+      const rate=d.rate;
+      const c=preferDK?(rate>=55?'var(--gn)':rate>=45?'var(--gd)':'var(--rd)'):(rate>=70?'var(--gn)':rate>=50?'var(--gd)':'var(--rd)');
+      rows+=`<tr>
+        <td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td>
+        <td style="color:${c};font-weight:700;padding:3px 6px;text-align:right">${rate}%</td>
+        <td style="color:var(--mt2);padding:3px 6px;text-align:right">${num}/${den}</td>
+      </tr>`;
+    }
+  });
+  
+  const totalC=preferDK?(totalRate>=55?'var(--gn)':totalRate>=45?'var(--gd)':'var(--rd)'):(totalRate>=70?'var(--gn)':totalRate>=50?'var(--gd)':'var(--rd)');
+  const totalRow=totalDen>0?`<tr style="border-top:1px solid var(--bd);font-weight:700">
+    <td style="padding:4px 6px;color:var(--ac)">${icon} 14D</td>
+    <td style="padding:4px 6px;text-align:right;color:${totalC}">${totalRate}%</td>
+    <td style="padding:4px 6px;text-align:right;color:var(--mt2)">${totalNum}/${totalDen}</td>
+  </tr>`:'';
+  
+  return `<div style="margin-top:6px;padding:6px 8px;background:rgba(0,0,0,.15);border-radius:4px;border-left:2px solid ${preferDK?'var(--ac)':'var(--rd)'}">
+    <table style="width:100%;font-size:.6rem;border-collapse:collapse">
+      <tbody>${rows}${totalRow}</tbody>
+    </table>
+  </div>`;
 }
 
 // Row renderers
@@ -5246,13 +5306,14 @@ function hrScoreLockRow(t){
   </tr>`;
 }
 
-// Sub-section: prop label + rate badge + table
+// Sub-section: prop label + rate badge + (optional breakdown when expanded) + table
 function locksSubsection(label,rateProp,preferDK,rowsHtml){
   return `<div style="padding:8px 12px;border-bottom:1px dashed var(--bdr)">
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:6px">
       <div style="font-size:.62rem;font-weight:600;color:var(--gd)">${label}</div>
       <div>${locksRateBadge(rateProp,preferDK)}</div>
     </div>
+    ${locksRateBreakdown(rateProp,preferDK)}
     ${rowsHtml}
   </div>`;
 }
@@ -5300,53 +5361,34 @@ function buildLocksSection(){
   const hrScore=batterMatchups.filter(m=>m.hrScore>=LOCKS.hr).sort((a,b)=>b.hrScore-a.hrScore);
   batterSubsections.push({label:'💥 Home Runs',rateProp:'hr',preferDK:false,
     rows:hrScore.map(m=>batterScoreLockRow(m,m.hrScore,'hr'))});
-  // TB — DK if loaded, else score
+  // TB — DK ONLY. If DK props not loaded, skip entirely (per user spec).
   if(dkPropsLoaded){
     const tbDK=collectDKLocks(batterMatchups,'batter_total_bases','expectedTB',DK_LOCKS.tb,'batterName');
     batterSubsections.push({label:'🏟️ Total Bases · DK',rateProp:'tb',preferDK:true,rows:tbDK.map(dkPickRow)});
-  }else{
-    const tbScore=batterMatchups.filter(m=>m.tbScore>=LOCKS.tb).sort((a,b)=>b.tbScore-a.tbScore);
-    batterSubsections.push({label:'🏟️ Total Bases',rateProp:'tb',preferDK:false,
-      rows:tbScore.map(m=>batterScoreLockRow(m,m.tbScore,'tb'))});
   }
-  // Walks — DK if loaded, else score
+  // Walks — DK ONLY
   if(dkPropsLoaded){
     const bbDK=collectDKLocks(batterMatchups,'batter_walks','expectedBB',DK_LOCKS.bb,'batterName');
     batterSubsections.push({label:'🚶 Walks · DK',rateProp:'bb',preferDK:true,rows:bbDK.map(dkPickRow)});
-  }else{
-    const bbScore=batterMatchups.filter(m=>m.bbScore>=LOCKS.bb).sort((a,b)=>b.bbScore-a.bbScore);
-    batterSubsections.push({label:'🚶 Walks',rateProp:'bb',preferDK:false,
-      rows:bbScore.map(m=>batterScoreLockRow(m,m.bbScore,'bb'))});
   }
-  // Batter Ks — DK if loaded, else score
+  // Batter Ks — DK ONLY
   if(dkPropsLoaded){
     const bbatDK=collectDKLocks(batterMatchups,'batter_strikeouts','batterExpectedK',DK_LOCKS.bbat,'batterName');
     batterSubsections.push({label:'⚡ Strikeouts · DK',rateProp:'bbat',preferDK:true,rows:bbatDK.map(dkPickRow)});
-  }else{
-    const bbatScore=batterMatchups.filter(m=>m.batterKScore>=LOCKS.bbat).sort((a,b)=>b.batterKScore-a.batterKScore);
-    batterSubsections.push({label:'⚡ Strikeouts',rateProp:'bbat',preferDK:false,
-      rows:bbatScore.map(m=>batterScoreLockRow(m,m.batterKScore,'hit'))});
   }
   
-  // ── PITCHER ──
+  // ── PITCHER — DK ONLY ──
   const pitcherSubsections=[];
   if(dkPropsLoaded){
     const pKDK=collectDKLocks(pitcherMatchups,'pitcher_strikeouts','expectedK',DK_LOCKS.k,'pitcherName');
     pitcherSubsections.push({label:'⚡ Strikeouts · DK',rateProp:'k',preferDK:true,rows:pKDK.map(dkPickRow)});
     const pBBDK=collectDKLocks(pitcherMatchups,'pitcher_walks','expectedBB',DK_LOCKS.pbb,'pitcherName');
     pitcherSubsections.push({label:'🚶 Walks Allowed · DK',rateProp:'pbb',preferDK:true,rows:pBBDK.map(dkPickRow)});
-  }else{
-    const kScore=pitcherMatchups.filter(m=>m.kGrade>=LOCKS.k).sort((a,b)=>b.kGrade-a.kGrade);
-    pitcherSubsections.push({label:'⚡ Strikeouts',rateProp:'k',preferDK:false,
-      rows:kScore.map(m=>pitcherScoreLockRow(m,m.kGrade))});
-    const pbbScore=pitcherMatchups.filter(m=>m.bbGrade>=LOCKS.pbb).sort((a,b)=>b.bbGrade-a.bbGrade);
-    pitcherSubsections.push({label:'🚶 Walks Allowed',rateProp:'pbb',preferDK:false,
-      rows:pbbScore.map(m=>pitcherScoreLockRow(m,m.bbGrade))});
   }
   
   // ── GAME ──
   const gameSubsections=[];
-  // Run Totals — DK only (no score-only concept for game totals)
+  // Run Totals — DK only
   if(dkOddsLoaded){
     const runTotalDKLocks=[];
     totals.forEach(t=>{
@@ -5359,18 +5401,24 @@ function buildLocksSection(){
     runTotalDKLocks.sort((a,b)=>Math.abs(b.edge)-Math.abs(a.edge));
     gameSubsections.push({label:'🎯 Run Totals · DK',rateProp:'tot',preferDK:true,rows:runTotalDKLocks.map(gameTotalRow)});
   }
-  // HR O/U 1.5 — SCORE lock (no DK game HR market available)
+  // HR O/U 1.5 — SCORE lock (no DK game HR market available; this is inherently a score lock)
   const hrLineScore=totals.filter(t=>t.hrLineScore!=null&&t.hrLineScore>=LOCKS.hrLine)
     .sort((a,b)=>b.hrLineScore-a.hrLineScore);
   gameSubsections.push({label:'💥 HR Total O/U 1.5',rateProp:'hrLine',preferDK:false,
     rows:hrLineScore.map(hrScoreLockRow)});
   
+  // Banner when DK not loaded explaining why most categories are sparse
+  const dkBanner=(!dkPropsLoaded||!dkOddsLoaded)?
+    `<div style="padding:8px 12px;background:rgba(255,184,0,.08);border-bottom:1px solid var(--bdr2);font-size:.55rem;color:var(--gd);line-height:1.4">
+      ⚠ DK ${!dkPropsLoaded&&!dkOddsLoaded?'odds and props':!dkPropsLoaded?'player props':'game odds'} not loaded — DK-driven locks skipped. Pull in Settings → DraftKings Odds.
+    </div>`:'';
+  
   return `
     <div class="locks-section">
       <div class="locks-header">
         <span style="font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:1.5px">🔒 TODAY'S LOCKS</span>
-        <span style="font-size:.55rem;color:var(--mt);margin-left:8px">${dkPropsLoaded?'DK + Score':'Score (DK props not loaded)'}</span>
       </div>
+      ${dkBanner}
       ${renderLocksCategory('batter','⚾ Batter',batterSubsections)}
       ${renderLocksCategory('pitcher','🎯 Pitcher',pitcherSubsections)}
       ${renderLocksCategory('game','🎲 Game',gameSubsections)}
