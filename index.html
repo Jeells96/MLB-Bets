@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.19 · Prop Intelligence</title>
+<title>Diamond IQ v6.20 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.19 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.20 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -3506,10 +3506,14 @@ function backBar(label,prop){
   // Kick off background fetch of historical results if a prop key was provided
   if(prop)setTimeout(()=>loadHistoryInBackground(prop),50);
   let histPart='';
-  if(prop){
+  if(prop==='hrLine'){
+    // Split HR O/U into two separate score badges so we track Over and Under independently
+    histPart+=`<div class="back-hist">${renderHistoryBadge('hrOver','💥 Over 1.5')}</div>`;
+    histPart+=`<div class="back-hist">${renderHistoryBadge('hrUnder','💥 Under 1.5')}</div>`;
+  }else if(prop){
     histPart+=`<div class="back-hist">${renderHistoryBadge(prop)}</div>`;
     // Separate DK badge for props that have DK lines
-    if(['tot','k','pbb','tb','bb','bbat','hrLine'].includes(prop)){
+    if(['tot','k','pbb','tb','bb','bbat'].includes(prop)){
       histPart+=`<div class="back-hist">${renderDKBadge(prop)}</div>`;
     }
   }
@@ -4825,8 +4829,11 @@ function historicalLockStats(prop){
         const got=(r.k||0)>=predWhole;
         n++;if(got)hits++;outcomes.push(got);
       });
-    }else if(prop==='hrLine'||prop==='gnoHR'||prop==='gmultiHR'){
+    }else if(prop==='hrLine'||prop==='gnoHR'||prop==='gmultiHR'||prop==='hrOver'||prop==='hrUnder'){
       // HR Over/Under 1.5: ✓ if pick was correct
+      // 'hrLine' counts all locks regardless of side.
+      // 'hrOver' counts only Over picks (success = actual gameHR >= 2)
+      // 'hrUnder' counts only Under picks (success = actual gameHR <= 1)
       // Backward compat: derive pick from old fields if missing
       const enriched=(pred.totals||[]).map(t=>{
         if(t.hrLinePick!=null&&t.hrLineScore!=null)return t;
@@ -4837,7 +4844,9 @@ function historicalLockStats(prop){
         }
         return t;
       });
-      const lockSet=enriched.filter(t=>t.hrLineScore>=LOCKS.hrLine);
+      let lockSet=enriched.filter(t=>t.hrLineScore>=LOCKS.hrLine);
+      if(prop==='hrOver')lockSet=lockSet.filter(t=>t.hrLinePick==='Over');
+      else if(prop==='hrUnder')lockSet=lockSet.filter(t=>t.hrLinePick==='Under');
       lockSet.forEach(t=>{
         const r=hist.games[t.gamePk];
         if(!r||r.gameHR==null)return;
@@ -4860,11 +4869,12 @@ function historicalLockStats(prop){
 }
 
 // Render the small historical badge that goes next to the prop tab title.
-function renderHistoryBadge(prop){
+function renderHistoryBadge(prop,labelOverride){
   const stats=historicalLockStats(prop);
   const expanded=HISTORY.expanded[prop];
   // Run Totals has no lock tier, so call it "Success Rate" instead of "Lock Grade Success"
-  const label=prop==='tot'?'14D Success Rate:':'14D Lock Grade Success:';
+  let label=prop==='tot'?'14D Success Rate:':'14D Lock Grade Success:';
+  if(labelOverride)label=`14D ${labelOverride}:`;
   const isLoading=HISTORY.loading&&stats.days.some(d=>d.pending);
   
   let mainTxt;
@@ -4873,7 +4883,7 @@ function renderHistoryBadge(prop){
       mainTxt='<span style="color:var(--mt)">calculating…</span>';
     }else{
       // For new bet types added in v6.3, explain why there's no history yet
-      const isNewBetType=['hrLine','gnoHR','gmultiHR','bbat'].includes(prop);
+      const isNewBetType=['hrLine','gnoHR','gmultiHR','bbat','hrOver','hrUnder'].includes(prop);
       mainTxt=isNewBetType
         ?'<span style="color:var(--mt)">new — accumulates over time</span>'
         :'<span style="color:var(--mt)">no history</span>';
@@ -5401,11 +5411,14 @@ function buildLocksSection(){
     runTotalDKLocks.sort((a,b)=>Math.abs(b.edge)-Math.abs(a.edge));
     gameSubsections.push({label:'🎯 Run Totals · DK',rateProp:'tot',preferDK:true,rows:runTotalDKLocks.map(gameTotalRow)});
   }
-  // HR O/U 1.5 — SCORE lock (no DK game HR market available; this is inherently a score lock)
-  const hrLineScore=totals.filter(t=>t.hrLineScore!=null&&t.hrLineScore>=LOCKS.hrLine)
-    .sort((a,b)=>b.hrLineScore-a.hrLineScore);
-  gameSubsections.push({label:'💥 HR Total O/U 1.5',rateProp:'hrLine',preferDK:false,
-    rows:hrLineScore.map(hrScoreLockRow)});
+  // HR O/U 1.5 — SCORE lock split into two separate bets so success rates track independently
+  const hrLineLocks=totals.filter(t=>t.hrLineScore!=null&&t.hrLineScore>=LOCKS.hrLine);
+  const hrOverLocks=hrLineLocks.filter(t=>t.hrLinePick==='Over').sort((a,b)=>b.hrLineScore-a.hrLineScore);
+  const hrUnderLocks=hrLineLocks.filter(t=>t.hrLinePick==='Under').sort((a,b)=>b.hrLineScore-a.hrLineScore);
+  gameSubsections.push({label:'💥 HR Over 1.5',rateProp:'hrOver',preferDK:false,
+    rows:hrOverLocks.map(hrScoreLockRow)});
+  gameSubsections.push({label:'💥 HR Under 1.5',rateProp:'hrUnder',preferDK:false,
+    rows:hrUnderLocks.map(hrScoreLockRow)});
   
   // Banner when DK not loaded explaining why most categories are sparse
   const dkBanner=(!dkPropsLoaded||!dkOddsLoaded)?
