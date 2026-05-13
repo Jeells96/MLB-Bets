@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.20 · Prop Intelligence</title>
+<title>Diamond IQ v6.21 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.20 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.21 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -3385,6 +3385,8 @@ function renderTab(){
     case 'pbb':renderPitcherBB();break;
     case 'tot':renderTotals();break;
     case 'gnoHR':case 'gmultiHR':case 'hrLine':renderHRLine();break;
+    case 'hrOver':renderHRSide('Over');break;
+    case 'hrUnder':renderHRSide('Under');break;
     case 'bbat':renderBatterKs();break;
     case 'res':renderResults();break;
     case 'srch':renderSrch();break;
@@ -3475,9 +3477,14 @@ function renderDashboard(){
         <span class="hc-prop-label">Run Totals</span>
         <span class="hc-prop-arr">→</span>
       </button>
-      <button class="hc-prop" onclick="goToProp('hrLine')">
+      <button class="hc-prop" onclick="goToProp('hrOver')">
         <span class="hc-prop-icon">💥</span>
-        <span class="hc-prop-label">HR O/U 1.5</span>
+        <span class="hc-prop-label">HR Over 1.5</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
+      <button class="hc-prop" onclick="goToProp('hrUnder')">
+        <span class="hc-prop-icon">💥</span>
+        <span class="hc-prop-label">HR Under 1.5</span>
         <span class="hc-prop-arr">→</span>
       </button>
     </div>
@@ -3530,6 +3537,8 @@ function fcRendererFor(prop){
   if(prop==='k')return renderFCPitchers;
   if(prop==='pbb')return renderFCPitcherBB;
   if(prop==='gnoHR'||prop==='gmultiHR'||prop==='hrLine')return ()=>renderFCHRLine();
+  if(prop==='hrOver')return ()=>renderFCHRLine('Over');
+  if(prop==='hrUnder')return ()=>renderFCHRLine('Under');
   if(prop==='tot')return renderFCTotals;
   return null;
 }
@@ -4209,6 +4218,70 @@ function renderHRLine(){
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>Bet</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th><th>DK Tot</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `);
+}
+
+// Renders a single-side HR O/U tab. side is 'Over' or 'Under'.
+// Filters STATE.totals to only games where the model picked that side.
+function renderHRSide(side){
+  const tabKey=side==='Over'?'hrOver':'hrUnder';
+  const propKey=tabKey; // hrOver / hrUnder
+  const titleLabel=`💥 HR ${side} 1.5 (Game)`;
+  if(maybeRenderDrillView(titleLabel,propKey))return;
+  
+  const all=[...STATE.totals].filter(t=>t.hrLineScore!=null&&t.hrLinePick===side).sort((a,b)=>b.hrLineScore-a.hrLineScore);
+  if(!all.length){
+    setMain(`${backBar(titleLabel,propKey)}<div class="empty">No ${side} 1.5 picks today</div>`);
+    return;
+  }
+  
+  const lk=all.filter(t=>t.hrLineScore>=LOCKS.hrLine).length;
+  const ht=all.filter(t=>t.hrLineScore>=62&&t.hrLineScore<LOCKS.hrLine).length;
+  
+  const pickColor=side==='Over'?'var(--gn)':'var(--ac)';
+  
+  const rows=all.map(t=>{
+    const r=getRat(t.hrLineScore,LOCKS.hrLine);
+    const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
+    const g=t.game;
+    const lockTag=t.hrLineScore>=LOCKS.hrLine?'<span style="font-size:.55rem;color:var(--rd);margin-left:4px">🔒</span>':'';
+    // DK signal — only conflict-flag if DK total strongly disagrees with this side
+    const odds=getOddsForGame(STATE.date,g.home.name,g.away.name);
+    let dkSignal='—';
+    if(odds?.total?.point!=null){
+      const pt=odds.total.point;
+      const conflictsWithPick=(side==='Over'&&pt<=7.0)||(side==='Under'&&pt>=9.5);
+      const sigColor=conflictsWithPick?'var(--rd)':'var(--ac)';
+      const sigIcon=conflictsWithPick?' ⚠':'';
+      const sigWeight=conflictsWithPick?'700':'400';
+      dkSignal=`<span style="color:${sigColor};font-weight:${sigWeight}">${pt}${sigIcon}</span>`;
+    }
+    return `<tr class="${rc}" onclick="openHRLineMo('${g.gamePk}')">
+      <td>${sbar(t.hrLineScore,LOCKS.hrLine)}</td>
+      <td>${bdg(r)}</td>
+      <td><strong style="color:${pickColor};font-size:.95rem">${side.toUpperCase()}${lockTag}</strong></td>
+      <td><strong style="color:var(--ac)">${t.totalHR.toFixed(1)}</strong></td>
+      <td class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
+      <td style="color:var(--mt2)">${t.aSPhr?.toFixed(1)||'—'} / ${t.hSPhr?.toFixed(1)||'—'}</td>
+      <td style="color:var(--mt2)">${t.park?.hr.toFixed(2)||'—'}</td>
+      <td style="font-size:.6rem">${dkSignal}</td>
+    </tr>`;
+  }).join('');
+  
+  setMain(`
+    ${backBar(titleLabel,propKey)}
+    <div class="info" style="font-size:.6rem;margin-bottom:8px">Showing only ${side} 1.5 picks. 🔒 = high-confidence Lock. xHR = projected total HRs in this game. DK Tot = DraftKings game run total (⚠ red only when DK strongly disagrees with this side).</div>
+    <div class="sum">
+      <div class="pill lk"><span class="pn">${lk}</span>🔒 Locks</div>
+      <div class="pill ht"><span class="pn">${ht}</span>🔥 Strong</div>
+      <div class="pill"><span class="pn">${all.length}</span>${side} picks</div>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>HR Score</th><th>Rating</th><th>Bet</th><th>xHR</th><th class="l">Matchup</th><th>SP HR (a/h)</th><th>Park HR</th><th>DK Tot</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -6036,7 +6109,7 @@ function renderFCTotals(){
 }
 
 // Game HR fact-check renderer for both 0-1 HR (gnoHR) and 2+ HR (gmultiHR) bets
-function renderFCHRLine(){
+function renderFCHRLine(sideFilter){
   // Backward compat: if old saved data has only noHRScore/multiHRScore (no hrLinePick), derive on the fly
   const sorted=[...RESULTS.totals].map(t=>{
     if(t.hrLinePick!=null&&t.hrLineScore!=null)return t;
@@ -6046,7 +6119,11 @@ function renderFCHRLine(){
       return {...t,hrLinePick:pick,hrLineScore:score};
     }
     return t;
-  }).filter(t=>t.hrLineScore!=null).sort((a,b)=>b.hrLineScore-a.hrLineScore);
+  }).filter(t=>{
+    if(t.hrLineScore==null)return false;
+    if(sideFilter&&t.hrLinePick!==sideFilter)return false;
+    return true;
+  }).sort((a,b)=>b.hrLineScore-a.hrLineScore);
   
   const played=sorted.filter(t=>t.played&&t.actualGameHR!=null);
   const lockSet=played.filter(t=>t.hrLineScore>=LOCKS.hrLine);
