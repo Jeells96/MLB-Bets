@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.22 · Prop Intelligence</title>
+<title>Diamond IQ v6.23 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.22 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.23 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -982,7 +982,29 @@ async function pullSharedProps(date){
   }
 }
 
-// Look up player props for a specific player. Returns markets keyed by market type, with
+// Pull DK odds + props for the past-14-day window from Firebase into in-memory cache.
+// Runs once per ~5 minutes to avoid hammering Firebase. Without this, historical DK
+// success-rate calculations would only see whatever past dates the user happened to open
+// in Fact Check during this session.
+let _lastDKWindowPull=0;
+async function pullDKHistoryWindow(){
+  if(!FB.ready)return;
+  if(Date.now()-_lastDKWindowPull<5*60*1000)return;
+  _lastDKWindowPull=Date.now();
+  const today=todayStr();
+  const dates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
+  // Pull in parallel — these are tiny reads
+  await Promise.all(dates.flatMap(d=>{
+    const tasks=[];
+    if(!ODDS.data[d])tasks.push(pullSharedOdds(d));
+    if(!ODDS.props[d])tasks.push(pullSharedProps(d));
+    return tasks;
+  }));
+  // Re-render so newly-pulled DK data shows up in the rate badges
+  if(typeof renderTab==='function')renderTab();
+}
+
+
 // outcomes (Over/Under lines and prices). Used by the prop bet tabs to show DK lines.
 // Renders a DK line cell with bet recommendation. Returns HTML string.
 // modelExpected = our projected stat. marketKey = e.g. 'pitcher_strikeouts'.
@@ -4612,6 +4634,10 @@ async function fetchHistoryForDate(date){
 function loadHistoryInBackground(propToRefresh){
   // Trigger a Firebase pull (throttled to once per minute) so other users' data shows up
   maybeAutoPull();
+  // Also pull DK odds/props for the 14D window so historical DK stats can compute.
+  // This is independent of HISTORY fetched state — DK data may have been pushed
+  // after we cached the boxscore results.
+  pullDKHistoryWindow();
   if(HISTORY.loading)return;
   const today=todayStr();
   const savedDates=Object.keys(PRED.byDate).filter(d=>d<today).sort().reverse().slice(0,14);
@@ -5429,6 +5455,8 @@ function renderLocksCategory(catKey,catLabel,subsections){
 // Returns '' when no slate is loaded.
 function buildLocksSection(){
   if(!STATE.ready||!STATE.matchups.length)return '';
+  // Background pull of past-date DK data so success rates can populate
+  setTimeout(()=>pullDKHistoryWindow(),50);
   
   const batterMatchups=STATE.matchups.filter(m=>m.kind==='batter');
   const pitcherMatchups=STATE.matchups.filter(m=>m.kind==='pitcher');
