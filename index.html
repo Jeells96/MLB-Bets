@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.23 · Prop Intelligence</title>
+<title>Diamond IQ v6.24 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.23 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.24 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -5143,9 +5143,10 @@ function renderDKBadge(prop){
         rows+=`<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:5px 4px">${d.noOdds?'no DK lines saved':'no qualifying bets'}</td></tr>`;
       }else{
         const c=d.rate>=55?'var(--gn)':d.rate>=45?'var(--gd)':'var(--rd)';
-        rows+=`<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td>
+        rows+=`<tr onclick="drillIntoDay('${prop}','${d.date}')" style="cursor:pointer">
+          <td style="color:var(--ac);padding:5px 4px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td>
           <td style="color:${c};font-weight:700;padding:5px 4px;text-align:right">${d.rate}%</td>
-          <td style="color:var(--mt2);padding:5px 4px;text-align:right">${d.won}/${d.bets}</td></tr>`;
+          <td style="color:var(--mt2);padding:5px 4px;text-align:right">${d.won}/${d.bets} →</td></tr>`;
       }
     });
   }
@@ -5169,9 +5170,19 @@ function renderDKBadge(prop){
 
 // Drill into a specific past date for the current prop. Loads results if needed,
 // then sets a state var that the prop's render function checks to show the FC view inline.
+// Can be invoked from anywhere — switches to the prop tab if not already there.
 async function drillIntoDay(prop,date){
   HISTORY.drillDate[prop]=date;
   HISTORY.expanded[prop]=false; // collapse the badge so the FC view has room
+  // If we're not currently on this prop's tab, switch to it so the drill view renders.
+  // The prop's render function checks HISTORY.drillDate[prop] and shows the FC body inline.
+  if(UI.tab!==prop){
+    UI.tab=prop;
+    // Update the nav highlight if it's a top-level tab (rare — most props are under Home)
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    const tabEl=document.getElementById(`t-${prop}`);
+    if(tabEl)tabEl.classList.add('active');
+  }
   // Set up RESULTS for that date so the FC body renderers work
   RESULTS.prop=prop;
   if(RESULTS.date!==date||!RESULTS.loaded){
@@ -5340,10 +5351,10 @@ function locksRateBreakdown(prop,preferDK){
       const den=preferDK?d.bets:d.n;
       const rate=d.rate;
       const c=preferDK?(rate>=55?'var(--gn)':rate>=45?'var(--gd)':'var(--rd)'):(rate>=70?'var(--gn)':rate>=50?'var(--gd)':'var(--rd)');
-      rows+=`<tr>
-        <td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td>
+      rows+=`<tr onclick="event.stopPropagation();drillIntoDay('${prop}','${d.date}')" style="cursor:pointer">
+        <td style="color:var(--ac);padding:3px 6px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td>
         <td style="color:${c};font-weight:700;padding:3px 6px;text-align:right">${rate}%</td>
-        <td style="color:var(--mt2);padding:3px 6px;text-align:right">${num}/${den}</td>
+        <td style="color:var(--mt2);padding:3px 6px;text-align:right">${num}/${den} →</td>
       </tr>`;
     }
   });
