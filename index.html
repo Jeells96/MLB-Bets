@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.21 · Prop Intelligence</title>
+<title>Diamond IQ v6.22 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.21 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.22 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -4745,6 +4745,7 @@ function historicalDKBetStats(prop){
     
     if(prop==='tot'){
       (pred.totals||[]).forEach(t=>{
+        if(t.total==null||!isFinite(t.total))return; // skip games with no projection
         const norm=s=>(s||'').toLowerCase().replace(/[^a-z]/g,'');
         const game=oddsForDay.find(g=>{
           const h=norm(g.home_team),a=norm(g.away_team);
@@ -5372,9 +5373,10 @@ function gameTotalRow(item){
   const t=item.t;
   const g=t.game;
   const pickColor=item.pick==='OVER'?'var(--gn)':'var(--ac)';
+  const modelStr=(t.total!=null&&isFinite(t.total))?t.total.toFixed(1):'—';
   return `<tr onclick="openGameMo('${g.gamePk}')" style="cursor:pointer">
     <td style="padding:5px 8px"><strong style="color:${pickColor}">${item.pick}</strong> <span style="color:var(--ac);font-size:.6rem">${item.dkLine}</span></td>
-    <td style="padding:5px 8px;color:var(--mt2);font-size:.55rem">model ${t.total.toFixed(1)} (${item.edge>0?'+':''}${item.edge.toFixed(1)})</td>
+    <td style="padding:5px 8px;color:var(--mt2);font-size:.55rem">model ${modelStr} (${item.edge>0?'+':''}${item.edge.toFixed(1)})</td>
     <td style="padding:5px 8px" class="l"><strong>${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</strong></td>
   </tr>`;
 }
@@ -5475,6 +5477,7 @@ function buildLocksSection(){
   if(dkOddsLoaded){
     const runTotalDKLocks=[];
     totals.forEach(t=>{
+      if(t.total==null||!isFinite(t.total))return; // skip games missing a projection
       const odds=getOddsForGame(STATE.date,t.game.home.name,t.game.away.name);
       if(!odds?.total?.point)return;
       const edge=t.total-odds.total.point;
