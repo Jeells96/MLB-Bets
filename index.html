@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.38 · Prop Intelligence</title>
+<title>Diamond IQ v6.39 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.38 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.39 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -1286,21 +1286,30 @@ try{
 async function pullSharedHistory(){
   if(!FB.ready)return;
   try{
-    const snap=await FB.db.collection('shared_history').orderBy('date','desc').limit(14).get();
+    // Use limit(50) without orderBy. orderBy filters out docs missing the field, which
+    // can silently exclude valid days. Sort by doc.id (which is the date) ourselves.
+    const snap=await FB.db.collection('shared_history').limit(50).get();
     let pulled=0;
+    const allDocs=[];
     snap.forEach(doc=>{
       const d=doc.data();
-      if(!d.date)return;
-      // Seed PRED.byDate only if local doesn't have anything for that date.
-      // Local always wins — the user's device is the source of truth for predictions.
-      if(!PRED.byDate[d.date]&&d.predictions){
-        PRED.byDate[d.date]=d.predictions;
+      // Use doc.id as the canonical date (it's set as the doc ID in pushSharedHistory).
+      // Fall back to d.date for safety if id is somehow not date-shaped.
+      const date=/^\d{4}-\d{2}-\d{2}$/.test(doc.id)?doc.id:d.date;
+      if(!date)return;
+      allDocs.push({date,data:d});
+    });
+    // Sort descending and take 14
+    allDocs.sort((a,b)=>b.date.localeCompare(a.date));
+    allDocs.slice(0,14).forEach(({date,data:d})=>{
+      // Local always wins for predictions, but if we have nothing locally, seed from Firebase
+      if(!PRED.byDate[date]&&d.predictions){
+        PRED.byDate[date]=d.predictions;
         pulled++;
       }
-      // Seed HISTORY.byDate only if local doesn't have it yet. Same principle.
-      if(!HISTORY.byDate[d.date]&&d.results){
-        HISTORY.byDate[d.date]=d.results;
-        HISTORY.fetched[d.date]=true;
+      if(!HISTORY.byDate[date]&&d.results){
+        HISTORY.byDate[date]=d.results;
+        HISTORY.fetched[date]=true;
       }
     });
     if(pulled>0){
@@ -1350,8 +1359,12 @@ async function pushSharedHistory(date,opts={}){
     await FB.db.collection('shared_history').doc(date).set(payload,{merge:true});
     FB.uploadedDates[date]=true;
     console.log(`[DIQ] Pushed ${date} ${forceOverridePred?'(OVERRIDE)':''} pred:${!!payload.predictions} results:${!!payload.results}`);
+    if(window._diag)window._diag(`✓ Pushed ${date} to Firestore (pred:${!!payload.predictions} results:${!!payload.results})`);
     cleanupOldShared();
-  }catch(e){console.warn('[DIQ] pushSharedHistory failed',e.message);}
+  }catch(e){
+    console.warn('[DIQ] pushSharedHistory failed',e.message);
+    if(window._diag)window._diag(`✗ Push ${date} FAILED: ${e.message}`);
+  }
 }
 
 let cleanupRan=false;
@@ -1401,22 +1414,24 @@ async function autoPushPendingDates(){
   if(!FB.ready)return;
   const today=todayStr();
   const candidates=Object.keys(PRED.byDate).filter(d=>{
-    return d<today                          // only past dates
-      &&!FB.uploadedDates[d]                // not already pushed this session
-      &&HISTORY.byDate[d];                  // have results to share
+    if(FB.uploadedDates[d])return false;        // already pushed this session
+    if(d===today)return !!PRED.byDate[d];        // include today if we have predictions
+    return !!HISTORY.byDate[d];                  // past dates need results
   }).sort().reverse().slice(0,14);
   if(!candidates.length)return;
   for(const date of candidates){
     try{
       const pred=PRED.byDate[date];
       const results=HISTORY.byDate[date];
-      await FB.db.collection('shared_history').doc(date).set({
-        date,predictions:pred,results,updatedAt:Date.now()
-      });
+      const payload={date,predictions:pred,updatedAt:Date.now()};
+      if(results)payload.results=results;
+      await FB.db.collection('shared_history').doc(date).set(payload,{merge:true});
       FB.uploadedDates[date]=true;
       console.log('[DIQ] Auto-pushed',date);
+      if(window._diag)window._diag(`✓ Auto-pushed ${date}`);
     }catch(e){
       console.warn('[DIQ] Auto-push failed for',date,e.message);
+      if(window._diag)window._diag(`✗ Auto-push ${date} FAILED: ${e.message}`);
       // Don't keep retrying a failing date in tight loop
       FB.uploadedDates[date]=true;
     }
@@ -7931,7 +7946,6 @@ function openHRLineMo(gamePk,opts={}){
     return dates[0]||today;
   }
   
-  // Diagnostic banner — small status line near top of main area
   function diag(msg){
     let el=document.getElementById('boot-diag');
     if(!el){
@@ -7947,50 +7961,91 @@ function openHRLineMo(gamePk,opts={}){
     el.appendChild(line);
   }
   window._diag=diag;
-  diag(`Boot start. Local PRED.byDate has ${Object.keys(PRED.byDate).length} dates: [${Object.keys(PRED.byDate).sort().join(', ')}]`);
+  diag(`Boot start. Local PRED.byDate has ${Object.keys(PRED.byDate).length} dates: most recent=${Object.keys(PRED.byDate).sort().reverse()[0]||'(none)'}`);
   
+  // Render an instant view from local if we have it — keeps the screen responsive
+  // while Firebase catches up in the background.
   if(Object.keys(PRED.byDate).length>0){
     const def=pickDefaultDate();
-    diag(`Local data present. Defaulting to ${def}`);
     document.getElementById('dp').value=def;
+    diag(`Showing local default (${def}) while waiting for Firebase…`);
     setTimeout(()=>loadAll(),20);
   }else{
-    diag('No local data. Waiting for Firebase…');
-    setMain(`<div class="empty"><b>Connecting…</b><div class="spin"></div></div>`);
     document.getElementById('dp').value=todayStr();
-    (async()=>{
-      let waited=0;
-      while(!FB.ready&&waited<10000){
-        await new Promise(r=>setTimeout(r,200));
-        waited+=200;
-      }
-      diag(FB.ready?`Firebase ready after ${waited}ms. Pulling history…`:`Firebase NEVER became ready (waited ${waited}ms)`);
-      if(FB.ready){
-        try{
-          const snap=await FB.db.collection('shared_history').orderBy('date','desc').limit(14).get();
-          diag(`Firestore returned ${snap.size} doc(s)`);
-          snap.forEach(doc=>{
-            const d=doc.data();
-            diag(`  ${doc.id}: date=${d.date} predictions=${!!d.predictions} results=${!!d.results}`);
-            if(d.date&&d.predictions&&!PRED.byDate[d.date]){
-              PRED.byDate[d.date]=d.predictions;
-            }
-            if(d.date&&d.results&&!HISTORY.byDate[d.date]){
-              HISTORY.byDate[d.date]=d.results;
-              HISTORY.fetched[d.date]=true;
-            }
-          });
-          predSave();
-        }catch(e){
-          diag(`✗ Firestore query failed: ${e.message}`);
-        }
-      }
-      const def=pickDefaultDate();
-      diag(`After pull: PRED.byDate has [${Object.keys(PRED.byDate).sort().join(', ')}]. Default → ${def}`);
-      document.getElementById('dp').value=def;
-      loadAll();
-    })();
+    setMain(`<div class="empty"><b>Connecting…</b><div class="spin"></div></div>`);
   }
+  
+  // Always wait for Firebase pull, regardless of whether local has data.
+  // This ensures stale devices get the latest shared snapshots.
+  (async()=>{
+    let waited=0;
+    while(!FB.ready&&waited<10000){
+      await new Promise(r=>setTimeout(r,200));
+      waited+=200;
+    }
+    if(!FB.ready){
+      diag(`✗ Firebase never became ready (${waited}ms). Working offline.`);
+      // If we had no local data at all, still need to render something
+      if(Object.keys(PRED.byDate).length===0){
+        const def=pickDefaultDate();
+        document.getElementById('dp').value=def;
+        loadAll();
+      }
+      return;
+    }
+    diag(`Firebase ready (${waited}ms). Pulling history…`);
+    const before=new Set(Object.keys(PRED.byDate));
+    try{
+      const snap=await FB.db.collection('shared_history').limit(50).get();
+      diag(`Firestore returned ${snap.size} doc(s)`);
+      const allDocs=[];
+      snap.forEach(doc=>{
+        const d=doc.data();
+        const date=/^\d{4}-\d{2}-\d{2}$/.test(doc.id)?doc.id:d.date;
+        if(!date){diag(`  ${doc.id}: ✗ no parseable date`);return;}
+        allDocs.push({date,data:d});
+      });
+      allDocs.sort((a,b)=>b.date.localeCompare(a.date));
+      allDocs.slice(0,14).forEach(({date,data:d})=>{
+        const hadIt=!!PRED.byDate[date];
+        if(!hadIt&&d.predictions){
+          PRED.byDate[date]=d.predictions;
+        }else if(hadIt&&d.predictions){
+          // We already have this date locally — refresh from Firebase if remote is newer
+          const localTs=PRED.byDate[date]?.savedAt||0;
+          const remoteTs=d.predictions?.savedAt||0;
+          if(remoteTs>localTs){
+            PRED.byDate[date]=d.predictions;
+            diag(`  ${date}: refreshed (remote newer)`);
+          }
+        }
+        if(!HISTORY.byDate[date]&&d.results){
+          HISTORY.byDate[date]=d.results;
+          HISTORY.fetched[date]=true;
+        }
+      });
+      predSave();
+      const newDates=Object.keys(PRED.byDate).filter(d=>!before.has(d));
+      diag(`After pull: total ${Object.keys(PRED.byDate).length}, newly added ${newDates.length} [${newDates.join(', ')}]`);
+    }catch(e){
+      diag(`✗ Firestore query failed: ${e.message}`);
+    }
+    
+    // If user is currently looking at a non-default date that doesn't have data,
+    // or if local was empty before, pick a fresh default and load
+    const currentDp=document.getElementById('dp').value;
+    const today=todayStr();
+    // If we just got today's data and user hasn't loaded anything yet, switch to today
+    if(PRED.byDate[today]&&!STATE.ready&&currentDp!==today){
+      document.getElementById('dp').value=today;
+      diag(`Today's data arrived. Switching to ${today} and loading.`);
+      loadAll();
+    }else if(!STATE.ready){
+      // First load case: hadn't picked a date yet
+      document.getElementById('dp').value=pickDefaultDate();
+      loadAll();
+    }
+  })();
   
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
