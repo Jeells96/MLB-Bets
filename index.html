@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.41 · Prop Intelligence</title>
+<title>Diamond IQ v6.42 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.41 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.42 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -662,7 +662,9 @@ function hydrateFromSnapshot(date){
       bbScore:b.bbScore,
       batterKScore:b.batterKScore,
       batterExpectedK:b.batterExpectedK,
-      unconfirmed:false
+      unconfirmed:false,
+      oppLineup:[],   // empty stub so renderers can call .map without crashing
+      lineup:[]
     });
   });
   
@@ -679,7 +681,9 @@ function hydrateFromSnapshot(date){
       lowK:p.lowK,
       highK:p.highK,
       expectedBB:p.expectedBB,
-      bbGrade:p.bbGrade
+      bbGrade:p.bbGrade,
+      oppLineup:[],   // empty stub so K renderer doesn't crash on .map
+      lineup:[]
     });
   });
   
@@ -689,7 +693,7 @@ function hydrateFromSnapshot(date){
       home:{abbr:t.home,name:t.home},
       away:{abbr:t.away,name:t.away},
       venue:t.venue,
-      hSP:{},aSP:{},
+      hSP:{overall:{}},aSP:{overall:{}},
       hLineup:[],aLineup:[]
     };
     STATE.games.push(game);
@@ -705,7 +709,8 @@ function hydrateFromSnapshot(date){
       hrLineScore:t.hrLineScore,
       hSPhr:t.hSPhr,
       aSPhr:t.aSPhr,
-      park:{hr:t.parkHR}
+      park:{hr:t.parkHR||1,r:1},  // defaults keep calculations neutral
+      wx:null                  // explicit null; renderers should check for this
     });
   });
   
@@ -4022,10 +4027,21 @@ function renderTB(){
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.tbScore!=null);
   if(!data.length){setMain(`<div class="empty">No batter matchups loaded</div>`);return;}
   
-  const sortKey={sc:'tbScore',n:'batterName',ord:'order',tm:'team'}[UI.tbSort.c]||'tbScore';
+  data.forEach(m=>{
+    const line=getPlayerProps(STATE.date,m.batterName)?.markets?.batter_total_bases?.line;
+    m._dkLine=line;
+    m._edge=(line!=null&&m.expectedTB!=null)?parseFloat((m.expectedTB-line).toFixed(1)):null;
+  });
+  
+  const sortKey={sc:'tbScore',n:'batterName',ord:'order',tm:'team',edge:'_edge'}[UI.tbSort.c]||'tbScore';
   data.sort((a,b)=>{
     if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.tbSort.d;}
     if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.tbSort.d;
+    if(sortKey==='_edge'){
+      const av=a._edge==null?-Infinity:Math.abs(a._edge);
+      const bv=b._edge==null?-Infinity:Math.abs(b._edge);
+      return (bv-av)*UI.tbSort.d;
+    }
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.tbSort.d;
   });
   
@@ -4048,6 +4064,12 @@ function renderTB(){
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${m.expectedTB!=null?roundConservative(m.expectedTB):'—'}</strong></td>
       <td style="font-size:.62rem">${dkCellFor(m.batterName,'batter_total_bases',m.expectedTB,DK_LOCKS.tb,DK_LOCKS.tb/2)}</td>
+      <td style="font-size:.7rem">${(()=>{
+        if(m._edge==null)return '<span style="color:var(--mt)">—</span>';
+        const abs=Math.abs(m._edge);
+        const col=abs>=DK_LOCKS.tb?(m._edge>0?'var(--gn)':'var(--rd)'):abs>=DK_LOCKS.tb/2?'var(--gd)':'var(--mt2)';
+        return `<span style="color:${col};font-weight:700">${m._edge>0?'+':''}${m._edge}</span>`;
+      })()}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||''}</td>
       <td style="color:var(--mt2)">${m.order||''}</td>
@@ -4082,6 +4104,7 @@ function renderTB(){
         <th>Rating</th>
         <th>xTB</th>
         <th>DK Line</th>
+        <th onclick="sortTB('edge')" title="Sort by absolute edge magnitude">vs DK${UI.tbSort.c==='edge'?' '+(UI.tbSort.d>0?'↑':'↓'):''}</th>
         <th class="l" onclick="sortTB('n')">Batter</th>
         <th onclick="sortTB('tm')">Team${UI.tbSort.c==='tm'?' '+(UI.tbSort.d>0?'↑':'↓'):''}</th>
         <th onclick="sortTB('ord')">#</th>
@@ -4101,10 +4124,24 @@ function renderKs(){
   const data=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null);
   if(!data.length){setMain(`<div class="empty">No pitcher matchups loaded</div>`);return;}
   
-  const sortKey={sc:'kGrade',n:'pitcherName',eK:'expectedK',tm:'team'}[UI.kSort.c]||'kGrade';
+  // Compute model edge vs DK line for each pitcher (null if no DK line)
+  data.forEach(m=>{
+    const line=getPlayerProps(STATE.date,m.pitcherName)?.markets?.pitcher_strikeouts?.line;
+    m._dkLine=line;
+    m._edge=line!=null?parseFloat((m.expectedK-line).toFixed(1)):null;
+  });
+  
+  const sortKey={sc:'kGrade',n:'pitcherName',eK:'expectedK',tm:'team',edge:'_edge'}[UI.kSort.c]||'kGrade';
   data.sort((a,b)=>{
     if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.kSort.d;}
     if(sortKey==='pitcherName')return a.pitcherName.localeCompare(b.pitcherName)*UI.kSort.d;
+    if(sortKey==='_edge'){
+      // Sort by absolute edge magnitude so biggest bets float to top regardless of side.
+      // null edges (no DK line) go to bottom.
+      const av=a._edge==null?-Infinity:Math.abs(a._edge);
+      const bv=b._edge==null?-Infinity:Math.abs(b._edge);
+      return (bv-av)*UI.kSort.d;
+    }
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.kSort.d;
   });
   
@@ -4123,6 +4160,15 @@ function renderKs(){
     // DK pitcher strikeouts line
     const dkCell=dkCellFor(m.pitcherName,'pitcher_strikeouts',m.expectedK,DK_LOCKS.k,DK_LOCKS.k/2);
     
+    // Edge column: signed numeric (model − DK line). Color-coded by lock/lean tier.
+    let edgeStr='—';
+    if(m._edge!=null){
+      const abs=Math.abs(m._edge);
+      const col=abs>=DK_LOCKS.k?(m._edge>0?'var(--gn)':'var(--rd)'):abs>=DK_LOCKS.k/2?'var(--gd)':'var(--mt2)';
+      const sign=m._edge>0?'+':'';
+      edgeStr=`<span style="color:${col};font-weight:700">${sign}${m._edge}</span>`;
+    }
+    
     return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
       <td>${sbar(m.kGrade,LOCKS.k)}</td>
       <td>${bdg(r)}</td>
@@ -4131,6 +4177,7 @@ function renderKs(){
       <td class="l" style="color:var(--mt2)">${m.opp.abbr||m.opp.name}</td>
       <td><strong style="color:var(--ac)">${m.expectedK}</strong></td>
       <td style="font-size:.62rem">${dkCell}</td>
+      <td style="font-size:.7rem">${edgeStr}</td>
       <td style="color:var(--mt2);font-size:.62rem">${m.lowK!=null?m.lowK+'–'+m.highK:'—'}</td>
       <td>${m.expectedIP}</td>
       <td>${pct(ov.k_rate,1)}</td>
@@ -4161,6 +4208,7 @@ function renderKs(){
         <th class="l">Opp</th>
         <th onclick="sortK('eK')">Expected Strikeouts</th>
         <th>DK Line</th>
+        <th onclick="sortK('edge')" title="Sort by absolute edge magnitude">vs DK${UI.kSort.c==='edge'?' '+(UI.kSort.d>0?'↑':'↓'):''}</th>
         <th>Range</th>
         <th>xIP</th>
         <th>K%</th><th>K/9</th><th>ERA</th><th>WHIP</th><th>Opp K%</th>
@@ -4178,10 +4226,21 @@ function renderBatterBB(){
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.expectedBB!=null);
   if(!data.length){setMain(`${backBar('🚶 Walks (BB)','bb')}<div class="empty">No batter matchups loaded</div>`);return;}
   
-  const sortKey={sc:'bbScore',n:'batterName',xbb:'expectedBB',tm:'team'}[UI.bbSort.c]||'bbScore';
+  data.forEach(m=>{
+    const line=getPlayerProps(STATE.date,m.batterName)?.markets?.batter_walks?.line;
+    m._dkLine=line;
+    m._edge=(line!=null&&m.expectedBB!=null)?parseFloat((m.expectedBB-line).toFixed(1)):null;
+  });
+  
+  const sortKey={sc:'bbScore',n:'batterName',xbb:'expectedBB',tm:'team',edge:'_edge'}[UI.bbSort.c]||'bbScore';
   data.sort((a,b)=>{
     if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.bbSort.d;}
     if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.bbSort.d;
+    if(sortKey==='_edge'){
+      const av=a._edge==null?-Infinity:Math.abs(a._edge);
+      const bv=b._edge==null?-Infinity:Math.abs(b._edge);
+      return (bv-av)*UI.bbSort.d;
+    }
     const av=a[sortKey]??-Infinity,bv=b[sortKey]??-Infinity;
     return (bv-av)*UI.bbSort.d;
   });
@@ -4200,6 +4259,12 @@ function renderBatterBB(){
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
       <td style="font-size:.62rem">${dkCell}</td>
+      <td style="font-size:.7rem">${(()=>{
+        if(m._edge==null)return '<span style="color:var(--mt)">—</span>';
+        const abs=Math.abs(m._edge);
+        const col=abs>=DK_LOCKS.bb?(m._edge>0?'var(--gn)':'var(--rd)'):abs>=DK_LOCKS.bb/2?'var(--gd)':'var(--mt2)';
+        return `<span style="color:${col};font-weight:700">${m._edge>0?'+':''}${m._edge}</span>`;
+      })()}</td>
       <td class="l"><strong>${m.batterName}</strong>${m.unconfirmed?'<span class="unc"> ⚠</span>':''}</td>
       <td style="color:var(--mt2)">${m.team.abbr||m.team.name}</td>
       <td style="color:var(--mt2)">${m.order}</td>
@@ -4225,6 +4290,7 @@ function renderBatterBB(){
         <th>Rating</th>
         <th onclick="sortBB('xbb')">xBB${UI.bbSort.c==='xbb'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
         <th>DK Line</th>
+        <th onclick="sortBB('edge')" title="Sort by absolute edge magnitude">vs DK${UI.bbSort.c==='edge'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
         <th class="l" onclick="sortBB('n')">Batter</th>
         <th onclick="sortBB('tm')">Team${UI.bbSort.c==='tm'?' '+(UI.bbSort.d>0?'↑':'↓'):''}</th>
         <th>#</th>
@@ -4244,10 +4310,21 @@ function renderPitcherBB(){
   const data=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.expectedBB!=null);
   if(!data.length){setMain(`${backBar('🚶 Walks Allowed (BB)','pbb')}<div class="empty">No pitcher matchups loaded</div>`);return;}
   
-  const sortKey={sc:'bbGrade',n:'pitcherName',xbb:'expectedBB',tm:'team'}[UI.pbbSort.c]||'bbGrade';
+  data.forEach(m=>{
+    const line=getPlayerProps(STATE.date,m.pitcherName)?.markets?.pitcher_walks?.line;
+    m._dkLine=line;
+    m._edge=line!=null?parseFloat((m.expectedBB-line).toFixed(1)):null;
+  });
+  
+  const sortKey={sc:'bbGrade',n:'pitcherName',xbb:'expectedBB',tm:'team',edge:'_edge'}[UI.pbbSort.c]||'bbGrade';
   data.sort((a,b)=>{
     if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.pbbSort.d;}
     if(sortKey==='pitcherName')return a.pitcherName.localeCompare(b.pitcherName)*UI.pbbSort.d;
+    if(sortKey==='_edge'){
+      const av=a._edge==null?-Infinity:Math.abs(a._edge);
+      const bv=b._edge==null?-Infinity:Math.abs(b._edge);
+      return (bv-av)*UI.pbbSort.d;
+    }
     const av=a[sortKey]??-Infinity,bv=b[sortKey]??-Infinity;
     return (bv-av)*UI.pbbSort.d;
   });
@@ -4260,11 +4337,21 @@ function renderPitcherBB(){
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
     const xBB=m.expectedBB!=null?roundConservative(m.expectedBB):null;
     const dkCell=dkCellFor(m.pitcherName,'pitcher_walks',m.expectedBB,DK_LOCKS.pbb,DK_LOCKS.pbb/2);
+    
+    let edgeStr='—';
+    if(m._edge!=null){
+      const abs=Math.abs(m._edge);
+      const col=abs>=DK_LOCKS.pbb?(m._edge>0?'var(--gn)':'var(--rd)'):abs>=DK_LOCKS.pbb/2?'var(--gd)':'var(--mt2)';
+      const sign=m._edge>0?'+':'';
+      edgeStr=`<span style="color:${col};font-weight:700">${sign}${m._edge}</span>`;
+    }
+    
     return `<tr class="${rc}" onclick="openPitcherMo('${m.pitcherId}')">
       <td>${sbar(m.bbGrade,LOCKS.pbb)}</td>
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xBB!=null?xBB:'—'}</strong></td>
       <td style="font-size:.62rem">${dkCell}</td>
+      <td style="font-size:.7rem">${edgeStr}</td>
       <td class="l"><strong>${m.pitcherName}</strong></td>
       <td><span style="color:${hc(m.pHand)}">${m.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">vs ${m.opp.abbr||m.opp.name}</td>
@@ -4289,6 +4376,7 @@ function renderPitcherBB(){
         <th>Rating</th>
         <th onclick="sortPBB('xbb')">xBB${UI.pbbSort.c==='xbb'?' '+(UI.pbbSort.d>0?'↑':'↓'):''}</th>
         <th>DK Line</th>
+        <th onclick="sortPBB('edge')" title="Sort by absolute edge magnitude">vs DK${UI.pbbSort.c==='edge'?' '+(UI.pbbSort.d>0?'↑':'↓'):''}</th>
         <th class="l" onclick="sortPBB('n')">Pitcher</th>
         <th>Hand</th>
         <th class="l">Opp</th>
@@ -4308,8 +4396,21 @@ function renderTotals(){
   const data=[...STATE.totals].filter(t=>t.total!=null);
   if(!data.length){setMain(`<div class="empty">No run total estimates available</div>`);return;}
   
+  // Compute edge vs DK total line for each game (for sort)
+  data.forEach(t=>{
+    const odds=getOddsForGame(STATE.date,t.game.home.name,t.game.away.name);
+    const dkLine=odds?.total?.point;
+    t._dkLine=dkLine;
+    t._edge=dkLine!=null?parseFloat((t.total-dkLine).toFixed(1)):null;
+  });
+  
   const sk=UI.totSort.c;
   data.sort((a,b)=>{
+    if(sk==='edge'){
+      const av=a._edge==null?-Infinity:Math.abs(a._edge);
+      const bv=b._edge==null?-Infinity:Math.abs(b._edge);
+      return (bv-av)*UI.totSort.d;
+    }
     const av=sk==='total'?a.total:sk==='h'?a.homeRuns:a.awayRuns;
     const bv=sk==='total'?b.total:sk==='h'?b.homeRuns:b.awayRuns;
     return (bv-av)*UI.totSort.d;
@@ -4422,10 +4523,18 @@ function renderTotals(){
       <div class="pill ln"><span class="pn">${low}</span>≤7 Totals</div>
       <div class="pill"><span class="pn">${data.length}</span>Games</div>
     </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <span style="font-size:.6rem;color:var(--mt2)">Sort:</span>
+      <button class="btn ${UI.totSort.c==='total'?'bp':'bg'}" style="font-size:.6rem;padding:4px 9px" onclick="sortTot('total')">Total${UI.totSort.c==='total'?' '+(UI.totSort.d>0?'↑':'↓'):''}</button>
+      <button class="btn ${UI.totSort.c==='edge'?'bp':'bg'}" style="font-size:.6rem;padding:4px 9px" onclick="sortTot('edge')">vs DK${UI.totSort.c==='edge'?' '+(UI.totSort.d>0?'↑':'↓'):''}</button>
+      <button class="btn ${UI.totSort.c==='h'?'bp':'bg'}" style="font-size:.6rem;padding:4px 9px" onclick="sortTot('h')">Home Runs${UI.totSort.c==='h'?' '+(UI.totSort.d>0?'↑':'↓'):''}</button>
+      <button class="btn ${UI.totSort.c==='a'?'bp':'bg'}" style="font-size:.6rem;padding:4px 9px" onclick="sortTot('a')">Away Runs${UI.totSort.c==='a'?' '+(UI.totSort.d>0?'↑':'↓'):''}</button>
+    </div>
     <div class="info" style="font-size:.6rem;margin-bottom:10px">Projected runs = team offense (xwOBA-blended vs split) × pitcher suppression × park × weather. Model uses log5-style batter/pitcher combining.</div>
     ${cards}
   `);
 }
+function sortTot(c){if(UI.totSort.c===c)UI.totSort.d*=-1;else{UI.totSort.c=c;UI.totSort.d=-1;}renderTotals();}
 
 /* ---------- SEARCH TAB ---------- */
 function renderHRLine(){
@@ -4553,10 +4662,21 @@ function renderBatterKs(){
   const data=STATE.matchups.filter(m=>m.kind==='batter'&&m.batterKScore!=null);
   if(!data.length){setMain(`${backBar('⚡ Strikeouts (Batter)','bbat')}<div class="empty">No batter strikeout matchups loaded — recompute in Settings</div>`);return;}
   
-  const sortKey={sc:'batterKScore',n:'batterName',ord:'order',tm:'team',xk:'batterExpectedK'}[UI.bbatSort.c]||'batterKScore';
+  data.forEach(m=>{
+    const line=getPlayerProps(STATE.date,m.batterName)?.markets?.batter_strikeouts?.line;
+    m._dkLine=line;
+    m._edge=(line!=null&&m.batterExpectedK!=null)?parseFloat((m.batterExpectedK-line).toFixed(1)):null;
+  });
+  
+  const sortKey={sc:'batterKScore',n:'batterName',ord:'order',tm:'team',xk:'batterExpectedK',edge:'_edge'}[UI.bbatSort.c]||'batterKScore';
   data.sort((a,b)=>{
     if(sortKey==='team'){const at=a.team?.abbr||a.team?.name||'';const bt=b.team?.abbr||b.team?.name||'';return at.localeCompare(bt)*UI.bbatSort.d;}
     if(sortKey==='batterName')return a.batterName.localeCompare(b.batterName)*UI.bbatSort.d;
+    if(sortKey==='_edge'){
+      const av=a._edge==null?-Infinity:Math.abs(a._edge);
+      const bv=b._edge==null?-Infinity:Math.abs(b._edge);
+      return (bv-av)*UI.bbatSort.d;
+    }
     return ((b[sortKey]??-1)-(a[sortKey]??-1))*UI.bbatSort.d;
   });
   
@@ -4573,6 +4693,12 @@ function renderBatterKs(){
       <td>${bdg(r)}</td>
       <td><strong style="color:var(--ac)">${xK!=null?xK:'—'}</strong></td>
       <td style="font-size:.62rem">${dkCell}</td>
+      <td style="font-size:.7rem">${(()=>{
+        if(m._edge==null)return '<span style="color:var(--mt)">—</span>';
+        const abs=Math.abs(m._edge);
+        const col=abs>=DK_LOCKS.bbat?(m._edge>0?'var(--gn)':'var(--rd)'):abs>=DK_LOCKS.bbat/2?'var(--gd)':'var(--mt2)';
+        return `<span style="color:${col};font-weight:700">${m._edge>0?'+':''}${m._edge}</span>`;
+      })()}</td>
       <td class="l"><strong>${m.batterName}</strong></td>
       <td style="color:var(--mt2)">${m.team.abbr||m.team.name}</td>
       <td style="color:var(--mt2)">${m.order}</td>
@@ -4591,7 +4717,7 @@ function renderBatterKs(){
     </div>
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th onclick="sortBBat('sc')">K Score${UI.bbatSort.c==='sc'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th>Rating</th><th onclick="sortBBat('xk')">xK${UI.bbatSort.c==='xk'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th>DK Line</th><th class="l" onclick="sortBBat('n')">Batter</th><th onclick="sortBBat('tm')">Team${UI.bbatSort.c==='tm'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th onclick="sortBBat('ord')">#</th><th class="l">Pitcher</th><th>Hand</th>
+        <th onclick="sortBBat('sc')">K Score${UI.bbatSort.c==='sc'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th>Rating</th><th onclick="sortBBat('xk')">xK${UI.bbatSort.c==='xk'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th>DK Line</th><th onclick="sortBBat('edge')" title="Sort by absolute edge magnitude">vs DK${UI.bbatSort.c==='edge'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th class="l" onclick="sortBBat('n')">Batter</th><th onclick="sortBBat('tm')">Team${UI.bbatSort.c==='tm'?' '+(UI.bbatSort.d>0?'↑':'↓'):''}</th><th onclick="sortBBat('ord')">#</th><th class="l">Pitcher</th><th>Hand</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
