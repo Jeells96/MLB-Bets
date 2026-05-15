@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.32 · Prop Intelligence</title>
+<title>Diamond IQ v6.33 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.32 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.33 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -625,6 +625,98 @@ function predLoad(){
     PRED.byDate=d.byDate||{};
   }catch(e){console.warn('[DIQ] predLoad failed:',e.message);}
 }
+
+// Hydrate STATE from a saved snapshot so Home renders instantly without re-running the
+// full MLB Stats API fetch + compute. The snapshot has enough to render the Locks
+// section, prop tabs, and FC views — but lacks STATE.players raw stats, so the row
+// detail columns (xBA, xwOBA etc) will be empty until the user taps Reload.
+// Marks STATE.fromSnapshot=true so renderers can be graceful about missing detail.
+function hydrateFromSnapshot(date){
+  const pred=PRED.byDate[date];
+  if(!pred||!pred.batters||!pred.pitchers)return false;
+  
+  STATE.date=date;
+  STATE.players={};
+  STATE.pitchers={};
+  STATE.games=[];
+  STATE.matchups=[];
+  STATE.totals=[];
+  STATE.fromSnapshot=true;
+  
+  // Build batter matchup stubs
+  pred.batters.forEach(b=>{
+    STATE.matchups.push({
+      kind:'batter',
+      batterId:b.id,
+      batterName:b.name,
+      team:{abbr:b.team,name:b.team},
+      opp:{abbr:b.opp,name:b.opp},
+      order:b.order,
+      bats:b.bats,
+      pHand:b.pHand,
+      pitcherName:b.pitcherName,
+      pitcherId:'', // unknown from snapshot
+      hitScore:b.score,
+      hrScore:b.hrScore,
+      tbScore:b.tbScore,
+      expectedTB:b.expectedTB,
+      expectedBB:b.expectedBB,
+      bbScore:b.bbScore,
+      batterKScore:b.batterKScore,
+      batterExpectedK:b.batterExpectedK,
+      unconfirmed:false
+    });
+  });
+  
+  // Build pitcher matchup stubs
+  pred.pitchers.forEach(p=>{
+    STATE.matchups.push({
+      kind:'pitcher',
+      pitcherId:p.id,
+      pitcherName:p.name,
+      team:{abbr:p.team,name:p.team},
+      opp:{abbr:p.opp,name:p.opp},
+      pHand:p.pHand,
+      expectedK:p.xK,
+      kGrade:p.grade,
+      lowK:p.lowK,
+      highK:p.highK,
+      expectedBB:p.expectedBB,
+      bbGrade:p.bbGrade
+    });
+  });
+  
+  // Build totals + game stubs
+  (pred.totals||[]).forEach(t=>{
+    const game={
+      gamePk:t.gamePk,
+      home:{abbr:t.home,name:t.home},
+      away:{abbr:t.away,name:t.away},
+      venue:t.venue,
+      hSP:{},aSP:{},
+      hLineup:[],aLineup:[]
+    };
+    STATE.games.push(game);
+    STATE.totals.push({
+      game,
+      total:t.total,
+      homeRuns:t.homeRuns,
+      awayRuns:t.awayRuns,
+      totalHR:t.totalHR,
+      noHRScore:t.noHRScore,
+      multiHRScore:t.multiHRScore,
+      hrLinePick:t.hrLinePick,
+      hrLineScore:t.hrLineScore,
+      hSPhr:t.hSPhr,
+      aSPhr:t.aSPhr,
+      park:{hr:t.parkHR}
+    });
+  });
+  
+  STATE.ready=true;
+  return true;
+}
+
 function predSave(){
   try{
     // Cap to last 14 days to stay under storage limits
@@ -1299,6 +1391,16 @@ async function bootPullWithRetry(){
   await pullSharedLocks();
   await pullSharedOdds(todayStr());
   await pullSharedProps(todayStr());
+  // After pulling shared data, if today's snapshot exists, hydrate STATE so Home
+  // renders immediately without requiring a manual Reload.
+  const today=todayStr();
+  if(!STATE.ready&&PRED.byDate[today]){
+    if(hydrateFromSnapshot(today)){
+      console.log('[DIQ] Hydrated STATE from shared snapshot for',today);
+      const btn=document.getElementById('loadBtn');
+      if(btn)btn.textContent='▶ Reload';
+    }
+  }
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
 }
@@ -7784,6 +7886,18 @@ function openHRLineMo(gamePk,opts={}){
 (function init(){
   document.getElementById('dp').value=todayStr();
   predLoad();
+  // Try to hydrate today from local cache for instant render. Firebase pull will
+  // still run in background and may update with newer shared data if available.
+  const today=todayStr();
+  if(PRED.byDate[today]){
+    if(hydrateFromSnapshot(today)){
+      console.log('[DIQ] Hydrated STATE from local cache for',today);
+      const btn=document.getElementById('loadBtn');
+      if(btn)btn.textContent='▶ Reload';
+      // Render now — bootPullWithRetry will re-render after Firebase pull completes
+      setTimeout(()=>{if(typeof renderTab==='function')renderTab();},10);
+    }
+  }
   // Keyboard: Escape closes modal
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
