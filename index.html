@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.27 · Prop Intelligence</title>
+<title>Diamond IQ v6.28 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.27 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.28 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -4748,12 +4748,12 @@ function historicalDKBetStats(prop){
   
   // Per-prop config: market key, model field, lean margin, lock margin, outcome field
   const cfg={
-    tot:{marketKey:'total',modelField:'total',leanMargin:DK_LOCKS.tot/2,getResult:(t,r)=>r?.total,gamesKeyed:true},
-    k:{marketKey:'pitcher_strikeouts',modelField:'xK',leanMargin:DK_LOCKS.k/2,getResult:(p,r)=>r?.k},
-    pbb:{marketKey:'pitcher_walks',modelField:'expectedBB',leanMargin:DK_LOCKS.pbb/2,getResult:(p,r)=>r?.bb},
-    tb:{marketKey:'batter_total_bases',modelField:'expectedTB',leanMargin:DK_LOCKS.tb/2,getResult:(b,r)=>r?.tb},
-    bb:{marketKey:'batter_walks',modelField:'expectedBB',leanMargin:DK_LOCKS.bb/2,getResult:(b,r)=>r?.bb},
-    bbat:{marketKey:'batter_strikeouts',modelField:'batterExpectedK',leanMargin:DK_LOCKS.bbat/2,getResult:(b,r)=>r?.k}
+    tot:{marketKey:'total',modelField:'total',lockMargin:DK_LOCKS.tot,getResult:(t,r)=>r?.total,gamesKeyed:true},
+    k:{marketKey:'pitcher_strikeouts',modelField:'xK',lockMargin:DK_LOCKS.k,getResult:(p,r)=>r?.k},
+    pbb:{marketKey:'pitcher_walks',modelField:'expectedBB',lockMargin:DK_LOCKS.pbb,getResult:(p,r)=>r?.bb},
+    tb:{marketKey:'batter_total_bases',modelField:'expectedTB',lockMargin:DK_LOCKS.tb,getResult:(b,r)=>r?.tb},
+    bb:{marketKey:'batter_walks',modelField:'expectedBB',lockMargin:DK_LOCKS.bb,getResult:(b,r)=>r?.bb},
+    bbat:{marketKey:'batter_strikeouts',modelField:'batterExpectedK',lockMargin:DK_LOCKS.bbat,getResult:(b,r)=>r?.k}
   }[prop];
   if(!cfg)return {totalWon:0,totalBets:0,totalRate:null,days:[]};
   
@@ -4782,7 +4782,7 @@ function historicalDKBetStats(prop){
         const line=market?.outcomes?.find(o=>o.name==='Over')?.point;
         if(line==null)return;
         const edge=t.total-line;
-        if(Math.abs(edge)<cfg.leanMargin)return;
+        if(Math.abs(edge)<cfg.lockMargin)return;
         const recOver=edge>0;
         const actual=hist.games?.[t.gamePk]?.total;
         if(actual==null)return;
@@ -4797,7 +4797,7 @@ function historicalDKBetStats(prop){
         const modelVal=p[cfg.modelField];
         if(modelVal==null)return;
         const edge=modelVal-market.line;
-        if(Math.abs(edge)<cfg.leanMargin)return;
+        if(Math.abs(edge)<cfg.lockMargin)return;
         const recOver=edge>0;
         const r=hist.pitchers?.[p.id];
         const actual=cfg.getResult(p,r);
@@ -4813,7 +4813,7 @@ function historicalDKBetStats(prop){
         const modelVal=b[cfg.modelField];
         if(modelVal==null)return;
         const edge=modelVal-market.line;
-        if(Math.abs(edge)<cfg.leanMargin)return;
+        if(Math.abs(edge)<cfg.lockMargin)return;
         const recOver=edge>0;
         const r=hist.batters?.[b.id];
         if(!r||(r.ab===0&&r.pa===0))return;
@@ -5864,19 +5864,21 @@ function renderFCBatters(type){
     .filter(b=>b[scoreKey]!=null)
     .sort((a,b)=>b[scoreKey]-a[scoreKey]);
   
-  // Never filter — show every prediction. Classify rows as lock/lean/pass/none when DK loaded.
+  // DK view: locks only (|edge| >= dkLockMargin) for tb/bb/bbat. Hits and HR stay score-based.
   let sorted=allSorted;
   let isDKView=false;
   if(dkAvailable){
     isDKView=true;
     const modelField=type==='tb'?'expectedTB':type==='bb'?'expectedBB':'batterExpectedK';
-    // Sort by DK edge magnitude (rows with no DK line fall to the bottom)
-    sorted=[...allSorted].sort((a,b)=>{
+    sorted=allSorted.filter(b=>{
+      if(b[modelField]==null)return false;
+      const market=getPlayerProps(RESULTS.date,b.name)?.markets?.[dkMarketKey];
+      if(market?.line==null)return false;
+      return Math.abs(b[modelField]-market.line)>=dkLockMargin;
+    }).sort((a,b)=>{
       const ma=getPlayerProps(RESULTS.date,a.name)?.markets?.[dkMarketKey]?.line;
       const mb=getPlayerProps(RESULTS.date,b.name)?.markets?.[dkMarketKey]?.line;
-      const ea=(ma!=null&&a[modelField]!=null)?Math.abs(a[modelField]-ma):-1;
-      const eb=(mb!=null&&b[modelField]!=null)?Math.abs(b[modelField]-mb):-1;
-      return eb-ea;
+      return Math.abs(b[modelField]-mb)-Math.abs(a[modelField]-ma);
     });
   }
   
@@ -5884,24 +5886,14 @@ function renderFCBatters(type){
   // Outcome logic per prop type
   function outcome(b){
     if(!b.played)return {icon:'—',col:'var(--mt)',txt:'Did not play',hit:null};
-    // DK view: outcome is "did our bet recommendation win?" (only for lock/lean picks)
+    // DK view: locks only — every shown row is a bet, grade by line outcome
     if(isDKView){
       const modelField=type==='tb'?'expectedTB':type==='bb'?'expectedBB':'batterExpectedK';
       const actualField=type==='tb'?'actualTB':type==='bb'?'actualBB':'actualK';
       const actual=b[actualField]||0;
       const labelStat=type==='tb'?'TB':type==='bb'?'BB':'K';
-      const props=getPlayerProps(RESULTS.date,b.name);
-      const market=props?.markets?.[dkMarketKey];
-      // No DK line: show actual stat but don't grade
-      if(market?.line==null||b[modelField]==null){
-        return {icon:'—',col:'var(--mt2)',txt:`${actual} ${labelStat} (no DK)`,hit:null};
-      }
+      const market=getPlayerProps(RESULTS.date,b.name)?.markets?.[dkMarketKey];
       const edge=b[modelField]-market.line;
-      const absEdge=Math.abs(edge);
-      if(absEdge<dkLockMargin/2){
-        // Pass: untracked
-        return {icon:'—',col:'var(--mt)',txt:`${actual} ${labelStat} (pass)`,hit:null};
-      }
       const recOver=edge>0;
       const win=recOver?(actual>market.line):(actual<market.line);
       return {icon:win?'✓':'✗',col:win?'var(--gn)':'var(--rd)',txt:`${actual} ${labelStat} (${recOver?'O':'U'} ${market.line})`,hit:win};
@@ -5945,8 +5937,8 @@ function renderFCBatters(type){
   if(isDKView){
     const outcomes=played.map(outcome).filter(o=>o.hit!==null);
     const won=outcomes.filter(o=>o.hit).length;
-    topRateLabel='📊 DK Bet Win Rate';
-    topRateSubLabel=`lock+lean bets · n=${outcomes.length}`;
+    topRateLabel='📊 DK Lock Win Rate';
+    topRateSubLabel=`locks · n=${outcomes.length}`;
     topRateVal=outcomes.length?(won/outcomes.length*100).toFixed(0)+'%':'—';
     topRateDen=outcomes.length;
   }else{
@@ -5959,19 +5951,8 @@ function renderFCBatters(type){
     topRateDen=lockOutcomes.length;
   }
   
-  // Lock/lean/pass count for DK view
-  let lockCount=0,leanCount=0,passCount=0,noLineCount=0;
-  if(isDKView){
-    const modelField=type==='tb'?'expectedTB':type==='bb'?'expectedBB':'batterExpectedK';
-    sorted.forEach(b=>{
-      const market=getPlayerProps(RESULTS.date,b.name)?.markets?.[dkMarketKey];
-      if(market?.line==null||b[modelField]==null){noLineCount++;return;}
-      const absEdge=Math.abs(b[modelField]-market.line);
-      if(absEdge>=dkLockMargin)lockCount++;
-      else if(absEdge>=dkLockMargin/2)leanCount++;
-      else passCount++;
-    });
-  }
+  // Lock count for DK view (locks only — only ones we show)
+  const lockCount=isDKView?sorted.length:0;
   
   const rows=sorted.map(b=>{
     const r=getRat(b[scoreKey],lockAt);
@@ -5995,7 +5976,7 @@ function renderFCBatters(type){
       <td style="color:var(--mt2)">${b.team}</td>
       <td style="color:var(--mt2)">${b.order||''}</td>
       <td class="l" style="max-width:90px;overflow:hidden;text-overflow:ellipsis;color:var(--mt2)">${b.pitcherName||''}</td>
-      <td>${bdg(r)}</td>
+      ${isDKView?'':`<td>${bdg(r)}</td>`}
     </tr>`;
   }).join('');
   
@@ -6012,8 +5993,12 @@ function renderFCBatters(type){
   }
   
   const countPill=isDKView
-    ?`<div class="pill"><span class="pn" style="font-size:.85rem">${lockCount}/${leanCount}/${passCount}${noLineCount?'/'+noLineCount:''}</span>🔒/lean/pass${noLineCount?'/none':''}</div>`
+    ?`<div class="pill"><span class="pn">${lockCount}</span>🔒 Locks</div>`
     :`<div class="pill"><span class="pn">${sorted.length}</span>Predicted</div>`;
+  
+  const emptyMsg=isDKView&&!sorted.length
+    ?`<div style="padding:14px;text-align:center;color:var(--mt);font-size:.7rem">No DK ${type==='tb'?'TB':type==='bb'?'BB':'K'} locks on this date.</div>`
+    :'';
   
   return `
     <div class="sum">
@@ -6021,10 +6006,11 @@ function renderFCBatters(type){
       ${top2Pill}
       ${countPill}
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`Sorted by DK edge magnitude (no-DK rows at bottom). Locks (≥${dkLockMargin}) and leans (≥${dkLockMargin/2}) count toward win rate.`:`Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':type==='hr'?'hit a HR':'actual BB ≥ rounded predicted (conservative)'} · ✗ = no · — = didn't play.`}</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`DK locks only (|model − DK line| ≥ ${dkLockMargin}). ✓ = bet won.`:`Sorted by predicted score. ✓ = ${type==='hit'?'≥1 hit':type==='tb'?'actual TB ≥ rounded predicted (conservative)':type==='hr'?'hit a HR':'actual BB ≥ rounded predicted (conservative)'} · ✗ = no · — = didn't play.`}</div>
+    ${emptyMsg}
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>${propLabel}</th><th></th><th>Result</th>${type==='tb'||type==='bb'||type==='bbat'?'<th>DK Line</th>':''}<th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th><th>Rating</th>
+        <th>${propLabel}</th><th></th><th>Result</th>${type==='tb'||type==='bb'||type==='bbat'?'<th>DK Line</th>':''}<th class="l">Batter</th><th>Team</th><th>#</th><th class="l">Pitcher</th>${isDKView?'':'<th>Rating</th>'}
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -6035,19 +6021,21 @@ function renderFCPitchers(){
   const allSorted=[...RESULTS.pitchers].sort((a,b)=>b.xK-a.xK);
   const dkAvailable=ODDS.props[RESULTS.date]?.events&&Object.keys(ODDS.props[RESULTS.date].events).length>0;
   
-  // Never filter out pitchers — show every prediction. When DK is loaded, classify each
-  // pitcher as lock / lean / pass / none-of-the-above and sort with locks/leans first.
+  // DK view: show ONLY pitchers where |xK - DK line| >= DK_LOCKS.k (locks).
+  // Leans and passes are hidden — user only bets locks.
+  // Non-DK view: fall back to score-based with all predictions.
   let displayList=allSorted;
   let isDKView=false;
   if(dkAvailable){
     isDKView=true;
-    // Sort: rows with DK lines first (locks → leans → pass), then rows without DK lines, then by score
-    displayList=[...allSorted].sort((a,b)=>{
+    displayList=allSorted.filter(p=>{
+      const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_strikeouts;
+      if(market?.line==null)return false;
+      return Math.abs(p.xK-market.line)>=DK_LOCKS.k;
+    }).sort((a,b)=>{
       const ma=getPlayerProps(RESULTS.date,a.name)?.markets?.pitcher_strikeouts?.line;
       const mb=getPlayerProps(RESULTS.date,b.name)?.markets?.pitcher_strikeouts?.line;
-      const ea=ma!=null?Math.abs(a.xK-ma):-1;
-      const eb=mb!=null?Math.abs(b.xK-mb):-1;
-      return eb-ea;
+      return Math.abs(b.xK-mb)-Math.abs(a.xK-ma);
     });
   }
   
@@ -6061,14 +6049,14 @@ function renderFCPitchers(){
       const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_strikeouts;
       if(market?.line==null)return;
       const edge=p.xK-market.line;
-      if(Math.abs(edge)<DK_LOCKS.k/2)return; // pass: doesn't count
+      if(Math.abs(edge)<DK_LOCKS.k)return; // should never trigger (already filtered)
       const recOver=edge>0;
       const win=recOver?(p.actualKs>market.line):(p.actualKs<market.line);
       bets++;if(win)won++;
     });
     topRateNum=won;topRateDen=bets;
-    topRateLabel='📊 DK Bet Win Rate';
-    topRateSubLabel=`lock+lean bets · n=${bets}`;
+    topRateLabel='📊 DK Lock Win Rate';
+    topRateSubLabel=`locks · n=${bets}`;
   }else{
     const lockSet=played.filter(p=>{const r=getRat(p.grade);return r.c==='lock';});
     const lockHits=lockSet.filter(p=>p.actualKs>=roundConservative(p.xK)).length;
@@ -6078,18 +6066,6 @@ function renderFCPitchers(){
   }
   const topRate=topRateDen?(topRateNum/topRateDen*100).toFixed(0)+'%':'—';
   
-  let lockCount=0,leanCount=0,passCount=0,noLineCount=0;
-  if(isDKView){
-    displayList.forEach(p=>{
-      const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_strikeouts;
-      if(market?.line==null){noLineCount++;return;}
-      const absEdge=Math.abs(p.xK-market.line);
-      if(absEdge>=DK_LOCKS.k)lockCount++;
-      else if(absEdge>=DK_LOCKS.k/2)leanCount++;
-      else passCount++;
-    });
-  }
-  
   const rows=displayList.map(p=>{
     const r=getRat(p.grade);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
@@ -6097,33 +6073,13 @@ function renderFCPitchers(){
     if(p.played){
       if(isDKView){
         const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_strikeouts;
-        if(market?.line!=null){
-          const edge=p.xK-market.line;
-          const absEdge=Math.abs(edge);
-          if(absEdge>=DK_LOCKS.k/2){
-            // Lock or lean: scored as a bet
-            const recOver=edge>0;
-            const win=recOver?(p.actualKs>market.line):(p.actualKs<market.line);
-            icon=win?'✓':'✗';
-            col=win?'var(--gn)':'var(--rd)';
-            txt=`${p.actualKs} K · ${p.actualIP} IP`;
-            diffStr=(p.actualKs-market.line>=0?'+':'')+(p.actualKs-market.line).toFixed(1);
-          }else{
-            // Pass: untracked
-            icon='—';
-            col='var(--mt)';
-            txt=`${p.actualKs} K · ${p.actualIP} IP`;
-            diffStr='pass';
-          }
-        }else{
-          // No DK line saved for this pitcher — fall back to score-based ✓/✗
-          predWhole=roundConservative(p.xK);
-          const ok=p.actualKs>=predWhole;
-          icon=ok?'✓':'✗';
-          col=ok?'var(--mt2)':'var(--mt2)'; // dimmed so it doesn't distract
-          txt=`${p.actualKs} K · ${p.actualIP} IP`;
-          diffStr='no DK';
-        }
+        const edge=p.xK-market.line;
+        const recOver=edge>0;
+        const win=recOver?(p.actualKs>market.line):(p.actualKs<market.line);
+        icon=win?'✓':'✗';
+        col=win?'var(--gn)':'var(--rd)';
+        txt=`${p.actualKs} K · ${p.actualIP} IP`;
+        diffStr=(p.actualKs-market.line>=0?'+':'')+(p.actualKs-market.line).toFixed(1);
       }else{
         predWhole=roundConservative(p.xK);
         const diff=p.actualKs-p.xK;
@@ -6145,13 +6101,15 @@ function renderFCPitchers(){
       <td class="l"><strong>${p.name}</strong></td>
       <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
-      <td>${bdg(r)}</td>
+      ${isDKView?'':`<td>${bdg(r)}</td>`}
     </tr>`;
   }).join('');
   
-  const countPill=isDKView
-    ?`<div class="pill"><span class="pn" style="font-size:.85rem">${lockCount}/${leanCount}/${passCount}${noLineCount?'/'+noLineCount:''}</span>🔒/lean/pass${noLineCount?'/none':''}</div>`
-    :`<div class="pill"><span class="pn">${displayList.length}</span>Pitchers</div>`;
+  const emptyMsg=isDKView&&!displayList.length
+    ?`<div style="padding:14px;text-align:center;color:var(--mt);font-size:.7rem">No DK pitcher K locks on this date.</div>`
+    :'';
+  
+  const countPill=`<div class="pill"><span class="pn">${displayList.length}</span>${isDKView?'🔒 Locks':'Pitchers'}</div>`;
   
   return `
     <div class="sum">
@@ -6159,10 +6117,11 @@ function renderFCPitchers(){
       <div class="pill ln"><span class="pn">${meanError}</span>Avg K error</div>
       ${countPill}
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`Sorted by DK edge magnitude (no-DK rows at bottom). Locks (≥${DK_LOCKS.k}) and leans (≥${DK_LOCKS.k/2}) count toward win rate.`:'Sorted by predicted xK. ✓ = actual ≥ predicted · ✗ = below.'}</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`DK locks only (|model − DK line| ≥ ${DK_LOCKS.k}). ✓ = bet won.`:'Sorted by predicted xK. ✓ = actual ≥ predicted · ✗ = below.'}</div>
+    ${emptyMsg}
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>Grade</th><th>Expected Strikeouts</th><th></th><th>Actual</th><th>${isDKView?'vs DK':'Diff'}</th><th>DK Line</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
+        <th>Grade</th><th>Expected Strikeouts</th><th></th><th>Actual</th><th>${isDKView?'vs DK':'Diff'}</th><th>DK Line</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th>${isDKView?'':'<th>Rating</th>'}
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -6173,17 +6132,20 @@ function renderFCPitcherBB(){
   const allSorted=[...RESULTS.pitchers].filter(p=>p.bbGrade!=null).sort((a,b)=>b.bbGrade-a.bbGrade);
   const dkAvailable=ODDS.props[RESULTS.date]?.events&&Object.keys(ODDS.props[RESULTS.date].events).length>0;
   
-  // Never filter — show all predicted pitchers with bbGrade. Classify per row.
+  // DK view: locks only (|edge| >= DK_LOCKS.pbb)
   let displayList=allSorted;
   let isDKView=false;
   if(dkAvailable){
     isDKView=true;
-    displayList=[...allSorted].sort((a,b)=>{
+    displayList=allSorted.filter(p=>{
+      if(p.expectedBB==null)return false;
+      const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_walks;
+      if(market?.line==null)return false;
+      return Math.abs(p.expectedBB-market.line)>=DK_LOCKS.pbb;
+    }).sort((a,b)=>{
       const ma=getPlayerProps(RESULTS.date,a.name)?.markets?.pitcher_walks?.line;
       const mb=getPlayerProps(RESULTS.date,b.name)?.markets?.pitcher_walks?.line;
-      const ea=(ma!=null&&a.expectedBB!=null)?Math.abs(a.expectedBB-ma):-1;
-      const eb=(mb!=null&&b.expectedBB!=null)?Math.abs(b.expectedBB-mb):-1;
-      return eb-ea;
+      return Math.abs(b.expectedBB-mb)-Math.abs(a.expectedBB-ma);
     });
   }
   
@@ -6197,15 +6159,15 @@ function renderFCPitcherBB(){
       const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_walks;
       if(market?.line==null)return;
       const edge=p.expectedBB-market.line;
-      if(Math.abs(edge)<DK_LOCKS.pbb/2)return;
+      if(Math.abs(edge)<DK_LOCKS.pbb)return;
       const recOver=edge>0;
       const actual=p.actualBB||0;
       const win=recOver?(actual>market.line):(actual<market.line);
       bets++;if(win)won++;
     });
     topRateNum=won;topRateDen=bets;
-    topRateLabel='\ud83d\udcca DK Bet Win Rate';
-    topRateSubLabel=`lock+lean bets \u00b7 n=${bets}`;
+    topRateLabel='\ud83d\udcca DK Lock Win Rate';
+    topRateSubLabel=`locks \u00b7 n=${bets}`;
   }else{
     const lockSet=played.filter(p=>p.bbGrade>=LOCKS.pbb);
     const lockHits=lockSet.filter(p=>(p.actualBB||0)>=roundConservative(p.expectedBB)).length;
@@ -6215,18 +6177,6 @@ function renderFCPitcherBB(){
   }
   const topRate=topRateDen?(topRateNum/topRateDen*100).toFixed(0)+'%':'\u2014';
   
-  let lockCount=0,leanCount=0,passCount=0,noLineCount=0;
-  if(isDKView){
-    displayList.forEach(p=>{
-      const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_walks;
-      if(market?.line==null||p.expectedBB==null){noLineCount++;return;}
-      const absEdge=Math.abs(p.expectedBB-market.line);
-      if(absEdge>=DK_LOCKS.pbb)lockCount++;
-      else if(absEdge>=DK_LOCKS.pbb/2)leanCount++;
-      else passCount++;
-    });
-  }
-  
   const rows=displayList.map(p=>{
     const r=getRat(p.bbGrade);
     const rc=r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':'';
@@ -6234,31 +6184,14 @@ function renderFCPitcherBB(){
     if(p.played&&p.expectedBB!=null){
       if(isDKView){
         const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_walks;
-        if(market?.line!=null){
-          const edge=p.expectedBB-market.line;
-          const absEdge=Math.abs(edge);
-          const actual=p.actualBB||0;
-          if(absEdge>=DK_LOCKS.pbb/2){
-            const recOver=edge>0;
-            const win=recOver?(actual>market.line):(actual<market.line);
-            icon=win?'\u2713':'\u2717';
-            col=win?'var(--gn)':'var(--rd)';
-            txt=`${actual} BB \u00b7 ${p.actualIP||0} IP`;
-            diffStr=(actual-market.line>=0?'+':'')+(actual-market.line).toFixed(1);
-          }else{
-            icon='\u2014';col='var(--mt)';
-            txt=`${actual} BB \u00b7 ${p.actualIP||0} IP`;
-            diffStr='pass';
-          }
-        }else{
-          predWhole=roundConservative(p.expectedBB);
-          const actual=p.actualBB||0;
-          const ok=actual>=predWhole;
-          icon=ok?'\u2713':'\u2717';
-          col='var(--mt2)';
-          txt=`${actual} BB \u00b7 ${p.actualIP||0} IP`;
-          diffStr='no DK';
-        }
+        const edge=p.expectedBB-market.line;
+        const recOver=edge>0;
+        const actual=p.actualBB||0;
+        const win=recOver?(actual>market.line):(actual<market.line);
+        icon=win?'\u2713':'\u2717';
+        col=win?'var(--gn)':'var(--rd)';
+        txt=`${actual} BB \u00b7 ${p.actualIP||0} IP`;
+        diffStr=(actual-market.line>=0?'+':'')+(actual-market.line).toFixed(1);
       }else{
         predWhole=roundConservative(p.expectedBB);
         const actual=p.actualBB||0;
@@ -6280,13 +6213,15 @@ function renderFCPitcherBB(){
       <td class="l"><strong>${p.name}</strong></td>
       <td><span style="color:${hc(p.pHand)}">${p.pHand}HP</span></td>
       <td class="l" style="color:var(--mt2)">${p.opp}</td>
-      <td>${bdg(r)}</td>
+      ${isDKView?'':`<td>${bdg(r)}</td>`}
     </tr>`;
   }).join('');
   
-  const countPill=isDKView
-    ?`<div class="pill"><span class="pn" style="font-size:.85rem">${lockCount}/${leanCount}/${passCount}${noLineCount?'/'+noLineCount:''}</span>\ud83d\udd12/lean/pass${noLineCount?'/none':''}</div>`
-    :`<div class="pill"><span class="pn">${displayList.length}</span>Pitchers</div>`;
+  const emptyMsg=isDKView&&!displayList.length
+    ?`<div style="padding:14px;text-align:center;color:var(--mt);font-size:.7rem">No DK pitcher BB locks on this date.</div>`
+    :'';
+  
+  const countPill=`<div class="pill"><span class="pn">${displayList.length}</span>${isDKView?'\ud83d\udd12 Locks':'Pitchers'}</div>`;
   
   return `
     <div class="sum">
@@ -6294,10 +6229,11 @@ function renderFCPitcherBB(){
       <div class="pill ln"><span class="pn">${meanError}</span>Avg BB error</div>
       ${countPill}
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`Sorted by DK edge magnitude (no-DK rows at bottom). Locks (\u2265${DK_LOCKS.pbb}) and leans (\u2265${DK_LOCKS.pbb/2}) count toward win rate.`:'Sorted by BB grade.'}</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`DK locks only (|model \u2212 DK line| \u2265 ${DK_LOCKS.pbb}). \u2713 = bet won.`:'Sorted by BB grade.'}</div>
+    ${emptyMsg}
     <div class="tbl-wrap"><table>
       <thead><tr>
-        <th>BB Grade</th><th>Expected Walks</th><th></th><th>Actual</th><th>${isDKView?'vs DK':'Diff'}</th><th>DK Line</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th><th>Rating</th>
+        <th>BB Grade</th><th>Expected Walks</th><th></th><th>Actual</th><th>${isDKView?'vs DK':'Diff'}</th><th>DK Line</th><th class="l">Pitcher</th><th>Hand</th><th class="l">Opp</th>${isDKView?'':'<th>Rating</th>'}
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -6308,17 +6244,19 @@ function renderFCTotals(){
   const allSorted=[...RESULTS.totals].filter(t=>t.total!=null&&isFinite(t.total)).sort((a,b)=>b.total-a.total);
   const dkAvailable=Object.keys(ODDS.data[RESULTS.date]?.games||[]).length>0;
   
-  // Never filter — show every game prediction. Classify per row when DK loaded.
+  // DK view: locks only (|edge| >= DK_LOCKS.tot)
   let sorted=allSorted;
   let isDKView=false;
   if(dkAvailable){
     isDKView=true;
-    sorted=[...allSorted].sort((a,b)=>{
+    sorted=allSorted.filter(t=>{
+      const odds=getOddsForGame(RESULTS.date,t.home,t.away);
+      if(!odds?.total?.point)return false;
+      return Math.abs(t.total-odds.total.point)>=DK_LOCKS.tot;
+    }).sort((a,b)=>{
       const oa=getOddsForGame(RESULTS.date,a.home,a.away)?.total?.point;
       const ob=getOddsForGame(RESULTS.date,b.home,b.away)?.total?.point;
-      const ea=oa!=null?Math.abs(a.total-oa):-1;
-      const eb=ob!=null?Math.abs(b.total-ob):-1;
-      return eb-ea;
+      return Math.abs(b.total-ob)-Math.abs(a.total-oa);
     });
   }
   
@@ -6332,14 +6270,14 @@ function renderFCTotals(){
       const odds=getOddsForGame(RESULTS.date,t.home,t.away);
       if(!odds?.total?.point)return;
       const edge=t.total-odds.total.point;
-      if(Math.abs(edge)<DK_LOCKS.tot/2)return;
+      if(Math.abs(edge)<DK_LOCKS.tot)return;
       const recOver=edge>0;
       const win=recOver?(t.actualTotal>odds.total.point):(t.actualTotal<odds.total.point);
       bets++;if(win)won++;
     });
     topRateVal=bets?Math.round(won/bets*100)+'%':'—';
-    topRateLabel='📊 DK Bet Win Rate';
-    topRateSub=`lock+lean bets · ${won}/${bets}`;
+    topRateLabel='📊 DK Lock Win Rate';
+    topRateSub=`locks · ${won}/${bets}`;
   }else{
     const correct=played.filter(t=>Math.abs(t.actualTotal-Math.round(t.total))<=0.4).length;
     topRateVal=played.length?(correct/played.length*100).toFixed(0)+'%':'—';
@@ -6347,18 +6285,8 @@ function renderFCTotals(){
     topRateSub='Within 0.4 of rounded predicted';
   }
   
-  // Lock/lean/pass count
-  let lockCount=0,leanCount=0,passCount=0,noLineCount=0;
-  if(isDKView){
-    sorted.forEach(t=>{
-      const odds=getOddsForGame(RESULTS.date,t.home,t.away);
-      if(!odds?.total?.point){noLineCount++;return;}
-      const absEdge=Math.abs(t.total-odds.total.point);
-      if(absEdge>=DK_LOCKS.tot)lockCount++;
-      else if(absEdge>=DK_LOCKS.tot/2)leanCount++;
-      else passCount++;
-    });
-  }
+  // Lock count for DK view (every shown row is a lock)
+  const lockCount=isDKView?sorted.length:0;
   
   const rows=sorted.map(t=>{
     let icon='—',col='var(--mt)',txt='Game not final',diffStr='';
@@ -6377,6 +6305,7 @@ function renderFCTotals(){
     }
     if(t.played){
       if(isDKView&&recSide&&dkLine!=null){
+        // DK view: every shown row is a lock — grade by bet outcome
         const won=recSide==='OVER'?(t.actualTotal>dkLine):(t.actualTotal<dkLine);
         icon=won?'✓':'✗';
         col=won?'var(--gn)':'var(--rd)';
@@ -6385,12 +6314,8 @@ function renderFCTotals(){
         diffStr=(lineDiff>=0?'+':'')+lineDiff.toFixed(1);
         dkOutcomeStr=won?'✓':'✗';
         dkOutcomeColor=won?'var(--gn)':'var(--rd)';
-      }else if(isDKView){
-        // Pass — game played but we didn't bet
-        icon='—';col='var(--mt)';
-        txt=`${t.actualTotal} (${t.actualAway}-${t.actualHome})`;
-        diffStr='pass';
-      }else{
+      }else if(!isDKView){
+        // Score view: match-rate logic
         const diff=t.actualTotal-predWhole;
         const ok=Math.abs(diff)<=0.4;
         icon=ok?'✓':'✗';
@@ -6419,8 +6344,12 @@ function renderFCTotals(){
   }).join('');
   
   const countPill=isDKView
-    ?`<div class="pill"><span class="pn" style="font-size:.85rem">${lockCount}/${leanCount}/${passCount}${noLineCount?'/'+noLineCount:''}</span>🔒/lean/pass${noLineCount?'/none':''}</div>`
+    ?`<div class="pill"><span class="pn">${lockCount}</span>🔒 Locks</div>`
     :`<div class="pill"><span class="pn">${sorted.length}</span>Games</div>`;
+  
+  const emptyMsg=isDKView&&!sorted.length
+    ?`<div style="padding:14px;text-align:center;color:var(--mt);font-size:.7rem">No DK run total locks on this date.</div>`
+    :'';
   
   return `
     <div class="sum">
@@ -6428,7 +6357,8 @@ function renderFCTotals(){
       <div class="pill ln"><span class="pn">${meanError}</span>Avg run error</div>
       ${countPill}
     </div>
-    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`Sorted by DK edge magnitude (no-DK games at bottom). Locks (≥${DK_LOCKS.tot}) and leans (≥${DK_LOCKS.tot/2}) count toward win rate.`:`Sorted by predicted total. ✓/✗ Match = actual within 0.4 of predicted.`}</div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">${isDKView?`DK locks only (|model − DK line| ≥ ${DK_LOCKS.tot}). ✓ = bet won.`:`Sorted by predicted total. ✓/✗ Match = actual within 0.4 of predicted.`}</div>
+    ${emptyMsg}
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>xRuns</th><th></th><th>Actual</th><th>${isDKView?'vs DK':'Diff'}</th><th>DK Line</th><th>DK Rec</th><th>DK ✓</th><th class="l">Game</th><th class="l">Venue</th><th>Score</th>
