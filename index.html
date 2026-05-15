@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.35 · Prop Intelligence</title>
+<title>Diamond IQ v6.36 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.35 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.36 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -7907,12 +7907,22 @@ function openHRLineMo(gamePk,opts={}){
    INIT
    =================================================================== */
 (function init(){
-  document.getElementById('dp').value=todayStr();
   predLoad();
-  // Auto-load today's snapshot (same as tapping ▶ Load). If a snapshot exists locally
-  // it hydrates instantly; otherwise it does the full fetch.
+  // Pick the date to default to: most recent snapshot we have, falling back to today.
+  // This way if you open the app before anyone has loaded today, you still get
+  // instant access to yesterday (or whatever's most recent) without forcing a fetch.
+  function pickDefaultDate(){
+    const today=todayStr();
+    if(PRED.byDate[today])return today;
+    const dates=Object.keys(PRED.byDate).sort().reverse();
+    return dates[0]||today;
+  }
+  document.getElementById('dp').value=pickDefaultDate();
+  
+  // Auto-load. If the chosen date has a snapshot it hydrates instantly. Otherwise
+  // loadAll's Firebase-wait path checks shared data before falling through to a fetch.
   setTimeout(()=>loadAll(),20);
-  // Keyboard: Escape closes modal
+  
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
 
