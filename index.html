@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.30 · Prop Intelligence</title>
+<title>Diamond IQ v6.31 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.30 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.31 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -5013,10 +5013,10 @@ function renderHistoryBadge(prop,labelOverride){
     // For other props: 4 columns: Date | Rate% | Lock fraction | ✓✗
     const colspanLoading=prop==='hits'?4:3;
     if(d.pending){
-      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="${colspanLoading}" style="color:var(--mt);font-style:italic;padding:5px 4px">loading…</td></tr>`;
+      return `<tr class="hist-day-row" onclick="drillIntoDay('${prop}','${d.date}','score')" style="cursor:pointer"><td style="color:var(--ac);padding:5px 4px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td><td colspan="${colspanLoading}" style="color:var(--mt);font-style:italic;padding:5px 4px">loading… →</td></tr>`;
     }
     if(d.n===0){
-      return `<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="${colspanLoading}" style="color:var(--mt);padding:5px 4px">no qualifying plays</td></tr>`;
+      return `<tr class="hist-day-row" onclick="drillIntoDay('${prop}','${d.date}','score')" style="cursor:pointer"><td style="color:var(--ac);padding:5px 4px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td><td colspan="${colspanLoading}" style="color:var(--mt);padding:5px 4px">no qualifying plays →</td></tr>`;
     }
     const c=d.rate>=70?'var(--gn)':d.rate>=50?'var(--gd)':'var(--rd)';
     const marks=d.outcomes.slice(0,12).map(o=>`<span style="color:${o?'var(--gn)':'var(--rd)'};font-weight:700">${o?'✓':'✗'}</span>`).join('');
@@ -5138,9 +5138,9 @@ function renderDKBadge(prop){
     dkStats.days.forEach(d=>{
       const dateLabel=d.date.slice(5).replace('-','/'); // MM/DD
       if(d.pending){
-        rows+=`<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:5px 4px">no results yet</td></tr>`;
+        rows+=`<tr onclick="drillIntoDay('${prop}','${d.date}','dk')" style="cursor:pointer"><td style="color:var(--ac);padding:5px 4px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:5px 4px">no results yet →</td></tr>`;
       }else if(d.noOdds||d.bets===0){
-        rows+=`<tr><td style="color:var(--mt2);padding:5px 4px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:5px 4px">${d.noOdds?'no DK lines saved':'no qualifying bets'}</td></tr>`;
+        rows+=`<tr onclick="drillIntoDay('${prop}','${d.date}','dk')" style="cursor:pointer"><td style="color:var(--ac);padding:5px 4px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:5px 4px">${d.noOdds?'no DK lines saved':'no qualifying bets'} →</td></tr>`;
       }else{
         const c=d.rate>=55?'var(--gn)':d.rate>=45?'var(--gd)':'var(--rd)';
         rows+=`<tr onclick="drillIntoDay('${prop}','${d.date}','dk')" style="cursor:pointer">
@@ -5340,11 +5340,11 @@ function locksRateBreakdown(prop,preferDK){
   days.forEach(d=>{
     const dateLabel=d.date.slice(5).replace('-','/'); // MM/DD
     if(d.pending){
-      rows+=`<tr><td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no results yet</td></tr>`;
+      rows+=`<tr onclick="event.stopPropagation();drillIntoDay('${prop}','${d.date}','${preferDK?'dk':'score'}')" style="cursor:pointer"><td style="color:var(--ac);padding:3px 6px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no results yet →</td></tr>`;
     }else if(d.noOdds){
-      rows+=`<tr><td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no DK lines saved</td></tr>`;
+      rows+=`<tr onclick="event.stopPropagation();drillIntoDay('${prop}','${d.date}','${preferDK?'dk':'score'}')" style="cursor:pointer"><td style="color:var(--ac);padding:3px 6px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no DK lines saved →</td></tr>`;
     }else if((d.bets??d.n)===0){
-      rows+=`<tr><td style="color:var(--mt2);padding:3px 6px">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no qualifying ${preferDK?'bets':'locks'}</td></tr>`;
+      rows+=`<tr onclick="event.stopPropagation();drillIntoDay('${prop}','${d.date}','${preferDK?'dk':'score'}')" style="cursor:pointer"><td style="color:var(--ac);padding:3px 6px;text-decoration:underline;text-decoration-style:dotted">${dateLabel}</td><td colspan="2" style="color:var(--mt);padding:3px 6px;font-size:.55rem">no qualifying ${preferDK?'bets':'locks'} →</td></tr>`;
     }else{
       const num=preferDK?d.won:d.hits;
       const den=preferDK?d.bets:d.n;
