@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.39 · Prop Intelligence</title>
+<title>Diamond IQ v6.40 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.39 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.40 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -711,6 +711,23 @@ function hydrateFromSnapshot(date){
   
   STATE.ready=true;
   return true;
+}
+
+// Firebase rejects payloads containing `undefined` anywhere. Walk the object and
+// replace undefined with null (which Firebase accepts) so writes never fail on
+// optional fields like expectedBB/expectedTB that may not exist for some players.
+function sanitizeForFirebase(obj){
+  if(obj===undefined)return null;
+  if(obj===null||typeof obj!=='object')return obj;
+  if(Array.isArray(obj))return obj.map(sanitizeForFirebase);
+  const out={};
+  for(const k in obj){
+    if(Object.prototype.hasOwnProperty.call(obj,k)){
+      const v=obj[k];
+      out[k]=v===undefined?null:sanitizeForFirebase(v);
+    }
+  }
+  return out;
 }
 
 function predSave(){
@@ -1049,7 +1066,7 @@ async function pushSharedProps(date){
       console.warn('[DIQ] pushSharedProps: doc too big',sizeKB);
       return;
     }
-    await FB.db.collection('app_settings').doc(`props_${date}`).set(payload);
+    await FB.db.collection('app_settings').doc(`props_${date}`).set(sanitizeForFirebase(payload));
     console.log(`[DIQ] Pushed player props for ${date} (${sizeKB}KB)`);
   }catch(e){
     ODDS.lastError=`Props push failed: ${e.message}`;
@@ -1225,7 +1242,7 @@ async function pushSharedOdds(date){
       console.warn('[DIQ] pushSharedOdds: doc too big',sizeKB);
       return;
     }
-    await FB.db.collection('app_settings').doc(`odds_${date}`).set(payload);
+    await FB.db.collection('app_settings').doc(`odds_${date}`).set(sanitizeForFirebase(payload));
     console.log(`[DIQ] Pushed shared odds for ${date} (${sizeKB}KB)`);
   }catch(e){
     ODDS.lastError=`Firebase push failed: ${e.message}. Check Firestore rules allow app_settings/* writes.`;
@@ -1356,7 +1373,7 @@ async function pushSharedHistory(date,opts={}){
       payload.results=results;
     }
     
-    await FB.db.collection('shared_history').doc(date).set(payload,{merge:true});
+    await FB.db.collection('shared_history').doc(date).set(sanitizeForFirebase(payload),{merge:true});
     FB.uploadedDates[date]=true;
     console.log(`[DIQ] Pushed ${date} ${forceOverridePred?'(OVERRIDE)':''} pred:${!!payload.predictions} results:${!!payload.results}`);
     if(window._diag)window._diag(`✓ Pushed ${date} to Firestore (pred:${!!payload.predictions} results:${!!payload.results})`);
@@ -1425,7 +1442,7 @@ async function autoPushPendingDates(){
       const results=HISTORY.byDate[date];
       const payload={date,predictions:pred,updatedAt:Date.now()};
       if(results)payload.results=results;
-      await FB.db.collection('shared_history').doc(date).set(payload,{merge:true});
+      await FB.db.collection('shared_history').doc(date).set(sanitizeForFirebase(payload),{merge:true});
       FB.uploadedDates[date]=true;
       console.log('[DIQ] Auto-pushed',date);
       if(window._diag)window._diag(`✓ Auto-pushed ${date}`);
@@ -1521,9 +1538,9 @@ async function fbDebugPushAll(){
     }
     if(!pred||!results){fbLog(`  ${date}: missing data, skip`);failed++;continue;}
     try{
-      await FB.db.collection('shared_history').doc(date).set({
+      await FB.db.collection('shared_history').doc(date).set(sanitizeForFirebase({
         date,predictions:pred,results,updatedAt:Date.now()
-      });
+      }));
       FB.uploadedDates[date]=true;
       fbLog(`  ${date}: ✓ pushed`);
       pushed++;
