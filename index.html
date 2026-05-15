@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.34 · Prop Intelligence</title>
+<title>Diamond IQ v6.35 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,13 +424,12 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.34 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.35 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
       <button class="btn bp" id="loadBtn" onclick="loadAll()">▶ Load</button>
       <button class="btn bg" id="forceBtn" onclick="forceReload()" title="Force fresh compute (PIN required)" style="font-size:.6rem;padding:6px 8px">🔄</button>
-      <button class="btn bg" id="refreshBtn" onclick="refreshAll()" title="Re-fetch everything" style="display:none">↻</button>
     </div>
   </div>
   <div id="prog"><div id="progText">Loading…</div><div class="pbar"><div class="pfill" id="pfill"></div></div></div>
@@ -2497,7 +2496,6 @@ async function _performReload(){
     
     STATE.ready=true;
     progress(10,10,'Done');
-    document.getElementById('refreshBtn').style.display='inline-block';
     setTimeout(()=>progress(1,1),500);
     
     renderTab();
@@ -2511,7 +2509,7 @@ async function _performReload(){
   btn.disabled=false;btn.textContent='▶ Reload';
 }
 
-async function refreshAll(){await loadAll();}
+async function refreshAll(){await loadAll();} // legacy — kept as alias in case anything still calls it
 
 // Compute league averages from fetched player data (for scoring normalization)
 function computeLeagueAverages(){
