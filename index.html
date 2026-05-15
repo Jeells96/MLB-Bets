@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.29 · Prop Intelligence</title>
+<title>Diamond IQ v6.30 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.29 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.30 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -5890,67 +5890,70 @@ function renderFCBatters(type){
     return b[scoreKey]-a[scoreKey];
   });
   
-  // Outcome for the given batter. Returns {icon, col, txt, hit} where hit=true/false/null
+  // Outcome for the given batter. Returns {icon, col, txt, hit}.
+  // Locks: full-color grade. Non-locks: dimmed grade so you can still see right/wrong.
   function outcome(b){
     if(!b.played)return {icon:'',col:'var(--mt)',txt:'Did not play',hit:null};
     const isLk=isLock(b);
+    const dimGn='#1e6b3e',dimRd='#6b1e2e';
     
-    // Non-lock rows: show actual stats but no grading
-    if(!isLk){
-      if(type==='hit')return {icon:'',col:'var(--mt2)',txt:`${b.actualHits}-for-${b.actualAB}`,hit:null};
-      if(type==='tb')return {icon:'',col:'var(--mt2)',txt:`${b.actualTB||0} TB`,hit:null};
-      if(type==='hr')return {icon:'',col:'var(--mt2)',txt:`${b.actualHR||0} HR`,hit:null};
-      if(type==='bb')return {icon:'',col:'var(--mt2)',txt:`${b.actualBB||0} BB`,hit:null};
-      if(type==='bbat')return {icon:'',col:'var(--mt2)',txt:`${b.actualK||0} K`,hit:null};
-    }
-    
-    // DK lock: grade against DK line
+    // DK view: grade by bet outcome for tb/bb/bbat
     if(dkAvailable){
       const modelField=type==='tb'?'expectedTB':type==='bb'?'expectedBB':'batterExpectedK';
       const actualField=type==='tb'?'actualTB':type==='bb'?'actualBB':'actualK';
       const actual=b[actualField]||0;
       const labelStat=type==='tb'?'TB':type==='bb'?'BB':'K';
       const market=getPlayerProps(RESULTS.date,b.name)?.markets?.[dkMarketKey];
+      if(market?.line==null||b[modelField]==null){
+        return {icon:'',col:'var(--mt2)',txt:`${actual} ${labelStat}`,hit:null};
+      }
       const edge=b[modelField]-market.line;
       const recOver=edge>0;
       const win=recOver?(actual>market.line):(actual<market.line);
-      return {icon:win?'\u2713':'\u2717',col:win?'var(--gn)':'var(--rd)',txt:`${actual} ${labelStat} (${recOver?'O':'U'} ${market.line})`,hit:win};
+      return {
+        icon:win?'\u2713':'\u2717',
+        col:isLk?(win?'var(--gn)':'var(--rd)'):(win?dimGn:dimRd),
+        txt:`${actual} ${labelStat} (${recOver?'O':'U'} ${market.line})`,
+        hit:win,
+        isLk
+      };
     }
     
-    // Score lock: existing rules
+    // Score view: grade by existing rules, dim for non-locks
     if(type==='hit'){
       const hit=b.actualHits>0;
-      return {icon:hit?'\u2713':'\u2717',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHits}-for-${b.actualAB}`,hit};
+      return {icon:hit?'\u2713':'\u2717',col:isLk?(hit?'var(--gn)':'var(--rd)'):(hit?dimGn:dimRd),txt:`${b.actualHits}-for-${b.actualAB}`,hit,isLk};
     }
     if(type==='tb'){
-      if(b.expectedTB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualTB||0} TB \u00b7 no pred`,hit:null};
+      if(b.expectedTB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualTB||0} TB \u00b7 no pred`,hit:null,isLk};
       const predWhole=roundConservative(b.expectedTB);
       const actual=b.actualTB||0;
       const hit=actual>=predWhole;
-      return {icon:hit?'\u2713':'\u2717',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} TB (pred ${predWhole})`,hit};
+      return {icon:hit?'\u2713':'\u2717',col:isLk?(hit?'var(--gn)':'var(--rd)'):(hit?dimGn:dimRd),txt:`${actual} TB (pred ${predWhole})`,hit,isLk};
     }
     if(type==='hr'){
       const hit=b.actualHR>0;
-      return {icon:hit?'\u2713':'\u2717',col:hit?'var(--gn)':'var(--rd)',txt:`${b.actualHR||0} HR`,hit};
+      return {icon:hit?'\u2713':'\u2717',col:isLk?(hit?'var(--gn)':'var(--rd)'):(hit?dimGn:dimRd),txt:`${b.actualHR||0} HR`,hit,isLk};
     }
     if(type==='bb'){
-      if(b.expectedBB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualBB||0} BB \u00b7 no pred`,hit:null};
+      if(b.expectedBB==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualBB||0} BB \u00b7 no pred`,hit:null,isLk};
       const predWhole=roundConservative(b.expectedBB);
       const actual=b.actualBB||0;
       const hit=actual>=predWhole;
-      return {icon:hit?'\u2713':'\u2717',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} BB (pred ${predWhole})`,hit};
+      return {icon:hit?'\u2713':'\u2717',col:isLk?(hit?'var(--gn)':'var(--rd)'):(hit?dimGn:dimRd),txt:`${actual} BB (pred ${predWhole})`,hit,isLk};
     }
     if(type==='bbat'){
-      if(b.batterExpectedK==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualK||0} K \u00b7 no pred`,hit:null};
+      if(b.batterExpectedK==null)return {icon:'?',col:'var(--mt)',txt:`${b.actualK||0} K \u00b7 no pred`,hit:null,isLk};
       const predWhole=roundConservative(b.batterExpectedK);
       const actual=b.actualK||0;
       const hit=actual>=predWhole;
-      return {icon:hit?'\u2713':'\u2717',col:hit?'var(--gn)':'var(--rd)',txt:`${actual} K (pred ${predWhole})`,hit};
+      return {icon:hit?'\u2713':'\u2717',col:isLk?(hit?'var(--gn)':'var(--rd)'):(hit?dimGn:dimRd),txt:`${actual} K (pred ${predWhole})`,hit,isLk};
     }
   }
   
   const lockList=sorted.filter(isLock);
   const lockPlayed=lockList.filter(b=>b.played);
+  // Win rate counts ONLY locks (outcome() returns isLk so we filter on it as a safety)
   const outcomes=lockPlayed.map(outcome).filter(o=>o.hit!==null);
   const won=outcomes.filter(o=>o.hit).length;
   
@@ -6077,24 +6080,26 @@ function renderFCPitchers(){
     const rc=isLk?(r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':''):'';
     let icon='',col='var(--mt)',txt=p.played?`${p.actualKs} K \u00b7 ${p.actualIP} IP`:'No final stats',diffStr='',predWhole=null;
     
-    if(p.played&&isLk){
-      if(dkAvailable){
-        const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_strikeouts;
+    // VS DK column = model edge (model - DK line), not actual - line.
+    // Grade all rows (locks crisp, non-locks dimmed). Need a DK line for DK view.
+    if(dkAvailable){
+      const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_strikeouts;
+      if(market?.line!=null){
         const edge=p.xK-market.line;
-        const recOver=edge>0;
-        const win=recOver?(p.actualKs>market.line):(p.actualKs<market.line);
-        icon=win?'\u2713':'\u2717';
-        col=win?'var(--gn)':'var(--rd)';
-        diffStr=(p.actualKs-market.line>=0?'+':'')+(p.actualKs-market.line).toFixed(1);
-      }else{
-        predWhole=roundConservative(p.xK);
-        const ok=p.actualKs>=predWhole;
-        icon=ok?'\u2713':'\u2717';
-        col=ok?'var(--gn)':'var(--rd)';
-        diffStr=((p.actualKs-p.xK)>=0?'+':'')+(p.actualKs-p.xK).toFixed(1);
+        diffStr=(edge>=0?'+':'')+edge.toFixed(1);
+        if(p.played){
+          const recOver=edge>0;
+          const win=recOver?(p.actualKs>market.line):(p.actualKs<market.line);
+          icon=win?'\u2713':'\u2717';
+          col=isLk?(win?'var(--gn)':'var(--rd)'):(win?'#1e6b3e':'#6b1e2e');
+        }
       }
     }else if(p.played){
-      col='var(--mt2)';
+      predWhole=roundConservative(p.xK);
+      const ok=p.actualKs>=predWhole;
+      icon=ok?'\u2713':'\u2717';
+      col=isLk?(ok?'var(--gn)':'var(--rd)'):(ok?'#1e6b3e':'#6b1e2e');
+      diffStr=((p.actualKs-p.xK)>=0?'+':'')+(p.actualKs-p.xK).toFixed(1);
     }
     
     const dkCell=dkCellFor(p.name,'pitcher_strikeouts',p.xK,DK_LOCKS.k,DK_LOCKS.k/2,RESULTS.date);
@@ -6191,26 +6196,27 @@ function renderFCPitcherBB(){
     const rc=isLk?(r.c==='lock'?'lr':r.c==='hot'?'hr2':r.c==='lean'?'lnr':''):'';
     let icon='',col='var(--mt)',txt=p.played&&p.expectedBB!=null?`${p.actualBB||0} BB \u00b7 ${p.actualIP||0} IP`:'No final stats',diffStr='',predWhole=null;
     
-    if(p.played&&p.expectedBB!=null&&isLk){
-      if(dkAvailable){
-        const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_walks;
+    // VS DK column = model edge. Grade locks crisp, non-locks dimmed.
+    if(dkAvailable&&p.expectedBB!=null){
+      const market=getPlayerProps(RESULTS.date,p.name)?.markets?.pitcher_walks;
+      if(market?.line!=null){
         const edge=p.expectedBB-market.line;
-        const recOver=edge>0;
-        const actual=p.actualBB||0;
-        const win=recOver?(actual>market.line):(actual<market.line);
-        icon=win?'\u2713':'\u2717';
-        col=win?'var(--gn)':'var(--rd)';
-        diffStr=(actual-market.line>=0?'+':'')+(actual-market.line).toFixed(1);
-      }else{
-        predWhole=roundConservative(p.expectedBB);
-        const actual=p.actualBB||0;
-        const ok=actual>=predWhole;
-        icon=ok?'\u2713':'\u2717';
-        col=ok?'var(--gn)':'var(--rd)';
-        diffStr=((actual-p.expectedBB)>=0?'+':'')+(actual-p.expectedBB).toFixed(1);
+        diffStr=(edge>=0?'+':'')+edge.toFixed(1);
+        if(p.played){
+          const recOver=edge>0;
+          const actual=p.actualBB||0;
+          const win=recOver?(actual>market.line):(actual<market.line);
+          icon=win?'\u2713':'\u2717';
+          col=isLk?(win?'var(--gn)':'var(--rd)'):(win?'#1e6b3e':'#6b1e2e');
+        }
       }
-    }else if(p.played){
-      col='var(--mt2)';
+    }else if(p.played&&p.expectedBB!=null){
+      predWhole=roundConservative(p.expectedBB);
+      const actual=p.actualBB||0;
+      const ok=actual>=predWhole;
+      icon=ok?'\u2713':'\u2717';
+      col=isLk?(ok?'var(--gn)':'var(--rd)'):(ok?'#1e6b3e':'#6b1e2e');
+      diffStr=((actual-p.expectedBB)>=0?'+':'')+(actual-p.expectedBB).toFixed(1);
     }
     
     return `<tr class="${rc}" onclick="openHistoryRowMo('pitcher',RESULTS.date,'${p.id}','pbb')" style="cursor:pointer${isLk?'':';opacity:.55'}">
@@ -6315,25 +6321,23 @@ function renderFCTotals(){
       else if(absEdge>=DK_LOCKS.tot/2){recSide=edge>0?'OVER':'UNDER';dkRecStr=`<span style="color:var(--gd)">lean ${recSide}</span>`;}
       else dkRecStr='<span style="color:var(--mt)">pass</span>';
     }
-    if(t.played){
-      if(dkAvailable&&isLk&&recSide&&dkLine!=null){
+    // VS DK column = model edge (model - DK line). Grade locks crisp, non-locks dimmed.
+    if(dkAvailable&&dkLine!=null){
+      const edge=t.total-dkLine;
+      diffStr=(edge>=0?'+':'')+edge.toFixed(1);
+      if(t.played&&recSide){
         const won=recSide==='OVER'?(t.actualTotal>dkLine):(t.actualTotal<dkLine);
         icon=won?'\u2713':'\u2717';
-        col=won?'var(--gn)':'var(--rd)';
-        const lineDiff=t.actualTotal-dkLine;
-        diffStr=(lineDiff>=0?'+':'')+lineDiff.toFixed(1);
+        col=isLk?(won?'var(--gn)':'var(--rd)'):(won?'#1e6b3e':'#6b1e2e');
         dkOutcomeStr=won?'\u2713':'\u2717';
-        dkOutcomeColor=won?'var(--gn)':'var(--rd)';
-      }else if(!dkAvailable){
-        const diff=t.actualTotal-predWhole;
-        const ok=Math.abs(diff)<=0.4;
-        icon=ok?'\u2713':'\u2717';
-        col=ok?'var(--gn)':'var(--rd)';
-        diffStr=(diff>=0?'+':'')+diff.toFixed(1);
-      }else{
-        // Played but non-lock in DK view: show stats dimmed, no grade
-        col='var(--mt2)';
+        dkOutcomeColor=isLk?(won?'var(--gn)':'var(--rd)'):(won?'#1e6b3e':'#6b1e2e');
       }
+    }else if(!dkAvailable&&t.played){
+      const diff=t.actualTotal-predWhole;
+      const ok=Math.abs(diff)<=0.4;
+      icon=ok?'\u2713':'\u2717';
+      col=ok?'var(--gn)':'var(--rd)';
+      diffStr=(diff>=0?'+':'')+diff.toFixed(1);
     }
     return `<tr onclick="openHistoryRowMo('total',RESULTS.date,'${t.gamePk}')" style="cursor:pointer${dkAvailable&&!isLk?';opacity:.55':''}">
       <td><strong style="color:var(--gd);font-size:1.1rem">${predWhole}</strong></td>
