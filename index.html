@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.36 · Prop Intelligence</title>
+<title>Diamond IQ v6.37 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.36 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.37 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -2298,7 +2298,7 @@ function precipRunFactor(wx){
 async function loadAll(){
   const date=document.getElementById('dp').value||todayStr();
   
-  // First try: snapshot already in memory (localStorage hydrated by predLoad)
+  // First try: snapshot already in memory (from predLoad localStorage cache or prior Firebase pull)
   if(PRED.byDate[date]){
     if(hydrateFromSnapshot(date)){
       const btn=document.getElementById('loadBtn');
@@ -2308,12 +2308,22 @@ async function loadAll(){
     }
   }
   
-  // Second try: wait for Firebase pull to complete in case a teammate has it
+  // Second try: wait for Firebase to be ready, then pull history, then check again.
+  // Firebase is the source of truth — only fall through to fetch if Firebase
+  // confirms there's no shared snapshot for this date.
   setMain(`<div class="empty"><b>Checking shared data…</b><div class="spin"></div></div>`);
+  
+  // Wait for Firebase to become ready (up to 10s)
   let waited=0;
-  while(waited<6000){
+  while(!FB.ready&&waited<10000){
     await new Promise(r=>setTimeout(r,200));
     waited+=200;
+  }
+  
+  if(FB.ready){
+    // Pull history. If the boot pull already ran, this may be a no-op or quick re-pull.
+    await pullSharedHistory();
+    // After pull, check again
     if(PRED.byDate[date]){
       if(hydrateFromSnapshot(date)){
         const btn=document.getElementById('loadBtn');
@@ -2324,8 +2334,13 @@ async function loadAll(){
     }
   }
   
-  // Nothing in Firebase either — this is a genuine first-load. Run the full fetch.
-  return _performReload();
+  // Nothing in Firebase. This is a genuine first-load — show a confirmation
+  // rather than just diving into the heavy fetch.
+  setMain(`<div class="empty">
+    <b>No saved data for ${date}</b>
+    No one in your league has loaded this date yet. Run a fresh fetch?
+    <div style="margin-top:12px"><button class="btn bp" onclick="_performReload()">▶ Fetch Fresh Data</button></div>
+  </div>`);
 }
 
 // Force a fresh full compute, overwriting the saved snapshot. PIN-gated.
@@ -7908,20 +7923,35 @@ function openHRLineMo(gamePk,opts={}){
    =================================================================== */
 (function init(){
   predLoad();
-  // Pick the date to default to: most recent snapshot we have, falling back to today.
-  // This way if you open the app before anyone has loaded today, you still get
-  // instant access to yesterday (or whatever's most recent) without forcing a fetch.
+  
   function pickDefaultDate(){
     const today=todayStr();
     if(PRED.byDate[today])return today;
     const dates=Object.keys(PRED.byDate).sort().reverse();
     return dates[0]||today;
   }
-  document.getElementById('dp').value=pickDefaultDate();
   
-  // Auto-load. If the chosen date has a snapshot it hydrates instantly. Otherwise
-  // loadAll's Firebase-wait path checks shared data before falling through to a fetch.
-  setTimeout(()=>loadAll(),20);
+  // If we already have data locally, set the picker and load immediately.
+  // If not, wait briefly for Firebase to deliver shared data before picking a default.
+  if(Object.keys(PRED.byDate).length>0){
+    document.getElementById('dp').value=pickDefaultDate();
+    setTimeout(()=>loadAll(),20);
+  }else{
+    // Fresh device — show a loading state while we wait for Firebase
+    setMain(`<div class="empty"><b>Connecting…</b><div class="spin"></div></div>`);
+    document.getElementById('dp').value=todayStr();
+    (async()=>{
+      let waited=0;
+      while(!FB.ready&&waited<10000){
+        await new Promise(r=>setTimeout(r,200));
+        waited+=200;
+      }
+      if(FB.ready)await pullSharedHistory();
+      // Now pick default based on whatever Firebase delivered
+      document.getElementById('dp').value=pickDefaultDate();
+      loadAll();
+    })();
+  }
   
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
