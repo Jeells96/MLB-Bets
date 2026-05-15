@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.33 · Prop Intelligence</title>
+<title>Diamond IQ v6.34 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,11 +424,12 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.33 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.34 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
       <button class="btn bp" id="loadBtn" onclick="loadAll()">▶ Load</button>
+      <button class="btn bg" id="forceBtn" onclick="forceReload()" title="Force fresh compute (PIN required)" style="font-size:.6rem;padding:6px 8px">🔄</button>
       <button class="btn bg" id="refreshBtn" onclick="refreshAll()" title="Re-fetch everything" style="display:none">↻</button>
     </div>
   </div>
@@ -627,10 +628,9 @@ function predLoad(){
 }
 
 // Hydrate STATE from a saved snapshot so Home renders instantly without re-running the
-// full MLB Stats API fetch + compute. The snapshot has enough to render the Locks
-// section, prop tabs, and FC views — but lacks STATE.players raw stats, so the row
-// detail columns (xBA, xwOBA etc) will be empty until the user taps Reload.
-// Marks STATE.fromSnapshot=true so renderers can be graceful about missing detail.
+// full MLB Stats API fetch + compute. The snapshot has matchup-level data (names, scores,
+// picks) but lacks raw player stats — so prop tab detail columns (xBA, xwOBA, etc.) will
+// show empty until the user does a force reload.
 function hydrateFromSnapshot(date){
   const pred=PRED.byDate[date];
   if(!pred||!pred.batters||!pred.pitchers)return false;
@@ -643,7 +643,6 @@ function hydrateFromSnapshot(date){
   STATE.totals=[];
   STATE.fromSnapshot=true;
   
-  // Build batter matchup stubs
   pred.batters.forEach(b=>{
     STATE.matchups.push({
       kind:'batter',
@@ -655,7 +654,7 @@ function hydrateFromSnapshot(date){
       bats:b.bats,
       pHand:b.pHand,
       pitcherName:b.pitcherName,
-      pitcherId:'', // unknown from snapshot
+      pitcherId:'',
       hitScore:b.score,
       hrScore:b.hrScore,
       tbScore:b.tbScore,
@@ -668,7 +667,6 @@ function hydrateFromSnapshot(date){
     });
   });
   
-  // Build pitcher matchup stubs
   pred.pitchers.forEach(p=>{
     STATE.matchups.push({
       kind:'pitcher',
@@ -686,7 +684,6 @@ function hydrateFromSnapshot(date){
     });
   });
   
-  // Build totals + game stubs
   (pred.totals||[]).forEach(t=>{
     const game={
       gamePk:t.gamePk,
@@ -1391,16 +1388,6 @@ async function bootPullWithRetry(){
   await pullSharedLocks();
   await pullSharedOdds(todayStr());
   await pullSharedProps(todayStr());
-  // After pulling shared data, if today's snapshot exists, hydrate STATE so Home
-  // renders immediately without requiring a manual Reload.
-  const today=todayStr();
-  if(!STATE.ready&&PRED.byDate[today]){
-    if(hydrateFromSnapshot(today)){
-      console.log('[DIQ] Hydrated STATE from shared snapshot for',today);
-      const btn=document.getElementById('loadBtn');
-      if(btn)btn.textContent='▶ Reload';
-    }
-  }
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
 }
@@ -2302,13 +2289,49 @@ function precipRunFactor(wx){
    MAIN ORCHESTRATOR — loadAll()
    =================================================================== */
 
-// Entry point. If predictions already exist for the chosen date and we don't have
-// the session unlock yet, prompt for PIN before clearing/overwriting that data.
-// Otherwise proceed with the actual reload immediately.
+// Entry point. Two paths:
+//  - If a snapshot exists for the chosen date (locally OR pulled from Firebase), hydrate
+//    STATE from it and render instantly — same as Fact Check works for past dates.
+//  - If no snapshot exists at all, run the full MLB fetch + compute (first-load case).
+//
+// To override a saved snapshot and force a fresh compute, use the override button
+// (PIN-gated) which calls _performReload() directly.
 async function loadAll(){
   const date=document.getElementById('dp').value||todayStr();
-  const alreadyLoaded=!!(PRED.byDate[date]);
-  if(alreadyLoaded&&!SESSION_UNLOCKED){
+  
+  // First try: snapshot already in memory (localStorage hydrated by predLoad)
+  if(PRED.byDate[date]){
+    if(hydrateFromSnapshot(date)){
+      const btn=document.getElementById('loadBtn');
+      if(btn){btn.disabled=false;btn.textContent='▶ Reload';}
+      renderTab();
+      return;
+    }
+  }
+  
+  // Second try: wait for Firebase pull to complete in case a teammate has it
+  setMain(`<div class="empty"><b>Checking shared data…</b><div class="spin"></div></div>`);
+  let waited=0;
+  while(waited<6000){
+    await new Promise(r=>setTimeout(r,200));
+    waited+=200;
+    if(PRED.byDate[date]){
+      if(hydrateFromSnapshot(date)){
+        const btn=document.getElementById('loadBtn');
+        if(btn){btn.disabled=false;btn.textContent='▶ Reload';}
+        renderTab();
+        return;
+      }
+    }
+  }
+  
+  // Nothing in Firebase either — this is a genuine first-load. Run the full fetch.
+  return _performReload();
+}
+
+// Force a fresh full compute, overwriting the saved snapshot. PIN-gated.
+async function forceReload(){
+  if(!SESSION_UNLOCKED){
     promptReloadOverridePin();
     return;
   }
@@ -2324,8 +2347,8 @@ function promptReloadOverridePin(){
   modal.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
   modal.innerHTML=`
     <div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:18px;max-width:340px;width:100%">
-      <div style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:1px;color:var(--gd);margin-bottom:6px">🔒 Reload Override</div>
-      <div style="font-size:.62rem;color:var(--mt2);line-height:1.5;margin-bottom:14px">This day already has predictions saved (and shared via Firebase). Reloading will overwrite them with fresh data. Enter PIN to continue.</div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:1px;color:var(--gd);margin-bottom:6px">🔒 Force Fresh Load</div>
+      <div style="font-size:.62rem;color:var(--mt2);line-height:1.5;margin-bottom:14px">Re-runs the full MLB fetch + compute, overwriting the saved snapshot in Firebase. Enter PIN to continue.</div>
       <input id="reload-pin" type="password" inputmode="numeric" maxlength="6" placeholder="PIN"
         style="width:100%;background:var(--bg2);border:1px solid var(--bdr);color:var(--tx);padding:10px;border-radius:6px;font-size:1rem;text-align:center;letter-spacing:.3em"
         onkeydown="if(event.key==='Enter')tryReloadOverridePin()">
@@ -2339,7 +2362,8 @@ function promptReloadOverridePin(){
   setTimeout(()=>{const el=document.getElementById('reload-pin');if(el)el.focus();},50);
 }
 
-// Actual reload work — only called after PIN check passes (or if this is a first load).
+// Actual heavy reload work — only called when (a) no snapshot exists, or (b) user
+// explicitly chose to override via the PIN-gated forceReload.
 async function _performReload(){
   const btn=document.getElementById('loadBtn');
   btn.disabled=true;btn.textContent='⏳';
@@ -2350,6 +2374,7 @@ async function _performReload(){
   STATE.matchups=[];
   STATE.totals=[];
   STATE.ready=false;
+  STATE.fromSnapshot=false;
   
   const date=document.getElementById('dp').value||todayStr();
   STATE.date=date;
@@ -7886,18 +7911,9 @@ function openHRLineMo(gamePk,opts={}){
 (function init(){
   document.getElementById('dp').value=todayStr();
   predLoad();
-  // Try to hydrate today from local cache for instant render. Firebase pull will
-  // still run in background and may update with newer shared data if available.
-  const today=todayStr();
-  if(PRED.byDate[today]){
-    if(hydrateFromSnapshot(today)){
-      console.log('[DIQ] Hydrated STATE from local cache for',today);
-      const btn=document.getElementById('loadBtn');
-      if(btn)btn.textContent='▶ Reload';
-      // Render now — bootPullWithRetry will re-render after Firebase pull completes
-      setTimeout(()=>{if(typeof renderTab==='function')renderTab();},10);
-    }
-  }
+  // Auto-load today's snapshot (same as tapping ▶ Load). If a snapshot exists locally
+  // it hydrates instantly; otherwise it does the full fetch.
+  setTimeout(()=>loadAll(),20);
   // Keyboard: Escape closes modal
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
