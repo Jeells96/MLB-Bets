@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.37 · Prop Intelligence</title>
+<title>Diamond IQ v6.38 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.37 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.38 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -7931,13 +7931,31 @@ function openHRLineMo(gamePk,opts={}){
     return dates[0]||today;
   }
   
-  // If we already have data locally, set the picker and load immediately.
-  // If not, wait briefly for Firebase to deliver shared data before picking a default.
+  // Diagnostic banner — small status line near top of main area
+  function diag(msg){
+    let el=document.getElementById('boot-diag');
+    if(!el){
+      el=document.createElement('div');
+      el.id='boot-diag';
+      el.style.cssText='position:fixed;top:0;left:0;right:0;background:rgba(20,20,30,.95);color:#aaf;font-family:monospace;font-size:.55rem;padding:4px 8px;z-index:9998;max-height:30vh;overflow:auto;border-bottom:1px solid #336';
+      el.innerHTML='<button style="float:right;background:none;color:#aaf;border:1px solid #336;padding:1px 6px;font-size:.55rem" onclick="document.getElementById(\'boot-diag\').remove()">×</button>';
+      document.body.appendChild(el);
+    }
+    const ts=new Date().toLocaleTimeString();
+    const line=document.createElement('div');
+    line.textContent=`[${ts}] ${msg}`;
+    el.appendChild(line);
+  }
+  window._diag=diag;
+  diag(`Boot start. Local PRED.byDate has ${Object.keys(PRED.byDate).length} dates: [${Object.keys(PRED.byDate).sort().join(', ')}]`);
+  
   if(Object.keys(PRED.byDate).length>0){
-    document.getElementById('dp').value=pickDefaultDate();
+    const def=pickDefaultDate();
+    diag(`Local data present. Defaulting to ${def}`);
+    document.getElementById('dp').value=def;
     setTimeout(()=>loadAll(),20);
   }else{
-    // Fresh device — show a loading state while we wait for Firebase
+    diag('No local data. Waiting for Firebase…');
     setMain(`<div class="empty"><b>Connecting…</b><div class="spin"></div></div>`);
     document.getElementById('dp').value=todayStr();
     (async()=>{
@@ -7946,9 +7964,30 @@ function openHRLineMo(gamePk,opts={}){
         await new Promise(r=>setTimeout(r,200));
         waited+=200;
       }
-      if(FB.ready)await pullSharedHistory();
-      // Now pick default based on whatever Firebase delivered
-      document.getElementById('dp').value=pickDefaultDate();
+      diag(FB.ready?`Firebase ready after ${waited}ms. Pulling history…`:`Firebase NEVER became ready (waited ${waited}ms)`);
+      if(FB.ready){
+        try{
+          const snap=await FB.db.collection('shared_history').orderBy('date','desc').limit(14).get();
+          diag(`Firestore returned ${snap.size} doc(s)`);
+          snap.forEach(doc=>{
+            const d=doc.data();
+            diag(`  ${doc.id}: date=${d.date} predictions=${!!d.predictions} results=${!!d.results}`);
+            if(d.date&&d.predictions&&!PRED.byDate[d.date]){
+              PRED.byDate[d.date]=d.predictions;
+            }
+            if(d.date&&d.results&&!HISTORY.byDate[d.date]){
+              HISTORY.byDate[d.date]=d.results;
+              HISTORY.fetched[d.date]=true;
+            }
+          });
+          predSave();
+        }catch(e){
+          diag(`✗ Firestore query failed: ${e.message}`);
+        }
+      }
+      const def=pickDefaultDate();
+      diag(`After pull: PRED.byDate has [${Object.keys(PRED.byDate).sort().join(', ')}]. Default → ${def}`);
+      document.getElementById('dp').value=def;
       loadAll();
     })();
   }
