@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.42 · Prop Intelligence</title>
+<title>Diamond IQ v6.43 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -424,7 +424,7 @@ details summary:hover{color:var(–tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.42 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.43 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -538,6 +538,7 @@ const UI={
   pbbSort:{c:'sc',d:-1},
   bbatSort:{c:'sc',d:-1},
   totSort:{c:'total',d:-1},
+  gameKSort:{c:'total',d:-1},
   locksExpanded:{batter:false,pitcher:false,game:false},
   locksRateExpanded:{}, // {`${prop}_${preferDK?'dk':'score'}`:bool}
   filt:{hits:'',hr:'',k:''},
@@ -709,8 +710,14 @@ function hydrateFromSnapshot(date){
       hrLineScore:t.hrLineScore,
       hSPhr:t.hSPhr,
       aSPhr:t.aSPhr,
-      park:{hr:t.parkHR||1,r:1},  // defaults keep calculations neutral
-      wx:null                  // explicit null; renderers should check for this
+      park:{hr:t.parkHR||1,r:1},
+      wx:null,
+      // Game K total prediction (added v6.43)
+      gameK:t.gameK,
+      hSPxK:t.hSPxK,
+      aSPxK:t.aSPxK,
+      hSPName:t.hSPName,
+      aSPName:t.aSPName
     });
   });
   
@@ -813,10 +820,16 @@ function predSnapshot(){
       hrEnvMult:t.hrEnvMult,
       isDome:DOMED.has(g.venue)&&!DOME_OPENS.has(g.venue),
       windSpeed:t.wx?.windSpeed,
-      temp:t.wx?.temp
+      temp:t.wx?.temp,
+      // Game K total prediction
+      gameK:t.gameK,
+      hSPxK:t.hSPxK,
+      aSPxK:t.aSPxK,
+      hSPName:t.hSPName,
+      aSPName:t.aSPName
     };
   });
-  PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now(),schemaV:4};
+  PRED.byDate[STATE.date]={batters,pitchers,totals,savedAt:Date.now(),schemaV:5};
   predSave();
   
   // Push to Firebase. For past dates: first-write-wins (so original snapshot is preserved).
@@ -3414,6 +3427,15 @@ function buildRunTotals(){
       if(noScore>=multiScore){hrLinePick='Under';hrLineScore=noScore;}
       else{hrLinePick='Over';hrLineScore=multiScore;}
     }
+    
+    // Game K total: sum of both starters' expected Ks. Look them up from matchups.
+    // Note: this runs AFTER buildAllMatchups, so STATE.matchups is populated.
+    const hSPMatchup=STATE.matchups.find(m=>m.kind==='pitcher'&&m.pitcherId===g.hSP?.id);
+    const aSPMatchup=STATE.matchups.find(m=>m.kind==='pitcher'&&m.pitcherId===g.aSP?.id);
+    const hSPxK=hSPMatchup?.expectedK??null;
+    const aSPxK=aSPMatchup?.expectedK??null;
+    const gameK=(hSPxK!=null&&aSPxK!=null)?Math.round((hSPxK+aSPxK)*10)/10:null;
+    
     STATE.totals.push({
       game:g,homeRuns,awayRuns,total,
       park:pk,wx,
@@ -3423,7 +3445,11 @@ function buildRunTotals(){
       hrLinePick,
       hrLineScore,
       hSPhr:hrExp?.hSPhr,aSPhr:hrExp?.aSPhr,
-      hrEnvMult:hrExp?.envMult
+      hrEnvMult:hrExp?.envMult,
+      // Game K total prediction
+      gameK,hSPxK,aSPxK,
+      hSPName:g.hSP?.name||null,
+      aSPName:g.aSP?.name||null
     });
   });
 }
@@ -3629,7 +3655,7 @@ function sw(tab){
   UI.tab=tab;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   // Map sub-pages back to their parent tab in the visible nav
-  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',bb:'dash',pbb:'dash',tot:'dash',hrLine:'dash',bbat:'dash'};
+  const parentMap={hits:'dash',hr:'dash',tb:'dash',k:'dash',bb:'dash',pbb:'dash',tot:'dash',hrLine:'dash',bbat:'dash',gameK:'dash'};
   const navTab=parentMap[tab]||tab;
   document.getElementById('t-'+navTab)?.classList.add('active');
   renderTab();
@@ -3649,6 +3675,7 @@ function renderTab(){
     case 'bb':renderBatterBB();break;
     case 'pbb':renderPitcherBB();break;
     case 'tot':renderTotals();break;
+    case 'gameK':renderGameK();break;
     case 'gnoHR':case 'gmultiHR':case 'hrLine':renderHRLine();break;
     case 'hrOver':renderHRSide('Over');break;
     case 'hrUnder':renderHRSide('Under');break;
@@ -3742,6 +3769,11 @@ function renderDashboard(){
         <span class="hc-prop-label">Run Totals</span>
         <span class="hc-prop-arr">→</span>
       </button>
+      <button class="hc-prop" onclick="goToProp('gameK')">
+        <span class="hc-prop-icon">⚡</span>
+        <span class="hc-prop-label">Game Strikeouts</span>
+        <span class="hc-prop-arr">→</span>
+      </button>
       <button class="hc-prop" onclick="goToProp('hrOver')">
         <span class="hc-prop-icon">💥</span>
         <span class="hc-prop-label">HR Over 1.5</span>
@@ -3770,6 +3802,7 @@ function goToProp(prop){
   else if(prop==='bb')UI.bbSort={c:'sc',d:-1};
   else if(prop==='pbb')UI.pbbSort={c:'sc',d:-1};
   else if(prop==='tot')UI.totSort={c:'total',d:-1};
+  else if(prop==='gameK')UI.gameKSort={c:'total',d:-1};
   sw(prop);
 }
 
@@ -4536,6 +4569,108 @@ function renderTotals(){
 }
 function sortTot(c){if(UI.totSort.c===c)UI.totSort.d*=-1;else{UI.totSort.c=c;UI.totSort.d=-1;}renderTotals();}
 
+/* ---------- GAME STRIKEOUTS TAB ---------- */
+// Total Ks expected in a game = home SP xK + away SP xK. We grade as correct
+// when actual total Ks is within 1.0 of predicted.
+function renderGameK(){
+  if(maybeRenderDrillView('⚡ Game Strikeouts','gameK'))return;
+  const data=[...STATE.totals].filter(t=>t.gameK!=null);
+  if(!data.length){setMain(`${backBar('⚡ Game Strikeouts','gameK')}<div class="empty">No game K predictions available — need both starters identified</div>`);return;}
+  
+  const sk=UI.gameKSort.c;
+  data.sort((a,b)=>{
+    const av=sk==='total'?a.gameK:sk==='h'?a.hSPxK:a.aSPxK;
+    const bv=sk==='total'?b.gameK:sk==='h'?b.hSPxK:b.aSPxK;
+    return (bv-av)*UI.gameKSort.d;
+  });
+  
+  const avg=data.reduce((s,t)=>s+t.gameK,0)/data.length;
+  const high=data.filter(t=>t.gameK>=15).length;
+  const low=data.filter(t=>t.gameK<=11).length;
+  
+  const cards=data.map(t=>{
+    const g=t.game;
+    return `<div class="card" onclick="openGameKMo('${g.gamePk}')" style="cursor:pointer">
+      <div class="card-h">
+        <div class="card-title"><strong>${g.away.abbr||g.away.name}</strong> @ <strong>${g.home.abbr||g.home.name}</strong></div>
+        <div class="card-score"><span style="color:var(--ac);font-size:1.4rem;font-weight:700">${t.gameK}</span> <span style="color:var(--mt2);font-size:.65rem">total Ks</span></div>
+      </div>
+      <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;font-size:.62rem;color:var(--mt2)">
+        <div style="flex:1;min-width:130px">
+          <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:2px">AWAY SP</div>
+          <div style="color:var(--tx)">${t.aSPName||'TBD'}</div>
+          <div><strong style="color:var(--ac)">${t.aSPxK??'—'}</strong> K</div>
+        </div>
+        <div style="flex:1;min-width:130px">
+          <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:2px">HOME SP</div>
+          <div style="color:var(--tx)">${t.hSPName||'TBD'}</div>
+          <div><strong style="color:var(--ac)">${t.hSPxK??'—'}</strong> K</div>
+        </div>
+        <div style="flex:1;min-width:130px">
+          <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:2px">VENUE</div>
+          <div style="color:var(--tx)">${g.venue||'—'}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  
+  setMain(`
+    ${backBar('⚡ Game Strikeouts','gameK')}
+    <div class="sum">
+      <div class="pill"><span class="pn">${avg.toFixed(1)}</span>Avg Game Ks</div>
+      <div class="pill ht"><span class="pn">${high}</span>≥15 K Games</div>
+      <div class="pill ln"><span class="pn">${low}</span>≤11 K Games</div>
+      <div class="pill"><span class="pn">${data.length}</span>Games</div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <span style="font-size:.6rem;color:var(--mt2)">Sort:</span>
+      <button class="btn ${sk==='total'?'bp':'bg'}" style="font-size:.6rem;padding:4px 9px" onclick="sortGameK('total')">Total${sk==='total'?' '+(UI.gameKSort.d>0?'↑':'↓'):''}</button>
+      <button class="btn ${sk==='h'?'bp':'bg'}" style="font-size:.6rem;padding:4px 9px" onclick="sortGameK('h')">Home SP${sk==='h'?' '+(UI.gameKSort.d>0?'↑':'↓'):''}</button>
+      <button class="btn ${sk==='a'?'bp':'bg'}" style="font-size:.6rem;padding:4px 9px" onclick="sortGameK('a')">Away SP${sk==='a'?' '+(UI.gameKSort.d>0?'↑':'↓'):''}</button>
+    </div>
+    <div class="info" style="font-size:.6rem;margin-bottom:10px">Predicted total Ks in a game = home SP xK + away SP xK (starters only, no bullpen). Bet considered correct if actual game K total is within ±1 of predicted.</div>
+    ${cards}
+  `);
+}
+function sortGameK(c){if(UI.gameKSort.c===c)UI.gameKSort.d*=-1;else{UI.gameKSort.c=c;UI.gameKSort.d=-1;}renderGameK();}
+
+// Simple modal placeholder for game K detail. Just shows the two pitchers' breakdown.
+function openGameKMo(gamePk){
+  const t=STATE.totals.find(t=>t.game.gamePk===gamePk);
+  if(!t)return;
+  const g=t.game;
+  document.getElementById('mo').classList.add('open');
+  document.getElementById('moBody').innerHTML=`
+    <div class="mh">
+      <div class="mh-t">⚡ Game Strikeouts</div>
+      <div class="mh-s">${g.away.abbr||g.away.name} @ ${g.home.abbr||g.home.name}</div>
+    </div>
+    <div style="padding:14px">
+      <div style="text-align:center;margin-bottom:18px">
+        <div style="font-size:2.5rem;color:var(--ac);font-weight:700;line-height:1">${t.gameK}</div>
+        <div style="font-size:.65rem;color:var(--mt2)">Total Ks Expected</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+        <div style="border:1px solid var(--bdr);padding:10px;border-radius:6px">
+          <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:4px">AWAY SP</div>
+          <div style="color:var(--tx);font-size:.75rem;font-weight:600;margin-bottom:2px">${t.aSPName||'TBD'}</div>
+          <div style="font-size:1.5rem;color:var(--ac);font-weight:700">${t.aSPxK??'—'}</div>
+          <div style="font-size:.55rem;color:var(--mt2)">expected Ks</div>
+        </div>
+        <div style="border:1px solid var(--bdr);padding:10px;border-radius:6px">
+          <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:4px">HOME SP</div>
+          <div style="color:var(--tx);font-size:.75rem;font-weight:600;margin-bottom:2px">${t.hSPName||'TBD'}</div>
+          <div style="font-size:1.5rem;color:var(--ac);font-weight:700">${t.hSPxK??'—'}</div>
+          <div style="font-size:.55rem;color:var(--mt2)">expected Ks</div>
+        </div>
+      </div>
+      <div style="font-size:.6rem;color:var(--mt2);line-height:1.5">
+        Total = home SP xK + away SP xK. Only starters counted; bullpen Ks not modeled. We consider this prediction correct if the actual final game K total is within ±1 of our prediction.
+      </div>
+    </div>
+  `;
+}
+
 /* ---------- SEARCH TAB ---------- */
 function renderHRLine(){
   if(maybeRenderDrillView('💥 HR O/U 1.5 (Game)','hrLine'))return;
@@ -4829,17 +4964,21 @@ async function loadResults(date){
       // Capture final score for run-totals fact-check
       const homeRunsFinal=nn(feed.liveData?.linescore?.teams?.home?.runs);
       const awayRunsFinal=nn(feed.liveData?.linescore?.teams?.away?.runs);
-      // Tally total HRs hit in the game
+      // Tally total HRs hit in the game AND total Ks recorded by both teams' pitchers
       let gameHRTotal=0;
+      let gameKTotal=0;
       ['home','away'].forEach(side=>{
         const teamBat=teams[side]?.teamStats?.batting||{};
         gameHRTotal+=nn(teamBat.homeRuns);
+        const teamPit=teams[side]?.teamStats?.pitching||{};
+        gameKTotal+=nn(teamPit.strikeOuts);
       });
       gameTotals[String(g.gamePk)]={
         homeRuns:homeRunsFinal,
         awayRuns:awayRunsFinal,
         total:homeRunsFinal+awayRunsFinal,
-        gameHR:gameHRTotal
+        gameHR:gameHRTotal,
+        gameK:gameKTotal
       };
       ['home','away'].forEach(side=>{
         const players=teams[side]?.players||{};
@@ -4908,7 +5047,8 @@ async function loadResults(date){
         actualTotal:r?.total??null,
         actualHome:r?.homeRuns??null,
         actualAway:r?.awayRuns??null,
-        actualGameHR:r?.gameHR??null
+        actualGameHR:r?.gameHR??null,
+        actualGameK:r?.gameK??null
       };
     });
     
@@ -5631,6 +5771,11 @@ function fcLockStats(prop){
     const matches=played.filter(t=>Math.abs(t.actualTotal-Math.round(t.total))<=0.4).length;
     return {n:played.length,hits:matches,rate:played.length?Math.round(matches/played.length*100):null,total:RESULTS.totals.length,lockAt:null};
   }
+  if(prop==='gameK'){
+    const played=RESULTS.totals.filter(t=>t.played&&t.actualGameK!=null&&t.gameK!=null);
+    const matches=played.filter(t=>Math.abs(t.actualGameK-t.gameK)<=1).length;
+    return {n:played.length,hits:matches,rate:played.length?Math.round(matches/played.length*100):null,total:RESULTS.totals.length,lockAt:null};
+  }
   return {n:0,hits:0,rate:null,total:0,lockAt:null};
 }
 
@@ -6148,7 +6293,8 @@ function renderResults(){
       {prop:'pbb',icon:'🚶',name:'Walks Allowed',lockTxt:'BB Grade ≥ 72',metric:'Lock hit rate'},
       {prop:'bbat',icon:'⚡',name:'Batter Strikeouts',lockTxt:'K Score ≥ 72',metric:'Lock hit rate'},
       {prop:'hrLine',icon:'💥',name:'HR O/U 1.5 (Game)',lockTxt:`Score ≥ ${LOCKS.hrLine}`,metric:'Lock pick rate'},
-      {prop:'tot',icon:'🎲',name:'Run Totals',lockTxt:'No grade — all games',metric:'Match rate (±0.4)'}
+      {prop:'tot',icon:'🎲',name:'Run Totals',lockTxt:'No grade — all games',metric:'Match rate (±0.4)'},
+      {prop:'gameK',icon:'⚡',name:'Game Strikeouts',lockTxt:'All games',metric:'Within ±1 K'}
     ];
     
     const rows=cats.map(c=>{
@@ -6210,6 +6356,7 @@ function renderFactCheckBody(prop){
   if(prop==='pbb')return renderFCPitcherBB();
   if(prop==='gnoHR'||prop==='gmultiHR'||prop==='hrLine')return renderFCHRLine();
   if(prop==='tot')return renderFCTotals();
+  if(prop==='gameK')return renderFCGameK();
   return '';
 }
 
@@ -6731,6 +6878,54 @@ function renderFCTotals(){
     <div class="tbl-wrap"><table>
       <thead><tr>
         <th>xRuns</th><th></th><th>Actual</th><th>${dkAvailable?'vs DK':'Diff'}</th><th>DK Line</th><th>DK Rec</th><th>DK \u2713</th><th class="l">Game</th><th class="l">Venue</th><th>Score</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  `;
+}
+
+// Game K Total FC view: actual game K total vs prediction. Correct if within ±1.
+function renderFCGameK(){
+  const allSorted=[...RESULTS.totals].filter(t=>t.gameK!=null).sort((a,b)=>b.gameK-a.gameK);
+  if(!allSorted.length){
+    return `<div class="empty">No game K predictions for this date</div>`;
+  }
+  
+  const played=allSorted.filter(t=>t.played&&t.actualGameK!=null);
+  const correct=played.filter(t=>Math.abs(t.actualGameK-t.gameK)<=1).length;
+  const rate=played.length?Math.round(correct/played.length*100):0;
+  const meanError=played.length?(played.reduce((s,t)=>s+Math.abs(t.actualGameK-t.gameK),0)/played.length).toFixed(2):'\u2014';
+  
+  const rows=allSorted.map(t=>{
+    let icon='',col='var(--mt)',txt=t.played?`${t.actualGameK} K total`:'Not final',diffStr='';
+    if(t.played&&t.actualGameK!=null){
+      const diff=t.actualGameK-t.gameK;
+      const ok=Math.abs(diff)<=1;
+      icon=ok?'\u2713':'\u2717';
+      col=ok?'var(--gn)':'var(--rd)';
+      diffStr=(diff>=0?'+':'')+diff.toFixed(0);
+    }
+    return `<tr style="cursor:pointer">
+      <td><strong style="color:var(--ac);font-size:1.1rem">${t.gameK}</strong></td>
+      <td style="color:${col};font-weight:700;font-size:1rem">${icon}</td>
+      <td style="color:${col};font-size:.62rem">${txt}</td>
+      <td style="color:${col};font-size:.62rem;font-weight:700">${diffStr}</td>
+      <td class="l"><strong>${t.away} @ ${t.home}</strong></td>
+      <td class="l" style="color:var(--mt2);font-size:.6rem">${t.aSPName||'\u2014'}<br>(${t.aSPxK??'\u2014'} K)</td>
+      <td class="l" style="color:var(--mt2);font-size:.6rem">${t.hSPName||'\u2014'}<br>(${t.hSPxK??'\u2014'} K)</td>
+    </tr>`;
+  }).join('');
+  
+  return `
+    <div class="sum">
+      <div class="pill" style="border-color:var(--ac)"><span class="pn" style="color:var(--ac)">${played.length?rate+'%':'\u2014'}</span>Within \u00b11<br><span style="font-size:.5rem;color:var(--mt);font-weight:400">${correct}/${played.length}</span></div>
+      <div class="pill ln"><span class="pn">${meanError}</span>Avg K error</div>
+      <div class="pill"><span class="pn">${allSorted.length}</span>Games</div>
+    </div>
+    <div class="info" style="font-size:.58rem;margin-bottom:8px">Predicted game total Ks vs actual. \u2713 if actual is within \u00b11 of predicted.</div>
+    <div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Pred Ks</th><th></th><th>Actual</th><th>Diff</th><th class="l">Game</th><th class="l">Away SP</th><th class="l">Home SP</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
