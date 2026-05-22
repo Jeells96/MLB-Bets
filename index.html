@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.44 · Prop Intelligence</title>
+<title>Diamond IQ v6.45 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,13 +419,11 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.44 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.45 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
-      <button class="btn bp" id="loadBtn" onclick="loadAll()">▶ Load</button>
-      <button class="btn bg" id="refreshBtn" onclick="refreshUnverified()" title="Refresh — updates only unverified matchups (no PIN)" style="font-size:.6rem;padding:6px 8px">↻</button>
-      <button class="btn bg" id="forceBtn" onclick="forceReload()" title="Force fresh compute, overrides verified (PIN required)" style="font-size:.6rem;padding:6px 8px">🔄</button>
+      <button class="btn bp" id="loadBtn" onclick="refreshUnverified()" title="Refresh — pulls latest lineups, updates unverified matchups, locks verified ones">↻ Refresh</button>
     </div>
   </div>
   <div id="prog"><div id="progText">Loading…</div><div class="pbar"><div class="pfill" id="pfill"></div></div></div>
@@ -1779,23 +1777,19 @@ async function testFirebaseWrite(){
 async function overrideTodayPredictions(){
   const log=document.getElementById('override-log');
   const wlog=msg=>{if(log)log.innerHTML+=`<div>${msg}</div>`;console.log('[DIQ-OVR]',msg);};
-  if(!STATE.ready||!STATE.date){
-    wlog('✗ No predictions loaded yet — load a slate from Home first');
+  if(!STATE.date){
+    wlog('✗ No date selected — load a slate from Home first');
     return;
   }
-  if(!confirm(`Override today's (${STATE.date}) predictions? This will:\n\n• Recompute all matchups with current lineups & stats\n• Overwrite the Firebase snapshot for everyone\n• Cannot be undone\n\nContinue?`))return;
+  if(!confirm(`Override ${STATE.date} predictions? This will:\n\n• Re-fetch fresh lineups & stats from MLB\n• Recompute ALL matchups (including verified/locked ones)\n• Overwrite the Firebase snapshot for everyone\n• Cannot be undone\n\nContinue?`))return;
   
-  wlog(`Overriding ${STATE.date}…`);
+  wlog(`Overriding ${STATE.date} with a full fresh fetch…`);
   PRED.overrides=PRED.overrides||{};
   PRED.overrides[STATE.date]=true;
-  
-  // Recompute matchups with current data
-  buildAllMatchups();
-  buildRunTotals();
-  predSnapshot(); // this will push with forceOverridePred=true
-  
-  wlog(`✓ Done. New ratings live for everyone.`);
-  setTimeout(()=>renderTab(),200);
+  // Full fresh fetch + recompute, overriding verified locks (preserveVerified=false).
+  // SESSION is already unlocked since we're inside PIN-gated Settings.
+  await _performReload(false);
+  wlog(`✓ Done. Fresh ratings live for everyone.`);
 }
 
 // Auto-refresh the status panel when settings opens
@@ -2349,7 +2343,7 @@ async function loadAll(){
   if(PRED.byDate[date]){
     if(hydrateFromSnapshot(date)){
       const btn=document.getElementById('loadBtn');
-      if(btn){btn.disabled=false;btn.textContent='▶ Reload';}
+      if(btn){btn.disabled=false;btn.textContent='↻ Refresh';}
       renderTab();
       return;
     }
@@ -2374,7 +2368,7 @@ async function loadAll(){
     if(PRED.byDate[date]){
       if(hydrateFromSnapshot(date)){
         const btn=document.getElementById('loadBtn');
-        if(btn){btn.disabled=false;btn.textContent='▶ Reload';}
+        if(btn){btn.disabled=false;btn.textContent='↻ Refresh';}
         renderTab();
         return;
       }
@@ -2467,7 +2461,7 @@ async function _performReload(preserveVerified){
     const sched=await fetchSchedule(date);
     if(!sched.length){
       setMain(`<div class="empty"><b>No games</b>No MLB games scheduled for ${date}.</div>`);
-      btn.disabled=false;btn.textContent='▶ Load';
+      btn.disabled=false;btn.textContent='↻ Refresh';
       progress(10,10);
       return;
     }
@@ -2628,7 +2622,7 @@ async function _performReload(preserveVerified){
     progress(1,1);
   }
   
-  btn.disabled=false;btn.textContent='▶ Reload';
+  btn.disabled=false;btn.textContent='↻ Refresh';
 }
 
 async function refreshAll(){await loadAll();} // legacy — kept as alias in case anything still calls it
