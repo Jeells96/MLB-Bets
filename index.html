@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.45 · Prop Intelligence</title>
+<title>Diamond IQ v6.49 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.45 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.49 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -586,6 +586,78 @@ async function pullSharedLocks(){
     }
   }catch(e){console.warn('[DIQ] pullSharedLocks failed',e.message);}
 }
+// ── LAUNCH MESSAGE (Firebase-synced league-wide notice shown on every app open) ──
+const LAUNCH_MSG_DEFAULT="⚠️ Heads up: matchups marked \u26a0 unverified have a lower chance of hitting — their lineups or starters aren't confirmed yet, so they don't count toward our success rates. Keep tapping ↻ Refresh; matchups lock in automatically as lineups get posted (usually 1–2 hours before first pitch). Bet the verified ones.";
+let LAUNCH_MSG=LAUNCH_MSG_DEFAULT;
+
+async function pullLaunchMessage(){
+  if(!FB.ready)return;
+  try{
+    const doc=await FB.db.collection('app_settings').doc('launch_message').get();
+    if(doc.exists){
+      const d=doc.data()||{};
+      if(typeof d.text==='string')LAUNCH_MSG=d.text;
+    }
+  }catch(e){console.warn('[DIQ] pullLaunchMessage failed',e.message);}
+}
+
+// Auto-pull toggles are league-wide (commissioner sets them, everyone obeys).
+async function pullAutopullSettings(){
+  if(!FB.ready)return;
+  try{
+    const doc=await FB.db.collection('app_settings').doc('autopull').get();
+    if(doc.exists){
+      const d=doc.data()||{};
+      if(typeof d.gameOdds==='boolean')AUTOPULL.gameOdds=d.gameOdds;
+      if(typeof d.playerProps==='boolean')AUTOPULL.playerProps=d.playerProps;
+      autopullSave();
+    }
+  }catch(e){console.warn('[DIQ] pullAutopullSettings failed',e.message);}
+}
+async function pushAutopullSettings(){
+  if(!FB.ready)return;
+  try{
+    await FB.db.collection('app_settings').doc('autopull').set({
+      gameOdds:AUTOPULL.gameOdds,playerProps:AUTOPULL.playerProps,updatedAt:Date.now()
+    });
+    console.log('[DIQ] Pushed auto-pull settings to Firebase');
+  }catch(e){console.warn('[DIQ] pushAutopullSettings failed',e.message);}
+}
+
+async function pushLaunchMessage(text){
+  if(!FB.ready)return;
+  try{
+    await FB.db.collection('app_settings').doc('launch_message').set({text,updatedAt:Date.now()});
+    console.log('[DIQ] Pushed launch message to Firebase');
+  }catch(e){console.warn('[DIQ] pushLaunchMessage failed',e.message);}
+}
+
+// Show the launch notice modal. Called once per app open after data is ready.
+function showLaunchMessage(){
+  if(!LAUNCH_MSG||!LAUNCH_MSG.trim())return; // empty message = disabled
+  const existing=document.getElementById('launch-msg-modal');
+  if(existing)existing.remove();
+  const modal=document.createElement('div');
+  modal.id='launch-msg-modal';
+  modal.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px';
+  // Auto-pull status — reflects the Firebase-synced league-wide toggles
+  const onTag='<span style="color:var(--gn)">ON</span>';
+  const offTag='<span style="color:var(--mt)">OFF</span>';
+  const autopullLine=`
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--bdr);font-size:.62rem;color:var(--mt2);line-height:1.6">
+      <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:4px">AUTO-PULL DK (AFTER 9 AM PT)</div>
+      <div>Game lines: ${AUTOPULL.gameOdds?onTag:offTag} · Player props: ${AUTOPULL.playerProps?onTag:offTag}</div>
+    </div>`;
+  modal.innerHTML=`
+    <div style="background:var(--s1);border:1px solid var(--gd);border-radius:12px;padding:22px;max-width:380px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.5)">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.15rem;letter-spacing:1px;color:var(--gd);margin-bottom:10px">📋 League Notice</div>
+      <div style="font-size:.74rem;color:var(--tx);line-height:1.55;white-space:pre-wrap">${LAUNCH_MSG.replace(/</g,'&lt;')}</div>
+      ${autopullLine}
+      <button class="btn bp" style="width:100%;margin-top:16px;font-size:.8rem;padding:11px" onclick="document.getElementById('launch-msg-modal').remove()">Got it</button>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
 // Push current LOCKS to Firebase so all users see the change. Throttled to avoid spam.
 let pushLocksTimer=null;
 function pushSharedLocks(){
@@ -883,6 +955,90 @@ const ODDS_KEY='diq_odds_v1';
 const ODDS_CACHE_MS=30*60*1000; // 30 min — refresh allowed before this only via "force"
 const ODDS_API_KEY='370bfb0e8958dcfc4e4880fedfb548b1';
 
+// ── AUTO-PULL SETTINGS ──
+// When enabled, the first person to load/refresh after 9 AM PT on game day triggers a
+// one-time DK pull (shared via Firebase so nobody else burns API calls). Two independent
+// toggles: game lines (cheap, 1 call) and player props (expensive, ~15-28 calls).
+const AUTOPULL={
+  gameOdds:false,   // auto-pull game lines after 9 AM PT
+  playerProps:false // auto-pull player props after 9 AM PT
+};
+const AUTOPULL_KEY='diq_autopull_v1';
+function autopullLoad(){
+  try{
+    const raw=localStorage.getItem(AUTOPULL_KEY);
+    if(raw){const d=JSON.parse(raw);AUTOPULL.gameOdds=!!d.gameOdds;AUTOPULL.playerProps=!!d.playerProps;}
+  }catch(e){}
+}
+function autopullSave(){
+  try{localStorage.setItem(AUTOPULL_KEY,JSON.stringify(AUTOPULL));}catch(e){}
+}
+autopullLoad();
+
+// Is it currently past 9 AM Pacific on the given date (the game day)?
+function isPast9amPT(dateStr){
+  // Get current time in America/Los_Angeles
+  const now=new Date();
+  const ptStr=now.toLocaleString('en-US',{timeZone:'America/Los_Angeles'});
+  const pt=new Date(ptStr);
+  // Build the date string in PT
+  const y=pt.getFullYear();
+  const m=String(pt.getMonth()+1).padStart(2,'0');
+  const d=String(pt.getDate()).padStart(2,'0');
+  const ptDate=`${y}-${m}-${d}`;
+  // Only auto-pull for *today's* games, and only once it's >= 9 AM PT
+  if(ptDate!==dateStr)return false;
+  return pt.getHours()>=9;
+}
+
+// Run the auto-pull check. Called after a load/refresh completes. Pulls only what's
+// enabled, only if Firebase doesn't already have it (so it happens once per day globally),
+// and only past 9 AM PT on the game day.
+async function maybeAutoPull(date){
+  if(!FB.ready)return;
+  if(!isPast9amPT(date))return;
+  if(!AUTOPULL.gameOdds&&!AUTOPULL.playerProps)return;
+  
+  // Game lines: pull only if Firebase has none for today yet
+  if(AUTOPULL.gameOdds){
+    const haveGames=ODDS.data[date]?.games?.length>0;
+    if(!haveGames){
+      // Double-check Firebase directly (another user may have pulled seconds ago)
+      try{
+        const doc=await FB.db.collection('app_settings').doc(`odds_${date}`).get();
+        if(!doc.exists){
+          console.log('[DIQ] Auto-pulling game odds (first loader past 9 AM PT)');
+          // Temporarily allow the fetch (auto-pull bypasses the manual PIN gate by design)
+          const wasUnlocked=ODDS.unlocked;ODDS.unlocked=true;
+          await fetchOdds(date,false);
+          ODDS.unlocked=wasUnlocked;
+        }else{
+          await pullSharedOdds(date);
+        }
+      }catch(e){console.warn('[DIQ] auto game-odds pull failed',e.message);}
+    }
+  }
+  
+  // Player props: pull only if Firebase has none for today yet
+  if(AUTOPULL.playerProps){
+    const haveProps=ODDS.props[date]?.events&&Object.keys(ODDS.props[date].events).length>0;
+    if(!haveProps){
+      try{
+        const doc=await FB.db.collection('app_settings').doc(`props_${date}`).get();
+        if(!doc.exists){
+          console.log('[DIQ] Auto-pulling player props (first loader past 9 AM PT)');
+          const wasUnlocked=ODDS.unlocked;ODDS.unlocked=true;
+          await fetchPlayerProps(date,false);
+          ODDS.unlocked=wasUnlocked;
+        }else{
+          await pullSharedProps(date);
+        }
+      }catch(e){console.warn('[DIQ] auto props pull failed',e.message);}
+    }
+  }
+  if(typeof renderTab==='function')renderTab();
+}
+
 // Soft PIN gate. The literal PIN appears in source (this is HTML so view-source defeats
 // any client-side hiding) — the hash is just to prevent it from showing up in plain
 // text search. Real PIN: 2325. Use sessionStorage so unlock persists for the session.
@@ -952,9 +1108,27 @@ async function fetchOdds(date,force=false){
     const remaining=res.headers.get('x-requests-remaining');
     if(remaining!=null)ODDS.callsRemaining=parseInt(remaining,10);
     const games=await res.json();
-    ODDS.data[date]={games,fetchedAt:Date.now()};
+    // Exclude games that have already started — live lines differ from the opener and
+    // would corrupt our edge calculation. Keep only games whose commence_time is still
+    // in the future. Also: never overwrite a line we already have saved (first good
+    // pre-game line wins), so a later refresh can't replace an opener with a live line.
+    const now=Date.now();
+    const existing=ODDS.data[date]?.games||[];
+    const existingByKey={};
+    existing.forEach(g=>{existingByKey[`${g.home_team}|${g.away_team}`]=g;});
+    const merged=[...existing];
+    let added=0,skippedLive=0,skippedDupe=0;
+    games.forEach(g=>{
+      const key=`${g.home_team}|${g.away_team}`;
+      if(existingByKey[key]){skippedDupe++;return;}      // already have a saved opener
+      if(g.commence_time&&new Date(g.commence_time).getTime()<=now){skippedLive++;return;} // already started
+      merged.push(g);
+      existingByKey[key]=g;
+      added++;
+    });
+    ODDS.data[date]={games:merged,fetchedAt:Date.now()};
     oddsSaveCache();
-    console.log(`[DIQ] Fetched ${games.length} odds (${ODDS.callsRemaining} calls left)`);
+    console.log(`[DIQ] Odds: +${added} new, ${skippedLive} live-skipped, ${skippedDupe} already-saved (${ODDS.callsRemaining} calls left)`);
     // Share with everyone via Firebase so non-PIN users get the same data
     pushSharedOdds(date);
     return ODDS.data[date];
@@ -1028,15 +1202,32 @@ async function fetchPlayerProps(date,force=false){
     return null;
   }
   
+  // Exclude events that have already started (live prop lines differ from openers),
+  // and skip events we already have saved props for (first good pre-game line wins).
+  const nowMs=Date.now();
+  const existingEvents=ODDS.props[date]?.events||{};
+  const dateEventsFiltered=dateEvents.filter(ev=>{
+    if(ev.commence_time&&new Date(ev.commence_time).getTime()<=nowMs)return false; // started
+    const alreadySaved=Object.values(existingEvents).some(e=>e.home_team===ev.home_team&&e.away_team===ev.away_team&&(e.markets?.length||0)>0);
+    if(alreadySaved)return false;
+    return true;
+  });
+  
+  if(!dateEventsFiltered.length){
+    ODDS.loadingProps=false;
+    console.log('[DIQ] Props: nothing new to pull (all started or already saved)');
+    return ODDS.props[date]||{events:existingEvents,fetchedAt:Date.now()};
+  }
+  
   ODDS.loadingProps=true;
   ODDS.lastError=null;
-  const results={};
+  const results={...existingEvents};
   let succeeded=0,failed=0;
   
   try{
     const marketsParam=PLAYER_PROP_MARKETS.join(',');
     // Sequential fetches to avoid overwhelming the API and to track call count accurately
-    for(const ev of dateEvents){
+    for(const ev of dateEventsFiltered){
       try{
         const url=`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${ev.id}/odds?apiKey=${ODDS_API_KEY}&regions=us&bookmakers=draftkings&markets=${marketsParam}&oddsFormat=american`;
         const res=await fetch(url);
@@ -1430,10 +1621,19 @@ async function bootPullWithRetry(){
   }
   await pullSharedHistory();
   await pullSharedLocks();
+  await pullLaunchMessage();
+  await pullAutopullSettings();
   await pullSharedOdds(todayStr());
   await pullSharedProps(todayStr());
+  // Auto-pull DK if enabled, past 9 AM PT, and not already in Firebase (once/day globally)
+  await maybeAutoPull(todayStr());
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
+  // Show the league launch notice once per app open (after Firebase delivers the latest text)
+  if(!window._launchMsgShown){
+    window._launchMsgShown=true;
+    setTimeout(()=>showLaunchMessage(),600);
+  }
 }
 bootPullWithRetry();
 
@@ -1585,7 +1785,8 @@ function renderOddsPanel(){
     const gameCount=entry.games?.length||0;
     const ageStr=cacheAgeMin<60?`${cacheAgeMin}m`:`${Math.round(cacheAgeMin/60)}h`;
     const ageColor=cacheAgeMin<60?'var(--gn)':cacheAgeMin<240?'var(--gd)':'var(--rd)';
-    oddsStatusLine=`<div style="margin-bottom:4px">✓ <b>Game odds:</b> ${gameCount} games · <span style="color:${ageColor}">${ageStr} ago</span>${fresh?' (fresh)':''}</div>`;
+    const pulledAt=entry.fetchedAt?new Date(entry.fetchedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'?';
+    oddsStatusLine=`<div style="margin-bottom:4px">✓ <b>Game odds:</b> ${gameCount} games · pulled <span style="color:var(--ac)">${pulledAt}</span> · <span style="color:${ageColor}">${ageStr} ago</span>${fresh?' (fresh)':''}</div>`;
   }else{
     oddsStatusLine='<div style="margin-bottom:4px;color:var(--mt)">⚠ <b>Game odds:</b> not loaded</div>';
   }
@@ -1596,7 +1797,8 @@ function renderOddsPanel(){
     const eventCount=Object.keys(propsEntry.events||{}).length;
     const ageStr=propsAgeMin<60?`${propsAgeMin}m`:`${Math.round(propsAgeMin/60)}h`;
     const ageColor=propsAgeMin<60?'var(--gn)':propsAgeMin<240?'var(--gd)':'var(--rd)';
-    propsStatusLine=`<div style="margin-bottom:6px">✓ <b>Player props:</b> ${eventCount} games · <span style="color:${ageColor}">${ageStr} ago</span>${propsFresh?' (fresh)':''}</div>`;
+    const pulledAt=propsEntry.fetchedAt?new Date(propsEntry.fetchedAt).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'?';
+    propsStatusLine=`<div style="margin-bottom:6px">✓ <b>Player props:</b> ${eventCount} games · pulled <span style="color:var(--ac)">${pulledAt}</span> · <span style="color:${ageColor}">${ageStr} ago</span>${propsFresh?' (fresh)':''}</div>`;
   }else{
     propsStatusLine='<div style="margin-bottom:6px;color:var(--mt)">⚠ <b>Player props:</b> not loaded</div>';
   }
@@ -1772,6 +1974,23 @@ async function testFirebaseWrite(){
   }
   log(out);
   setTimeout(()=>{if(panel)panel.innerHTML=renderOddsPanel();},10000);
+}
+
+function saveLaunchMessage(){
+  const input=document.getElementById('launch-msg-input');
+  const status=document.getElementById('launch-msg-status');
+  if(!input)return;
+  LAUNCH_MSG=input.value;
+  pushLaunchMessage(LAUNCH_MSG);
+  if(status){status.style.color='var(--gn)';status.textContent='✓ Saved & synced to all league members';}
+}
+function resetLaunchMessage(){
+  const input=document.getElementById('launch-msg-input');
+  const status=document.getElementById('launch-msg-status');
+  LAUNCH_MSG=LAUNCH_MSG_DEFAULT;
+  if(input)input.value=LAUNCH_MSG_DEFAULT;
+  pushLaunchMessage(LAUNCH_MSG);
+  if(status){status.style.color='var(--gd)';status.textContent='↺ Reset to default & synced';}
 }
 
 async function overrideTodayPredictions(){
@@ -2380,7 +2599,10 @@ async function loadAll(){
   setMain(`<div class="empty">
     <b>No saved data for ${date}</b>
     No one in your league has loaded this date yet. Run a fresh fetch?
-    <div style="margin-top:12px"><button class="btn bp" onclick="_performReload(true)">▶ Fetch Fresh Data</button></div>
+    <div style="font-size:.62rem;color:var(--mt2);line-height:1.5;max-width:340px;margin:10px auto 0">
+      Heads up: early in the day, MLB lineups aren't posted yet, so most matchups will show as <span style="color:var(--gd)">⚠ unverified</span> and won't count toward your stats. Just tap <strong>↻ Refresh</strong> again every so often — matchups lock in automatically as lineups get confirmed (usually 1–2 hours before first pitch).
+    </div>
+    <div style="margin-top:14px"><button class="btn bp" onclick="_performReload(true)">▶ Fetch Fresh Data</button></div>
   </div>`);
 }
 
@@ -2615,6 +2837,8 @@ async function _performReload(preserveVerified){
     setTimeout(()=>progress(1,1),500);
     
     renderTab();
+    // After a manual load/refresh, run the auto-pull check too
+    maybeAutoPull(STATE.date);
     
   }catch(err){
     console.error(err);
@@ -7104,8 +7328,31 @@ function renderSettings(){
         <div class="sw-row"><span class="sw-lbl">🎯 Run Total (game)</span><input class="sw-n" type="number" step="0.1" value="${DK_LOCKS.tot}" oninput="DK_LOCKS.tot=+this.value||0;pushSharedLocks();renderTab()"></div>
       </div>
       <div class="sw-grp">
+        <div class="sw-gt">⏰ Auto-Pull DK (after 9 AM PT)</div>
+        <div style="font-size:.6rem;color:var(--mt2);line-height:1.5;margin-bottom:10px">When on, the first league member to open or refresh after 9 AM PT triggers a one-time DK pull, shared via Firebase so nobody else burns API calls. Game lines cost 1 call/day. Player props cost ~15–28 calls/day — enabling props daily uses most of the monthly budget.</div>
+        <label class="sw-row" style="cursor:pointer">
+          <span class="sw-lbl">Auto-pull game lines <span style="color:var(--gn)">(cheap)</span></span>
+          <input type="checkbox" ${AUTOPULL.gameOdds?'checked':''} onchange="AUTOPULL.gameOdds=this.checked;autopullSave();pushAutopullSettings();">
+        </label>
+        <label class="sw-row" style="cursor:pointer">
+          <span class="sw-lbl">Auto-pull player props <span style="color:var(--gd)">(expensive)</span></span>
+          <input type="checkbox" ${AUTOPULL.playerProps?'checked':''} onchange="AUTOPULL.playerProps=this.checked;autopullSave();pushAutopullSettings();">
+        </label>
+      </div>
+      <div class="sw-grp">
         <div class="sw-gt">📊 DraftKings Odds</div>
         <div id="odds-panel" style="font-size:.6rem;color:var(--mt2);line-height:1.5">${renderOddsPanel()}</div>
+      </div>
+      <div class="sw-grp">
+        <div class="sw-gt">📋 League Launch Notice</div>
+        <div style="font-size:.6rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Message shown to everyone each time they open the app. Synced to all league members via Firebase. Leave blank to disable the popup entirely.</div>
+        <textarea id="launch-msg-input" style="width:100%;min-height:120px;background:var(--bg2);border:1px solid var(--bdr);color:var(--tx);padding:10px;border-radius:6px;font-size:.7rem;line-height:1.5;font-family:inherit;resize:vertical">${(LAUNCH_MSG||'').replace(/</g,'&lt;')}</textarea>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <button class="btn bp" style="font-size:.65rem" onclick="saveLaunchMessage()">💾 Save & Sync</button>
+          <button class="btn bg" style="font-size:.65rem" onclick="resetLaunchMessage()">↺ Reset to Default</button>
+          <button class="btn bg" style="font-size:.65rem" onclick="showLaunchMessage()">👁 Preview</button>
+        </div>
+        <div id="launch-msg-status" style="margin-top:6px;font-size:.55rem;color:var(--gn);min-height:12px"></div>
       </div>
       <div class="sw-grp">
         <div class="sw-gt">🔄 Override Predictions (today)</div>
