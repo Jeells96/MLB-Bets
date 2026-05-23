@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.49 · Prop Intelligence</title>
+<title>Diamond IQ v6.50 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.49 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.50 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -1617,25 +1617,43 @@ async function bootPullWithRetry(){
   }
   if(!FB.ready){
     console.warn('[DIQ] Firebase never became ready after 8s — running offline');
+    // Still show the launch notice even offline (uses default/local message)
+    triggerLaunchNotice();
     return;
   }
-  await pullSharedHistory();
-  await pullSharedLocks();
+  // Pull the launch message + toggle state FIRST and show the popup right away,
+  // so it isn't gated behind the slower history/odds pulls.
   await pullLaunchMessage();
   await pullAutopullSettings();
+  triggerLaunchNotice();
+  
+  // Now the slower pulls (don't block the popup on these)
+  await pullSharedHistory();
+  await pullSharedLocks();
   await pullSharedOdds(todayStr());
   await pullSharedProps(todayStr());
   // Auto-pull DK if enabled, past 9 AM PT, and not already in Firebase (once/day globally)
   await maybeAutoPull(todayStr());
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
-  // Show the league launch notice once per app open (after Firebase delivers the latest text)
-  if(!window._launchMsgShown){
-    window._launchMsgShown=true;
-    setTimeout(()=>showLaunchMessage(),600);
-  }
 }
 bootPullWithRetry();
+
+// Show the launch notice once per actual page-view. Uses a flag that resets on iOS
+// page-restore (pageshow with persisted=true) so closing & reopening re-shows it.
+function triggerLaunchNotice(){
+  if(window._launchMsgShown)return;
+  window._launchMsgShown=true;
+  setTimeout(()=>showLaunchMessage(),300);
+}
+// iOS Safari often restores a frozen page instead of reloading. Detect that and
+// re-show the notice so "close and reopen" works as expected.
+window.addEventListener('pageshow',e=>{
+  if(e.persisted){
+    window._launchMsgShown=false;
+    triggerLaunchNotice();
+  }
+});
 
 // ─── AUTO-PUSH ANY PENDING DATES ───
 // Walks through saved predictions + cached results and pushes any past date
@@ -1676,7 +1694,7 @@ setInterval(autoPushPendingDates,30000);
 // to a tab that uses history. Cheap (single Firestore query) and ensures other
 // users' recent pushes show up without requiring an app reload.
 let lastAutoPull=0;
-async function maybeAutoPull(){
+async function autoPullHistoryThrottled(){
   if(!FB.ready)return;
   // Throttle to once every 60 seconds
   if(Date.now()-lastAutoPull<60000)return;
@@ -5420,7 +5438,7 @@ async function fetchHistoryForDate(date){
 // Triggers UI re-render after completion.
 function loadHistoryInBackground(propToRefresh){
   // Trigger a Firebase pull (throttled to once per minute) so other users' data shows up
-  maybeAutoPull();
+  autoPullHistoryThrottled();
   // Also pull DK odds/props for the 14D window so historical DK stats can compute.
   // This is independent of HISTORY fetched state — DK data may have been pushed
   // after we cached the boxscore results.
