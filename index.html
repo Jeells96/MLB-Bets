@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.51 · Prop Intelligence</title>
+<title>Diamond IQ v6.52 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.51 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.52 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -1001,6 +1001,28 @@ function logBatterGrade(date,m){
   const grade=Math.round(m.hitScore*10)/10;
   const last=arr[arr.length-1];
   if(last&&last.grade===grade)return; // duplicate grade — skip
+  
+  // Capture the stats that DICTATE the hit grade — the component breakdown from
+  // batterHitGrade(). Compact form: {label, raw value, scaled 0-100} per component.
+  // This lets you see exactly which inputs changed between two grades.
+  let stats=null;
+  const comps=m.hitGrade?.components;
+  if(Array.isArray(comps)){
+    stats=comps.map(c=>({
+      l:c.label,
+      v:c.raw==null?null:Math.round(c.raw*1000)/1000,
+      s:c.scaled==null?null:Math.round(c.scaled),
+      w:c.weight,
+      f:c.fmt
+    }));
+  }
+  // Also the pitcher suppression input + the raw grade-before-matchup-combine
+  const extra={
+    pitSup:m.pitHitSup==null?null:Math.round(m.pitHitSup*10)/10,
+    rawGrade:m.hitGrade?.grade==null?null:Math.round(m.hitGrade.grade*10)/10,
+    sampleW:m.hitGrade?.sampleW??null
+  };
+  
   arr.push({
     ts:Date.now(),
     grade,
@@ -1012,7 +1034,9 @@ function logBatterGrade(date,m){
     bats:m.bats||'?',
     team:m.team?.abbr||m.team?.name||'',
     opp:m.opp?.abbr||m.opp?.name||'',
-    name:m.batterName
+    name:m.batterName,
+    stats,
+    extra
   });
 }
 
@@ -8044,12 +8068,18 @@ function renderExplainK(m){
 function renderBatterCard(batterId,pitcherId,propType){
   const bid=String(batterId),pid=String(pitcherId);
   const p=STATE.players[bid]||STATE.players[batterId];
-  if(!p)return '<div class="empty">Batter not found</div>';
   
   // Find relevant matchup (string-safe ID compare)
   const m=STATE.matchups.find(mm=>mm.kind==='batter'&&String(mm.batterId)===bid&&String(mm.pitcherId)===pid)
         ||STATE.matchups.find(mm=>mm.kind==='batter'&&String(mm.batterId)===bid);
   if(!m)return '<div class="empty">No matchup for this batter</div>';
+  
+  // SNAPSHOT MODE: when running from a saved/shared snapshot, STATE.players is empty
+  // (we only rebuilt matchups, not full stats). Render a compact card from matchup +
+  // grade-log stats instead of the full live breakdown.
+  if(!p){
+    return renderBatterCardSnapshot(m,propType);
+  }
   
   const pit=STATE.pitchers[m.pitcherId];
   const L=STATE.leagueAvg;
@@ -8250,34 +8280,56 @@ function openBatterMo(batterId,pitcherId,propType){
   document.body.style.overflow='hidden';
 }
 
-// Render the day's hit-grade change history for a batter (most recent first).
+// Compact card shown in snapshot mode (no live STATE.players). Shows the predictions
+// plus the full grade history with the stats behind each grade.
+function renderBatterCardSnapshot(m,propType){
+  return `<div class="pcard">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
+      <div>
+        <div class="pcn">${m.batterName}</div>
+        <div class="pcm">${m.bats==='L'?'LHB':m.bats==='S'?'SHB':'RHB'} · #${m.order||'?'} · ${m.team.abbr||m.team.name} · vs <span style="color:${hc(m.pHand)}">${m.pHand}HP</span> ${m.pitcherName}</div>
+      </div>
+      ${bdg(getRat(Math.max(m.hitScore||0,m.hrScore||0,m.tbScore||0)))}
+    </div>
+    <div class="pred-g">
+      ${pb('🎯 Hit',m.hitScore,getRat(m.hitScore,LOCKS.hits))}
+      ${pb('💥 HR',m.hrScore,getRat(m.hrScore,LOCKS.hr))}
+      ${pb('🏟️ Total Bases',m.tbScore,getRat(m.tbScore,LOCKS.tb))}
+      ${pb('🚶 Walks',m.bbScore,getRat(m.bbScore,LOCKS.bb))}
+    </div>
+    <div style="font-size:.58rem;color:var(--mt2);margin:8px 0 4px">${m.verified===false?'⚠ Unverified matchup — not counted in stats':'✓ Verified matchup'}</div>
+    <div style="font-size:.55rem;color:var(--mt);margin-bottom:10px">Full season/split stats load after a fresh ↻ Refresh. The grade history below shows the stats that produced each grade today.</div>
+  </div>`;
+}
+
+// Render the day's hit-grade change history for a batter, with the component stats
+// behind each grade so you can see what changed.
 function renderGradeHistory(batterId){
   const date=STATE.date;
   const pid=String(batterId);
   const arr=(GRADELOG.byDate[date]||{})[pid]||[];
-  if(arr.length<=1){
-    // Nothing meaningful to show (0 or 1 grade = never changed today)
-    if(arr.length===1){
-      const e=arr[0];
-      const t=new Date(e.ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
-      return `<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:8px;padding:10px;margin-bottom:10px;font-size:.6rem;color:var(--mt2)">
-        <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:4px">GRADE HISTORY (TODAY)</div>
-        <div>Graded once at ${t}: <strong style="color:var(--ac)">${e.grade}</strong> ${e.verified?'<span style="color:var(--gn)">✓ verified</span>':'<span style="color:var(--gd)">⚠ unverified</span>'} · order #${e.order??'?'} · vs ${e.pHand}HP ${e.pitcher}</div>
-      </div>`;
-    }
-    return '';
-  }
-  const rows=[...arr].reverse().map((e,i,rev)=>{
+  if(!arr.length)return '';
+  
+  // Helper to format a component value by its fmt code
+  const fmtVal=(v,f)=>{
+    if(v==null)return '—';
+    if(f==='%')return (v*100).toFixed(1)+'%';
+    if(f==='1%')return v.toFixed(1)+'%';
+    if(f==='3')return v.toFixed(3).replace(/^0/,'');
+    return String(v);
+  };
+  
+  const entries=[...arr].reverse();
+  const rows=entries.map((e,i)=>{
     const t=new Date(e.ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
-    // Compare to the PREVIOUS chronological entry (the next one in this reversed list)
-    const prev=rev[i+1];
+    const prev=entries[i+1]; // previous chronological entry
     let delta='';
     if(prev){
       const d=Math.round((e.grade-prev.grade)*10)/10;
       const col=d>0?'var(--gn)':d<0?'var(--rd)':'var(--mt)';
       delta=` <span style="color:${col};font-weight:700">${d>0?'+':''}${d}</span>`;
     }
-    // Flag what changed vs previous entry
+    // What context changed
     let changes=[];
     if(prev){
       if(prev.verified!==e.verified)changes.push(e.verified?'became verified':'lost verification');
@@ -8285,20 +8337,46 @@ function renderGradeHistory(batterId){
       if(prev.pitcher!==e.pitcher)changes.push(`pitcher ${prev.pitcher}→${e.pitcher}`);
       if(prev.pHand!==e.pHand)changes.push(`hand ${prev.pHand}→${e.pHand}`);
     }
-    const changeStr=changes.length?`<div style="color:var(--gd);font-size:.55rem;margin-top:2px">↳ ${changes.join(' · ')}</div>`:'';
-    return `<div style="padding:6px 0;border-bottom:1px solid var(--bdr)">
+    const changeStr=changes.length?`<div style="color:var(--gd);font-size:.55rem;margin-top:3px">↳ ${changes.join(' · ')}</div>`:'';
+    
+    // Per-component stat table; highlight values that changed vs previous entry
+    let statRows='';
+    if(Array.isArray(e.stats)){
+      statRows=e.stats.map(c=>{
+        const prevC=prev&&Array.isArray(prev.stats)?prev.stats.find(x=>x.l===c.l):null;
+        const changed=prevC&&prevC.v!==c.v;
+        const valCol=changed?'var(--gd)':'var(--tx)';
+        const arrow=changed?` <span style="color:var(--gd)">(was ${fmtVal(prevC.v,c.f)})</span>`:'';
+        return `<div style="display:flex;justify-content:space-between;gap:8px;padding:1px 0">
+          <span style="color:var(--mt2)">${c.l}</span>
+          <span style="color:${valCol};font-weight:${changed?'700':'400'}">${fmtVal(c.v,c.f)}${arrow}</span>
+        </div>`;
+      }).join('');
+      if(e.extra){
+        statRows+=`<div style="display:flex;justify-content:space-between;gap:8px;padding:1px 0;border-top:1px solid var(--bdr);margin-top:2px">
+          <span style="color:var(--mt2)">pitcher hit-suppression</span>
+          <span style="color:var(--tx)">${e.extra.pitSup??'—'}</span>
+        </div>`;
+      }
+    }
+    const statBlock=statRows?`<details style="margin-top:4px"><summary style="font-size:.55rem;color:var(--ac);cursor:pointer">stats behind this grade</summary><div style="font-size:.55rem;margin-top:4px;padding-left:4px">${statRows}</div></details>`:'';
+    
+    return `<div style="padding:7px 0;border-bottom:1px solid var(--bdr)">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <span style="color:var(--mt2);font-size:.58rem">${t}</span>
-        <span style="font-size:.72rem"><strong style="color:var(--ac)">${e.grade}</strong>${delta}</span>
+        <span style="font-size:.74rem"><strong style="color:var(--ac)">${e.grade}</strong>${delta}</span>
       </div>
       <div style="font-size:.55rem;color:var(--mt2);margin-top:1px">
         ${e.verified?'<span style="color:var(--gn)">✓ verified</span>':'<span style="color:var(--gd)">⚠ unverified</span>'} · order #${e.order??'?'} · vs ${e.pHand}HP ${e.pitcher}
       </div>
       ${changeStr}
+      ${statBlock}
     </div>`;
   }).join('');
+  
+  const header=arr.length===1?'GRADE TODAY (graded once)':`GRADE HISTORY TODAY — ${arr.length} grades`;
   return `<div style="background:var(--bg2);border:1px solid var(--gd);border-radius:8px;padding:10px 12px;margin-bottom:10px">
-    <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:4px">GRADE HISTORY TODAY — ${arr.length} changes</div>
+    <div style="color:var(--gd);font-size:.55rem;letter-spacing:.5px;margin-bottom:4px">${header}</div>
     ${rows}
   </div>`;
 }
