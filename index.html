@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.52 · Prop Intelligence</title>
+<title>Diamond IQ v6.54 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.52 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.54 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -840,7 +840,13 @@ function predSnapshot(){
     batterKScore:m.batterKScore,
     batterExpectedK:m.batterExpectedK,
     verified:!!m.verified,
-    unconfirmed:!!m.unconfirmed
+    unconfirmed:!!m.unconfirmed,
+    // Compact hit-grade components — adaptive learning reads these from history
+    hitComps:Array.isArray(m.hitGrade?.components)?m.hitGrade.components.map(c=>({
+      l:c.label,
+      s:c.scaled==null?null:Math.round(c.scaled),
+      v:c.raw==null?null:Math.round(c.raw*1000)/1000
+    })):null
   }));
   const pitchers=STATE.matchups.filter(m=>m.kind==='pitcher'&&m.kGrade!=null).map(m=>({
     id:String(m.pitcherId),
@@ -976,6 +982,419 @@ function autopullSave(){
   try{localStorage.setItem(AUTOPULL_KEY,JSON.stringify(AUTOPULL));}catch(e){}
 }
 autopullLoad();
+
+// ── ADAPTIVE LEARNING (HIT PROP ONLY) ──
+// The hit grade is a weighted sum of 8 components. The defaults below encode baseball
+// intuition. Adaptive learning analyzes verified outcomes from the last 14 days, computes
+// each component's correlation with actual hit results, and nudges weights toward what
+// actually predicted hits. Guardrails: only verified outcomes, max ±15% relative change
+// per run, blended 60% original + 40% data-driven. League-wide via Firebase. Toggle off
+// reverts to defaults immediately.
+const HIT_WEIGHTS_DEFAULT={
+  xBA:0.22,
+  wOBA_avg:0.12,
+  OBP:0.12,
+  xwOBA:0.18,
+  K_inverse:0.12,
+  BABIP:0.05,
+  HardHit:0.10,
+  Recent:0.09
+};
+// Active weights (start as defaults; adaptive learning may overwrite)
+let HIT_WEIGHTS={...HIT_WEIGHTS_DEFAULT};
+
+const LEARN={
+  enabled:false,           // master toggle (Firebase-synced)
+  lastRunTs:0,             // timestamp of last successful run (Firebase-synced)
+  log:[],                  // history of runs
+  targetHitRate:85,        // % — desired hit rate at the lock threshold
+  windowDays:60            // sample window
+};
+const LEARN_KEY='diq_learn_v1';
+
+function learnLoad(){
+  try{
+    const raw=localStorage.getItem(LEARN_KEY);
+    if(raw){
+      const d=JSON.parse(raw);
+      LEARN.enabled=!!d.enabled;
+      LEARN.lastRunTs=d.lastRunTs||0;
+      LEARN.log=d.log||[];
+      if(typeof d.targetHitRate==='number')LEARN.targetHitRate=d.targetHitRate;
+      if(d.weights&&LEARN.enabled)HIT_WEIGHTS={...HIT_WEIGHTS_DEFAULT,...d.weights};
+    }
+  }catch(e){}
+}
+function learnSave(){
+  try{localStorage.setItem(LEARN_KEY,JSON.stringify({
+    enabled:LEARN.enabled,lastRunTs:LEARN.lastRunTs,log:LEARN.log,
+    targetHitRate:LEARN.targetHitRate,
+    weights:LEARN.enabled?HIT_WEIGHTS:null
+  }));}catch(e){}
+}
+learnLoad();
+
+async function pullLearnSettings(){
+  if(!FB.ready)return;
+  try{
+    const doc=await FB.db.collection('app_settings').doc('learn').get();
+    if(doc.exists){
+      const d=doc.data()||{};
+      if(typeof d.enabled==='boolean')LEARN.enabled=d.enabled;
+      if(typeof d.lastRunTs==='number')LEARN.lastRunTs=d.lastRunTs;
+      if(Array.isArray(d.log))LEARN.log=d.log;
+      if(typeof d.targetHitRate==='number')LEARN.targetHitRate=d.targetHitRate;
+      if(d.weights&&LEARN.enabled)HIT_WEIGHTS={...HIT_WEIGHTS_DEFAULT,...d.weights};
+      else if(!LEARN.enabled)HIT_WEIGHTS={...HIT_WEIGHTS_DEFAULT};
+      learnSave();
+    }
+  }catch(e){console.warn('[DIQ] pullLearnSettings failed',e.message);}
+}
+async function pushLearnSettings(){
+  if(!FB.ready)return;
+  try{
+    await FB.db.collection('app_settings').doc('learn').set(sanitizeForFirebase({
+      enabled:LEARN.enabled,lastRunTs:LEARN.lastRunTs,log:LEARN.log,
+      targetHitRate:LEARN.targetHitRate,
+      weights:LEARN.enabled?HIT_WEIGHTS:null,
+      updatedAt:Date.now()
+    }));
+  }catch(e){console.warn('[DIQ] pushLearnSettings failed',e.message);}
+}
+
+function toggleLearn(on){
+  LEARN.enabled=!!on;
+  if(!on){
+    // Toggle off = immediate revert to defaults
+    HIT_WEIGHTS={...HIT_WEIGHTS_DEFAULT};
+  }
+  learnSave();
+  pushLearnSettings();
+  const status=document.getElementById('learn-status');
+  if(status)status.textContent=on?'✓ Learning enabled — weights will adapt':'↺ Reverted to default weights';
+  // Re-render so any visible grades reflect new weights on next compute
+}
+
+// Apply the recommended lock threshold from the most recent run.
+async function applyRecommendedThreshold(){
+  const latest=LEARN.log[0];
+  if(!latest||latest.recommendedThreshold==null){
+    alert('No recommendation available — run adaptive learning first.');
+    return;
+  }
+  const newT=latest.recommendedThreshold;
+  if(!confirm(`Apply suggested lock threshold for hits?\n\nCurrent: ${LOCKS.hits}\nSuggested: ${newT}\n\nBased on ${LEARN.targetHitRate}% target hit rate over ${latest.samples} samples. This syncs to all league members.`))return;
+  LOCKS.hits=newT;
+  // Use the existing locks-push machinery so the league gets the new threshold
+  if(typeof pushSharedLocks==='function')pushSharedLocks();
+  const status=document.getElementById('learn-status');
+  if(status){status.style.color='var(--gn)';status.textContent=`✓ Lock threshold set to ${newT} and synced league-wide`;}
+}
+
+async function manualRunLearning(){
+  const status=document.getElementById('learn-status');
+  if(!LEARN.enabled){
+    if(status){status.style.color='var(--rd)';status.textContent='Turn on adaptive learning first';}
+    return;
+  }
+  if(status){status.style.color='var(--gd)';status.textContent='Running…';}
+  const result=await runAdaptiveLearning({trigger:'manual'});
+  if(!result.ok){
+    if(status){status.style.color='var(--rd)';status.textContent='✗ '+result.reason;}
+    return;
+  }
+  if(status){status.style.color='var(--gn)';status.textContent=`✓ Ran on ${result.entry.samples} samples. Prior hit rate: ${result.entry.prevHitRate}%`;}
+  renderLearnLog();
+}
+
+function renderLearnLog(){
+  const box=document.getElementById('learn-log-box');
+  if(!box)return;
+  if(!LEARN.log.length){
+    box.innerHTML='<div style="color:var(--mt)">No runs yet.</div>';
+    return;
+  }
+  const fmtW=v=>(v*100).toFixed(1)+'%';
+  const fmtC=v=>(v>=0?'+':'')+v.toFixed(3);
+  const rows=LEARN.log.map((e,idx)=>{
+    const dt=new Date(e.ts).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    const compKeys=Object.keys(e.newWeights);
+    
+    // Weight change rows. If oldW===newW, show "no change"
+    const weightRows=compKeys.map(k=>{
+      const oldW=e.oldWeights[k]||0,newW=e.newWeights[k]||0,corr=e.correlations[k]||0;
+      const delta=newW-oldW;
+      const noChange=Math.abs(delta)<0.0005;
+      const col=noChange?'var(--mt)':delta>0?'var(--gn)':'var(--rd)';
+      const arrow=noChange?'(no change)':`${fmtW(oldW)} → <strong style="color:${col}">${fmtW(newW)}</strong>`;
+      return `<div style="display:flex;justify-content:space-between;gap:6px;padding:1px 0;font-size:.55rem">
+        <span style="color:var(--mt2);min-width:90px">${k}</span>
+        <span style="color:var(--tx)">${arrow}</span>
+        <span style="color:var(--mt2);min-width:60px;text-align:right">corr ${fmtC(corr)}</span>
+      </div>`;
+    }).join('');
+    
+    // Calibration table
+    let calibrationBlock='';
+    if(Array.isArray(e.calibration)&&e.calibration.length){
+      const calRows=e.calibration.map(b=>{
+        const tierAtOrAboveTarget=b.rate>=e.targetHitRate;
+        const col=tierAtOrAboveTarget?'var(--gn)':b.rate>=70?'var(--gd)':'var(--mt2)';
+        return `<div style="display:flex;justify-content:space-between;font-size:.54rem;padding:1px 0">
+          <span style="color:var(--mt2)">${b.lo}–${b.hi.toFixed(0)}</span>
+          <span style="color:${col};font-weight:${tierAtOrAboveTarget?'700':'400'}">${b.rate}%</span>
+          <span style="color:var(--mt);min-width:40px;text-align:right">n=${b.n}</span>
+        </div>`;
+      }).join('');
+      calibrationBlock=`<details style="margin-top:6px"><summary style="font-size:.55rem;color:var(--ac);cursor:pointer">calibration table (hit rate by grade tier)</summary><div style="margin-top:4px;padding-left:4px">${calRows}</div></details>`;
+    }
+    
+    // Threshold recommendation
+    let recBlock='';
+    if(e.recommendedThreshold!=null){
+      const showApply=idx===0; // only on latest run
+      recBlock=`<div style="background:rgba(255,200,0,.06);border:1px solid var(--gd);border-radius:5px;padding:6px 8px;margin-top:6px;font-size:.58rem">
+        <div style="color:var(--gd)">Suggested lock threshold: <strong style="color:var(--ac)">${e.recommendedThreshold}</strong> (target ${e.targetHitRate}% hit rate)</div>
+        <div style="color:var(--mt2);font-size:.5rem;margin-top:2px">Current: ${e.currentThreshold} · Lock-tier hit rate at current: ${e.lockHitRate!=null?e.lockHitRate+'%':'n/a'} (n=${e.lockSamples})</div>
+        ${showApply&&e.recommendedThreshold!==e.currentThreshold?'<button class="btn bp" style="font-size:.55rem;padding:4px 8px;margin-top:4px" onclick="applyRecommendedThreshold()">Apply Suggested Threshold</button>':''}
+      </div>`;
+    }else{
+      recBlock=`<div style="color:var(--mt2);font-size:.55rem;margin-top:4px">No threshold reaches target ${e.targetHitRate}% with current data</div>`;
+    }
+    
+    return `<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:8px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:.58rem">
+        <span style="color:var(--ac);font-weight:600">${dt}</span>
+        <span style="color:var(--mt2)">${e.trigger} · ${e.samples} samples · ${e.windowDays||14}d</span>
+      </div>
+      <div style="font-size:.55rem;color:var(--mt2);margin-top:2px">Overall hit rate this period: ${e.prevHitRate}%</div>
+      <div style="margin-top:5px">${weightRows}</div>
+      ${calibrationBlock}
+      ${recBlock}
+    </div>`;
+  }).join('');
+  box.innerHTML=rows;
+}
+
+// Has it been a Sunday since the last run? (uses local time)
+function isPastSundayDue(){
+  if(!LEARN.lastRunTs)return true; // never run
+  const last=new Date(LEARN.lastRunTs);
+  const now=new Date();
+  // Find the most recent Sunday 00:00 local
+  const lastSunday=new Date(now);
+  lastSunday.setHours(0,0,0,0);
+  lastSunday.setDate(lastSunday.getDate()-lastSunday.getDay()); // back to Sunday
+  return last<lastSunday;
+}
+
+// Collect verified hit predictions with actual outcomes from the configured window.
+function collectLearningSamples(){
+  const samples=[]; // {components:[...], gotHit:bool, grade:number}
+  const dates=Object.keys(HISTORY.byDate||{}).sort().reverse().slice(0,LEARN.windowDays);
+  dates.forEach(date=>{
+    const results=HISTORY.byDate[date];
+    if(!results||!results.batters)return;
+    results.batters.forEach(b=>{
+      if(b.verified===false)return;
+      if(b.gotHit==null)return;
+      if(!Array.isArray(b.hitComps))return;
+      if(b.score==null)return;
+      samples.push({components:b.hitComps,gotHit:!!b.gotHit,grade:b.score});
+    });
+  });
+  return samples;
+}
+
+// Build a calibration table: hit rate by grade tier. Used to recommend a lock threshold.
+function buildCalibration(samples){
+  // Bin by 3-point grade tiers starting at 50, going up to 95+
+  const bins=[];
+  for(let lo=50;lo<=95;lo+=3){
+    const hi=lo+2.99;
+    const inBin=samples.filter(s=>s.grade>=lo&&s.grade<=hi);
+    if(inBin.length<5)continue; // skip thin bins
+    const hits=inBin.filter(s=>s.gotHit).length;
+    bins.push({
+      lo,hi:lo+3,
+      n:inBin.length,
+      hits,
+      rate:Math.round((hits/inBin.length)*1000)/10 // pct with one decimal
+    });
+  }
+  return bins;
+}
+
+// Recommend a lock threshold: lowest grade where the rolling hit rate of all samples
+// at-or-above hits the target rate. Returns null if target unreachable with data.
+function recommendThreshold(samples,targetPct){
+  // Sort samples by grade descending, walk down accumulating hits, find lowest grade
+  // where cumulative hit rate is still >= target.
+  const sorted=[...samples].sort((a,b)=>b.grade-a.grade);
+  let hits=0,n=0,bestThreshold=null;
+  for(const s of sorted){
+    n++;
+    if(s.gotHit)hits++;
+    // Require at least 30 samples in the lock pool to call any threshold reliable
+    if(n<30)continue;
+    const rate=hits/n;
+    if(rate>=targetPct/100){
+      bestThreshold=s.grade; // this grade level still hits the target
+    }else{
+      break;
+    }
+  }
+  return bestThreshold;
+}
+
+// Pearson correlation between component scaled-score (0-100) and binary hit outcome.
+function pearsonCorr(xs,ys){
+  const n=xs.length;
+  if(n<10)return 0;
+  const mx=xs.reduce((s,v)=>s+v,0)/n;
+  const my=ys.reduce((s,v)=>s+v,0)/n;
+  let num=0,dx2=0,dy2=0;
+  for(let i=0;i<n;i++){
+    const dxv=xs[i]-mx,dyv=ys[i]-my;
+    num+=dxv*dyv;dx2+=dxv*dxv;dy2+=dyv*dyv;
+  }
+  const den=Math.sqrt(dx2*dy2);
+  return den===0?0:num/den;
+}
+
+// Run adaptive learning. Returns a summary or null if not enough data.
+async function runAdaptiveLearning(opts){
+  opts=opts||{};
+  const samples=collectLearningSamples();
+  if(samples.length<50){
+    return {ok:false,reason:`Not enough verified samples (${samples.length}). Need at least 50.`};
+  }
+  
+  // For each component label, compute correlation with hit outcome
+  const compLabels=Object.keys(HIT_WEIGHTS_DEFAULT);
+  // Map component labels (used in batterHitGrade) to weight keys
+  const labelMap={
+    'xBA (expected BA)':'xBA',
+    'wOBA overall':'wOBA_avg',
+    'OBP blended':'OBP',
+    'xwOBA blended':'xwOBA',
+    'K% (inverse)':'K_inverse',
+    'BABIP (luck)':'BABIP',
+    'Hard Hit%':'HardHit',
+    'Last 15G AVG':'Recent'
+  };
+  
+  const correlations={};
+  const ys=samples.map(s=>s.gotHit?1:0);
+  compLabels.forEach(key=>{
+    // Find matching component in samples by label
+    const xs=[];
+    samples.forEach(s=>{
+      const c=s.components.find(c=>labelMap[c.l]===key||labelMap[c.label]===key);
+      xs.push(c&&c.s!=null?c.s:(c&&c.scaled!=null?c.scaled:50));
+    });
+    correlations[key]=Math.round(pearsonCorr(xs,ys)*1000)/1000;
+  });
+  
+  // Build new weights: weight proportional to max(0, correlation).
+  // Components that predicted nothing or worse get minimum floor.
+  const corrSum=compLabels.reduce((s,k)=>s+Math.max(0,correlations[k]),0);
+  const dataWeights={};
+  if(corrSum>0){
+    compLabels.forEach(k=>{
+      dataWeights[k]=Math.max(0,correlations[k])/corrSum;
+    });
+  }else{
+    // No positive correlations — fall back to defaults
+    compLabels.forEach(k=>{dataWeights[k]=HIT_WEIGHTS_DEFAULT[k];});
+  }
+  
+  // Blend: 60% original + 40% data-driven
+  const blended={};
+  compLabels.forEach(k=>{
+    blended[k]=0.6*HIT_WEIGHTS_DEFAULT[k]+0.4*dataWeights[k];
+  });
+  
+  // Apply max ±15% relative change cap (vs current HIT_WEIGHTS, not default)
+  const capped={};
+  compLabels.forEach(k=>{
+    const cur=HIT_WEIGHTS[k]||HIT_WEIGHTS_DEFAULT[k];
+    const maxUp=cur*1.15,maxDn=cur*0.85;
+    capped[k]=Math.min(maxUp,Math.max(maxDn,blended[k]));
+  });
+  
+  // Renormalize to sum to 1.0
+  const sum=compLabels.reduce((s,k)=>s+capped[k],0);
+  const newWeights={};
+  compLabels.forEach(k=>{
+    newWeights[k]=Math.round((capped[k]/sum)*10000)/10000;
+  });
+  
+  // Compute prior hit rate (the verified locks hit% over the same samples)
+  const hits=samples.filter(s=>s.gotHit).length;
+  const prevHitRate=Math.round((hits/samples.length)*100);
+  
+  // Calibration table by grade tier
+  const calibration=buildCalibration(samples);
+  // Recommended threshold for the user's target hit rate
+  const recommendedThreshold=recommendThreshold(samples,LEARN.targetHitRate);
+  // Lock-tier hit rate at the CURRENT threshold (so log shows real-money performance trend)
+  const lockSamples=samples.filter(s=>s.grade>=LOCKS.hits);
+  const lockHits=lockSamples.filter(s=>s.gotHit).length;
+  const lockHitRate=lockSamples.length?Math.round((lockHits/lockSamples.length)*1000)/10:null;
+  
+  // Save the run
+  const entry={
+    ts:Date.now(),
+    samples:samples.length,
+    oldWeights:{...HIT_WEIGHTS},
+    newWeights,
+    correlations,
+    prevHitRate,
+    trigger:opts.trigger||'manual',
+    windowDays:LEARN.windowDays,
+    calibration,
+    recommendedThreshold,
+    targetHitRate:LEARN.targetHitRate,
+    currentThreshold:LOCKS.hits,
+    lockHitRate,
+    lockSamples:lockSamples.length
+  };
+  HIT_WEIGHTS={...newWeights};
+  LEARN.lastRunTs=entry.ts;
+  LEARN.log.unshift(entry);
+  if(LEARN.log.length>20)LEARN.log=LEARN.log.slice(0,20);
+  learnSave();
+  await pushLearnSettings();
+  
+  return {ok:true,entry};
+}
+
+// Auto-run on Sunday if enabled and not yet run this week
+async function maybeRunWeeklyLearning(){
+  if(!LEARN.enabled)return;
+  if(!isPastSundayDue())return;
+  const today=new Date();
+  if(today.getDay()!==0)return; // only on actual Sundays
+  // Firebase race protection: check if another user already ran today
+  if(FB.ready){
+    try{
+      const doc=await FB.db.collection('app_settings').doc('learn').get();
+      if(doc.exists){
+        const remoteTs=doc.data()?.lastRunTs||0;
+        if(remoteTs>LEARN.lastRunTs){
+          LEARN.lastRunTs=remoteTs;
+          if(doc.data()?.weights)HIT_WEIGHTS={...HIT_WEIGHTS_DEFAULT,...doc.data().weights};
+          if(Array.isArray(doc.data()?.log))LEARN.log=doc.data().log;
+          learnSave();
+          return; // someone else ran it
+        }
+      }
+    }catch(e){}
+  }
+  console.log('[DIQ] Weekly adaptive learning triggered');
+  await runAdaptiveLearning({trigger:'weekly_auto'});
+}
 
 // ── GRADE LOG ──
 // Per-day, per-player history of hit-grade changes. Only appends when the grade actually
@@ -1776,11 +2195,13 @@ async function bootPullWithRetry(){
   // Now the slower pulls (don't block the popup on these)
   await pullSharedHistory();
   await pullSharedLocks();
+  await pullLearnSettings();
   await pullSharedOdds(todayStr());
   await pullSharedProps(todayStr());
   await pullGradeLog(todayStr());
   // Auto-pull DK if enabled, past 9 AM PT, and not already in Firebase (once/day globally)
   await maybeAutoPull(todayStr());
+  await maybeRunWeeklyLearning();
   // Force a re-render so the badge picks up the newly pulled data
   if(typeof renderTab==='function')renderTab();
 }
@@ -3115,19 +3536,21 @@ function batterHitGrade(p,pHand){
   const hardHit=ov.hardHit;
   const rec=p.recent||{};
   const recAvg=rec.avg;
-  const recWeight=rec.pa&&rec.pa>=40?0.15:0;
   
-  // Build component list with metadata.
+  // Build component list with metadata. Weights are read from HIT_WEIGHTS so adaptive
+  // learning can tune them. The Recent-form weight uses recWeight for sample-size guard.
+  const recBaseW=HIT_WEIGHTS.Recent;
   const comps=[
-    {label:'xBA (expected BA)',raw:xBA,avg:L.b_xBA,elite:L.b_xBA*1.22,weight:0.22,good:'high',fmt:'3'},
-    {label:'wOBA overall',raw:avg,avg:L.b_avg,elite:L.b_avg*1.22,weight:0.12,good:'high',fmt:'3'},
-    {label:'OBP blended',raw:obp,avg:L.b_obp,elite:L.b_obp*1.22,weight:0.12,good:'high',fmt:'3'},
-    {label:'xwOBA blended',raw:xwOBA,avg:L.b_xwOBA,elite:L.b_xwOBA*1.22,weight:0.18,good:'high',fmt:'3'},
-    {label:'K% (inverse)',raw:kr,avg:L.b_k,elite:L.b_k*1.45,weight:0.12,good:'low',fmt:'%'},
-    {label:'BABIP (luck)',raw:babip||L.b_avg*1.2,avg:0.300,elite:0.360,weight:0.05,good:'high',fmt:'3'},
-    {label:'Hard Hit%',raw:hardHit,avg:L.b_hardHit||38,elite:(L.b_hardHit||38)*1.32,weight:0.10,good:'high',fmt:'1%'},
-    {label:`Last 15G AVG`,raw:recAvg,avg:L.b_avg,elite:L.b_avg*1.3,weight:recWeight,good:'high',fmt:'3',note:rec.pa?rec.pa+' PA':'small sample'}
+    {label:'xBA (expected BA)',raw:xBA,avg:L.b_xBA,elite:L.b_xBA*1.22,weight:HIT_WEIGHTS.xBA,good:'high',fmt:'3'},
+    {label:'wOBA overall',raw:avg,avg:L.b_avg,elite:L.b_avg*1.22,weight:HIT_WEIGHTS.wOBA_avg,good:'high',fmt:'3'},
+    {label:'OBP blended',raw:obp,avg:L.b_obp,elite:L.b_obp*1.22,weight:HIT_WEIGHTS.OBP,good:'high',fmt:'3'},
+    {label:'xwOBA blended',raw:xwOBA,avg:L.b_xwOBA,elite:L.b_xwOBA*1.22,weight:HIT_WEIGHTS.xwOBA,good:'high',fmt:'3'},
+    {label:'K% (inverse)',raw:kr,avg:L.b_k,elite:L.b_k*1.45,weight:HIT_WEIGHTS.K_inverse,good:'low',fmt:'%'},
+    {label:'BABIP (luck)',raw:babip||L.b_avg*1.2,avg:0.300,elite:0.360,weight:HIT_WEIGHTS.BABIP,good:'high',fmt:'3'},
+    {label:'Hard Hit%',raw:hardHit,avg:L.b_hardHit||38,elite:(L.b_hardHit||38)*1.32,weight:HIT_WEIGHTS.HardHit,good:'high',fmt:'1%'},
+    {label:`Last 15G AVG`,raw:recAvg,avg:L.b_avg,elite:L.b_avg*1.3,weight:rec.pa&&rec.pa>=40?recBaseW:0,good:'high',fmt:'3',note:rec.pa?rec.pa+' PA':'small sample'}
   ];
+  const recWeight=rec.pa&&rec.pa>=40?recBaseW:0;
   
   // Compute each component's scaled score + contribution
   let rawTotal=0;
@@ -7507,6 +7930,26 @@ function renderSettings(){
       <div class="sw-grp">
         <div class="sw-gt">📊 DraftKings Odds</div>
         <div id="odds-panel" style="font-size:.6rem;color:var(--mt2);line-height:1.5">${renderOddsPanel()}</div>
+      </div>
+      <div class="sw-grp">
+        <div class="sw-gt">🧠 Adaptive Learning (Hit Bets)</div>
+        <div style="font-size:.6rem;color:var(--mt2);line-height:1.5;margin-bottom:10px">
+          Analyzes last 60 days of verified hit results and nudges the 8 weight components toward what actually predicted hits. Auto-runs first launch each Sunday. Guardrails: only verified outcomes count, max ±15% change per run, blended 60% original / 40% data-driven. Toggle off = revert to defaults immediately.
+        </div>
+        <label class="sw-row" style="cursor:pointer">
+          <span class="sw-lbl">Adaptive learning enabled</span>
+          <input type="checkbox" id="learn-toggle" ${LEARN.enabled?'checked':''} onchange="toggleLearn(this.checked)">
+        </label>
+        <div class="sw-row">
+          <span class="sw-lbl">Target hit rate (for lock threshold)</span>
+          <input type="number" min="50" max="100" step="1" value="${LEARN.targetHitRate}" style="width:60px;background:var(--bg2);border:1px solid var(--bdr);color:var(--tx);padding:4px 6px;border-radius:4px;font-size:.7rem" onchange="LEARN.targetHitRate=Math.max(50,Math.min(100,parseInt(this.value)||85));learnSave();pushLearnSettings();">
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <button class="btn bp" style="font-size:.65rem" onclick="manualRunLearning()">▶ Run Now</button>
+          <button class="btn bg" style="font-size:.65rem" onclick="renderLearnLog()">📜 View Log</button>
+        </div>
+        <div id="learn-status" style="margin-top:6px;font-size:.55rem;color:var(--gn);min-height:12px"></div>
+        <div id="learn-log-box" style="margin-top:10px;font-size:.58rem;color:var(--mt2);max-height:340px;overflow-y:auto"></div>
       </div>
       <div class="sw-grp">
         <div class="sw-gt">🗑 Reset Fact Check History</div>
