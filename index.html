@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.54 · Prop Intelligence</title>
+<title>Diamond IQ v6.56 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.54 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.56 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -983,6 +983,116 @@ function autopullSave(){
 }
 autopullLoad();
 
+// ── IN-APP CONSOLE ──
+// When enabled, captures console.log/warn/error to an in-app scrollable buffer so iPhone
+// users can read logs without plugging into a Mac. Local-only (per-device) — not synced.
+const APP_CONSOLE={
+  enabled:false,
+  buffer:[],   // {ts, level, msg}
+  max:300
+};
+const APP_CONSOLE_KEY='diq_console_v1';
+function appConsoleLoad(){
+  try{const r=localStorage.getItem(APP_CONSOLE_KEY);if(r)APP_CONSOLE.enabled=!!JSON.parse(r).enabled;}catch(e){}
+}
+function appConsoleSave(){
+  try{localStorage.setItem(APP_CONSOLE_KEY,JSON.stringify({enabled:APP_CONSOLE.enabled}));}catch(e){}
+}
+appConsoleLoad();
+
+// Wrap console.log/warn/error once on load so the buffer captures all subsequent logs.
+// This runs unconditionally — the toggle only controls UI display, not capture. That
+// way when you turn the toggle on, recent logs are already there.
+(function installConsoleCapture(){
+  const origLog=console.log.bind(console);
+  const origWarn=console.warn.bind(console);
+  const origError=console.error.bind(console);
+  const push=(level,args)=>{
+    try{
+      const msg=Array.from(args).map(a=>{
+        if(a===null)return 'null';
+        if(a===undefined)return 'undefined';
+        if(typeof a==='string')return a;
+        try{return JSON.stringify(a);}catch(e){return String(a);}
+      }).join(' ');
+      APP_CONSOLE.buffer.push({ts:Date.now(),level,msg});
+      if(APP_CONSOLE.buffer.length>APP_CONSOLE.max)APP_CONSOLE.buffer.shift();
+      // If a console panel is visible, append live
+      const panel=document.getElementById('app-console-panel');
+      if(panel&&APP_CONSOLE.enabled){
+        const div=document.createElement('div');
+        const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        const col=level==='error'?'var(--rd)':level==='warn'?'var(--gd)':'var(--mt2)';
+        div.style.cssText=`color:${col};font-size:.55rem;line-height:1.4;padding:1px 0;border-bottom:1px solid var(--bdr);word-break:break-word`;
+        div.textContent=`${t} [${level}] ${msg}`;
+        panel.appendChild(div);
+        panel.scrollTop=panel.scrollHeight;
+      }
+    }catch(e){}
+  };
+  console.log=function(){origLog.apply(null,arguments);push('log',arguments);};
+  console.warn=function(){origWarn.apply(null,arguments);push('warn',arguments);};
+  console.error=function(){origError.apply(null,arguments);push('error',arguments);};
+})();
+
+function toggleAppConsole(on){
+  APP_CONSOLE.enabled=!!on;
+  appConsoleSave();
+  const panel=document.getElementById('app-console-panel');
+  const controls=document.getElementById('app-console-controls');
+  if(panel)panel.style.display=on?'block':'none';
+  if(controls)controls.style.display=on?'flex':'none';
+  if(on)renderAppConsole();
+}
+
+function renderAppConsole(){
+  const panel=document.getElementById('app-console-panel');
+  if(!panel)return;
+  if(!APP_CONSOLE.buffer.length){
+    panel.innerHTML='<div style="color:var(--mt)">No logs captured yet.</div>';
+    return;
+  }
+  const rows=APP_CONSOLE.buffer.map(e=>{
+    const t=new Date(e.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const col=e.level==='error'?'var(--rd)':e.level==='warn'?'var(--gd)':'var(--mt2)';
+    const safe=e.msg.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    return `<div style="color:${col};font-size:.55rem;line-height:1.4;padding:1px 0;border-bottom:1px solid var(--bdr);word-break:break-word">${t} [${e.level}] ${safe}</div>`;
+  }).join('');
+  panel.innerHTML=rows;
+  panel.scrollTop=panel.scrollHeight;
+}
+
+function copyAppConsole(){
+  const text=APP_CONSOLE.buffer.map(e=>{
+    const t=new Date(e.ts).toISOString();
+    return `${t} [${e.level}] ${e.msg}`;
+  }).join('\n');
+  // Mobile-friendly copy: use a textarea fallback because Clipboard API needs HTTPS/permissions
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=text;
+    ta.style.cssText='position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();ta.setSelectionRange(0,99999);
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    const status=document.getElementById('app-console-status');
+    if(status){status.style.color='var(--gn)';status.textContent=`✓ Copied ${APP_CONSOLE.buffer.length} log lines`;}
+  }catch(e){
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(text).then(()=>{
+        const status=document.getElementById('app-console-status');
+        if(status){status.style.color='var(--gn)';status.textContent=`✓ Copied ${APP_CONSOLE.buffer.length} log lines`;}
+      });
+    }
+  }
+}
+
+function clearAppConsole(){
+  APP_CONSOLE.buffer=[];
+  renderAppConsole();
+}
+
 // ── ADAPTIVE LEARNING (HIT PROP ONLY) ──
 // The hit grade is a weighted sum of 8 components. The defaults below encode baseball
 // intuition. Adaptive learning analyzes verified outcomes from the last 14 days, computes
@@ -1097,13 +1207,14 @@ async function manualRunLearning(){
     if(status){status.style.color='var(--rd)';status.textContent='Turn on adaptive learning first';}
     return;
   }
-  if(status){status.style.color='var(--gd)';status.textContent='Running…';}
-  const result=await runAdaptiveLearning({trigger:'manual'});
+  const setStatus=msg=>{if(status){status.style.color='var(--gd)';status.textContent=msg;}};
+  setStatus('Starting…');
+  const result=await runAdaptiveLearning({trigger:'manual',onProgress:setStatus});
   if(!result.ok){
     if(status){status.style.color='var(--rd)';status.textContent='✗ '+result.reason;}
     return;
   }
-  if(status){status.style.color='var(--gn)';status.textContent=`✓ Ran on ${result.entry.samples} samples. Prior hit rate: ${result.entry.prevHitRate}%`;}
+  if(status){status.style.color='var(--gn)';status.textContent=`✓ Done — ${result.entry.samples} samples, prior hit rate ${result.entry.prevHitRate}%`;}
   renderLearnLog();
 }
 
@@ -1189,20 +1300,34 @@ function isPastSundayDue(){
 }
 
 // Collect verified hit predictions with actual outcomes from the configured window.
+// IMPORTANT: HISTORY.byDate[date].batters is just a boxscore-outcome map keyed by player
+// id — it has hits/ab but NOT hitComps or grade. The component data and grade live in
+// PRED.byDate[date].batters. We must JOIN them by player id to produce learning samples.
 function collectLearningSamples(){
-  const samples=[]; // {components:[...], gotHit:bool, grade:number}
-  const dates=Object.keys(HISTORY.byDate||{}).sort().reverse().slice(0,LEARN.windowDays);
+  const samples=[]; // {components, gotHit, grade}
+  // Take recent dates that have BOTH a prediction snapshot AND boxscore history
+  const dates=Object.keys(PRED.byDate||{}).filter(d=>HISTORY.byDate[d]).sort().reverse().slice(0,LEARN.windowDays);
+  let skipNoHitComps=0,skipNoOutcome=0,skipUnverified=0,skipDidntPlay=0;
   dates.forEach(date=>{
-    const results=HISTORY.byDate[date];
-    if(!results||!results.batters)return;
-    results.batters.forEach(b=>{
-      if(b.verified===false)return;
-      if(b.gotHit==null)return;
-      if(!Array.isArray(b.hitComps))return;
+    const pred=PRED.byDate[date];
+    const hist=HISTORY.byDate[date];
+    if(!pred?.batters||!hist?.batters)return;
+    // Build a lookup of outcomes by player id (history.batters is an OBJECT keyed by id,
+    // not an array — confirm before iterating)
+    const outcomes=hist.batters; // {playerId: {ab,h,hr,...}}
+    pred.batters.forEach(b=>{
+      if(b.verified===false){skipUnverified++;return;}
+      if(!Array.isArray(b.hitComps)){skipNoHitComps++;return;}
+      const r=outcomes[String(b.id)]||outcomes[b.id];
+      if(!r){skipNoOutcome++;return;}
+      if(!(r.ab>0||r.pa>0)){skipDidntPlay++;return;}
+      const gotHit=r.h>0;
       if(b.score==null)return;
-      samples.push({components:b.hitComps,gotHit:!!b.gotHit,grade:b.score});
+      samples.push({components:b.hitComps,gotHit,grade:b.score});
     });
   });
+  // Stash debug stats so the UI can show why samples are sparse
+  collectLearningSamples._debug={dates:dates.length,skipNoHitComps,skipNoOutcome,skipUnverified,skipDidntPlay,kept:samples.length};
   return samples;
 }
 
@@ -1265,10 +1390,15 @@ function pearsonCorr(xs,ys){
 // Run adaptive learning. Returns a summary or null if not enough data.
 async function runAdaptiveLearning(opts){
   opts=opts||{};
+  const prog=opts.onProgress||(()=>{});
+  prog('Collecting samples…');
   const samples=collectLearningSamples();
   if(samples.length<50){
-    return {ok:false,reason:`Not enough verified samples (${samples.length}). Need at least 50.`};
+    const dbg=collectLearningSamples._debug||{};
+    const detail=` (scanned ${dbg.dates||0} days · skipped: ${dbg.skipNoHitComps||0} no component data, ${dbg.skipNoOutcome||0} no boxscore match, ${dbg.skipUnverified||0} unverified, ${dbg.skipDidntPlay||0} didn't play)`;
+    return {ok:false,reason:`Not enough verified samples (${samples.length}). Need 50.${detail}`};
   }
+  prog(`Computing correlations (${samples.length} samples)…`);
   
   // For each component label, compute correlation with hit outcome
   const compLabels=Object.keys(HIT_WEIGHTS_DEFAULT);
@@ -1365,8 +1495,19 @@ async function runAdaptiveLearning(opts){
   LEARN.log.unshift(entry);
   if(LEARN.log.length>20)LEARN.log=LEARN.log.slice(0,20);
   learnSave();
-  await pushLearnSettings();
-  
+  prog('Saving to Firebase…');
+  // Race the push against a 15s timeout so a flaky network doesn't hang the UI forever.
+  // If Firebase is slow we still succeed locally; sync will catch up next boot.
+  try{
+    await Promise.race([
+      pushLearnSettings(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('Firebase push timed out (15s)')),15000))
+    ]);
+  }catch(e){
+    console.warn('[DIQ-LEARN]',e.message,'— results saved locally, will sync next boot');
+    prog('⚠ Saved locally (Firebase slow)');
+  }
+  prog('Done');
   return {ok:true,entry};
 }
 
@@ -7930,6 +8071,21 @@ function renderSettings(){
       <div class="sw-grp">
         <div class="sw-gt">📊 DraftKings Odds</div>
         <div id="odds-panel" style="font-size:.6rem;color:var(--mt2);line-height:1.5">${renderOddsPanel()}</div>
+      </div>
+      <div class="sw-grp">
+        <div class="sw-gt">🪵 In-App Console</div>
+        <div style="font-size:.6rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Captures app logs so you can read them on the phone without plugging into a Mac. Useful for diagnosing issues — turn on, reproduce the issue, then Copy & paste the log to me.</div>
+        <label class="sw-row" style="cursor:pointer">
+          <span class="sw-lbl">Show console panel</span>
+          <input type="checkbox" id="console-toggle" ${APP_CONSOLE.enabled?'checked':''} onchange="toggleAppConsole(this.checked)">
+        </label>
+        <div id="app-console-controls" style="display:${APP_CONSOLE.enabled?'flex':'none'};gap:6px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn bp" style="font-size:.6rem" onclick="copyAppConsole()">📋 Copy All</button>
+          <button class="btn bg" style="font-size:.6rem" onclick="renderAppConsole()">↺ Refresh</button>
+          <button class="btn bg" style="font-size:.6rem" onclick="clearAppConsole()">🗑 Clear</button>
+        </div>
+        <div id="app-console-status" style="margin-top:4px;font-size:.55rem;color:var(--gn);min-height:12px"></div>
+        <div id="app-console-panel" style="display:${APP_CONSOLE.enabled?'block':'none'};margin-top:6px;font-family:monospace;background:var(--bg2);border:1px solid var(--bdr);border-radius:5px;padding:6px;max-height:280px;overflow-y:auto"></div>
       </div>
       <div class="sw-grp">
         <div class="sw-gt">🧠 Adaptive Learning (Hit Bets)</div>
