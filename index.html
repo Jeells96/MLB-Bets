@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.56 · Prop Intelligence</title>
+<title>Diamond IQ v6.58 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.56 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.58 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -1225,6 +1225,18 @@ function renderLearnLog(){
     box.innerHTML='<div style="color:var(--mt)">No runs yet.</div>';
     return;
   }
+  // Two views: detailed (per-run cards) and timeline (compact day-by-day weight changes)
+  const view=LEARN._view||'detailed';
+  const toggleHTML=`<div style="display:flex;gap:6px;margin-bottom:8px">
+    <button class="btn ${view==='detailed'?'bp':'bg'}" style="font-size:.55rem;padding:4px 8px" onclick="LEARN._view='detailed';renderLearnLog()">📋 Detailed</button>
+    <button class="btn ${view==='timeline'?'bp':'bg'}" style="font-size:.55rem;padding:4px 8px" onclick="LEARN._view='timeline';renderLearnLog()">📈 Timeline</button>
+  </div>`;
+  
+  if(view==='timeline'){
+    box.innerHTML=toggleHTML+renderWeightTimeline();
+    return;
+  }
+  
   const fmtW=v=>(v*100).toFixed(1)+'%';
   const fmtC=v=>(v>=0?'+':'')+v.toFixed(3);
   const rows=LEARN.log.map((e,idx)=>{
@@ -1278,13 +1290,76 @@ function renderLearnLog(){
         <span style="color:var(--ac);font-weight:600">${dt}</span>
         <span style="color:var(--mt2)">${e.trigger} · ${e.samples} samples · ${e.windowDays||14}d</span>
       </div>
-      <div style="font-size:.55rem;color:var(--mt2);margin-top:2px">Overall hit rate this period: ${e.prevHitRate}%</div>
+      <div style="font-size:.55rem;color:var(--mt2);margin-top:2px">
+        <span title="Across ALL graded batters who played — your model's training data, NOT a performance metric">Base rate (all graded players): ${e.prevHitRate}%</span>
+        ${e.lockHitRate!=null?` · <span style="color:var(--ac)">Your locks (≥${e.currentThreshold}) hit ${e.lockHitRate}% (n=${e.lockSamples})</span>`:''}
+      </div>
       <div style="margin-top:5px">${weightRows}</div>
       ${calibrationBlock}
       ${recBlock}
     </div>`;
   }).join('');
-  box.innerHTML=rows;
+  box.innerHTML=toggleHTML+rows;
+}
+
+// Compact day-by-day weight timeline: one row per run, columns = components.
+// Each cell shows the new weight; arrows next to it show direction of change vs previous run.
+function renderWeightTimeline(){
+  if(!LEARN.log.length)return '<div style="color:var(--mt)">No runs yet.</div>';
+  const compKeys=Object.keys(HIT_WEIGHTS_DEFAULT);
+  // Reverse the log so oldest is first (so we can read top-down chronologically)
+  const runsChrono=[...LEARN.log].reverse();
+  
+  const fmtW=v=>(v*100).toFixed(1)+'%';
+  
+  // Header
+  const headCells=compKeys.map(k=>`<th style="font-size:.5rem;padding:3px 4px;color:var(--gd);text-align:right">${k}</th>`).join('');
+  const head=`<thead><tr>
+    <th style="font-size:.5rem;padding:3px 4px;color:var(--gd);text-align:left">Date</th>
+    <th style="font-size:.5rem;padding:3px 4px;color:var(--gd);text-align:right">n</th>
+    ${headCells}
+  </tr></thead>`;
+  
+  // Default row at the top so you can compare
+  const defRow=`<tr style="border-bottom:1px solid var(--gd)">
+    <td style="font-size:.55rem;padding:3px 4px;color:var(--gd)"><strong>Defaults</strong></td>
+    <td style="font-size:.55rem;padding:3px 4px;color:var(--mt2);text-align:right">—</td>
+    ${compKeys.map(k=>`<td style="font-size:.55rem;padding:3px 4px;text-align:right;color:var(--tx)">${fmtW(HIT_WEIGHTS_DEFAULT[k])}</td>`).join('')}
+  </tr>`;
+  
+  const rows=runsChrono.map((e,i)=>{
+    const dt=new Date(e.ts).toLocaleDateString([],{month:'short',day:'numeric'});
+    const time=new Date(e.ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+    const cells=compKeys.map(k=>{
+      const newW=e.newWeights[k]||0;
+      const oldW=e.oldWeights[k]||0;
+      const d=newW-oldW;
+      let arrow='';
+      if(Math.abs(d)>=0.0005){
+        arrow=d>0?'<span style="color:var(--gn)">▲</span>':'<span style="color:var(--rd)">▼</span>';
+      }
+      return `<td style="font-size:.55rem;padding:3px 4px;text-align:right;color:var(--tx);white-space:nowrap">${fmtW(newW)} ${arrow}</td>`;
+    }).join('');
+    return `<tr style="border-bottom:1px solid var(--bdr)">
+      <td style="font-size:.55rem;padding:4px;color:var(--ac);white-space:nowrap"><strong>${dt}</strong><br><span style="color:var(--mt2);font-size:.48rem">${time} · ${e.trigger}</span></td>
+      <td style="font-size:.55rem;padding:4px;color:var(--mt2);text-align:right">${e.samples}</td>
+      ${cells}
+    </tr>`;
+  }).join('');
+  
+  const currentRow=`<tr style="background:rgba(255,200,0,.06);border-top:2px solid var(--gd)">
+    <td style="font-size:.55rem;padding:4px;color:var(--gd)"><strong>Current</strong></td>
+    <td style="font-size:.55rem;padding:4px;color:var(--mt2);text-align:right">—</td>
+    ${compKeys.map(k=>`<td style="font-size:.55rem;padding:4px;text-align:right;color:var(--ac);font-weight:700">${fmtW(HIT_WEIGHTS[k])}</td>`).join('')}
+  </tr>`;
+  
+  return `<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;min-width:560px">
+    ${head}
+    <tbody>${defRow}${rows}${currentRow}</tbody>
+  </table></div>
+  <div style="font-size:.5rem;color:var(--mt2);margin-top:6px;line-height:1.4">
+    ▲ weight went up vs previous run · ▼ weight went down · oldest run at top, newest at bottom · "Current" = active weights right now
+  </div>`;
 }
 
 // Has it been a Sunday since the last run? (uses local time)
