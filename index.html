@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.59 · Prop Intelligence</title>
+<title>Diamond IQ v6.60 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.59 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.60 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -847,6 +847,27 @@ function predSnapshot(){
       s:c.scaled==null?null:Math.round(c.scaled),
       v:c.raw==null?null:Math.round(c.raw*1000)/1000
     })):null,
+    // Full hit-grade math audit trail — captures EVERY input feeding the final grade
+    hitMath:m.hitMath?{
+      batterG:m.hitMath.batterG,
+      pitcherG:m.hitMath.pitcherG,
+      order:m.hitMath.order,
+      paFactor:m.hitMath.paFactor,
+      diff:m.hitMath.diff,
+      raw:m.hitMath.raw,
+      afterPaF:m.hitMath.afterPaF,
+      paBonus:m.hitMath.paBonus,
+      beforeClamp:m.hitMath.beforeClamp,
+      final:m.hitMath.final
+    }:null,
+    pitSupDetail:m.pitSupDetail?{
+      grade:m.pitSupDetail.grade,
+      ip:m.pitSupDetail.ip,
+      sampleW:m.pitSupDetail.sampleW,
+      raw:m.pitSupDetail.raw,
+      inputs:m.pitSupDetail.inputs,
+      components:m.pitSupDetail.components
+    }:null,
     hrComps:Array.isArray(m.hrGrade?.components)?m.hrGrade.components.map(c=>({
       l:c.label,
       s:c.scaled==null?null:Math.round(c.scaled),
@@ -1778,6 +1799,18 @@ function logBatterGrade(date,m){
     rawGrade:m.hitGrade?.grade==null?null:Math.round(m.hitGrade.grade*10)/10,
     sampleW:m.hitGrade?.sampleW??null
   };
+  // FULL MATH AUDIT — every input that feeds the final grade. This is the data we use
+  // to explain "why did this grade change?" when stats look identical.
+  const math=m.hitMath?{...m.hitMath}:null;
+  const pitSup=m.pitSupDetail?{
+    grade:m.pitSupDetail.grade,
+    ip:m.pitSupDetail.ip,
+    sampleW:m.pitSupDetail.sampleW,
+    inputs:m.pitSupDetail.inputs,
+    components:Array.isArray(m.pitSupDetail.components)?m.pitSupDetail.components.map(c=>({
+      l:c.l,s:c.scaled,w:c.weight,v:c.raw==null?null:Math.round(c.raw*1000)/1000
+    })):null
+  }:null;
   
   arr.push({
     ts:Date.now(),
@@ -1792,7 +1825,9 @@ function logBatterGrade(date,m){
     opp:m.opp?.abbr||m.opp?.name||'',
     name:m.batterName,
     stats,
-    extra
+    extra,
+    math,        // full combine math (batterG, pitcherG, paFactor, raw, beforeClamp, final)
+    pitSup       // full pitcher hit-suppression breakdown (inputs, components, grade)
   });
 }
 
@@ -4514,11 +4549,13 @@ function buildAllMatchups(){
       const hitGObj=batterHitGrade(p,pHand);
       const hrGObj=batterHRGrade(p,pHand,park,wx,venue);
       const tbGObj=batterTBGrade(p,pHand,park,wx,venue);
-      const pitG=pitcherHitSuppressG(sp,b.bats);
+      const pitSupDetail=pitcherHitSuppressG(sp,b.bats,true);
+      const pitG=pitSupDetail?.grade??pitSupDetail??50;
       const pitHRSupG=pitcherHRSuppressG(sp,b.bats);
       const pitKProneG=pitcherKGenG(sp,b.bats);
       
-      const hitScore=combineMatchup(hitGObj?.grade,pitG,b.order);
+      const hitMath=combineMatchup(hitGObj?.grade,pitG,b.order,true);
+      const hitScore=hitMath?.final??null;
       const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
@@ -4534,7 +4571,7 @@ function buildAllMatchups(){
         verified:!!(g.hLineupConfirmed&&!b.unconfirmed&&g.aSP?.id),
         pitcherId:g.aSP?.id,pitcherName:g.aSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
-        pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
+        pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,hitMath,pitSupDetail,
         hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,batterKScore,batterExpectedK:batterExpectedKVal,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
@@ -4549,11 +4586,13 @@ function buildAllMatchups(){
       const hitGObj=batterHitGrade(p,pHand);
       const hrGObj=batterHRGrade(p,pHand,park,wx,venue);
       const tbGObj=batterTBGrade(p,pHand,park,wx,venue);
-      const pitG=pitcherHitSuppressG(sp,b.bats);
+      const pitSupDetail=pitcherHitSuppressG(sp,b.bats,true);
+      const pitG=pitSupDetail?.grade??pitSupDetail??50;
       const pitHRSupG=pitcherHRSuppressG(sp,b.bats);
       const pitKProneG=pitcherKGenG(sp,b.bats);
       
-      const hitScore=combineMatchup(hitGObj?.grade,pitG,b.order);
+      const hitMath=combineMatchup(hitGObj?.grade,pitG,b.order,true);
+      const hitScore=hitMath?.final??null;
       const hrScore=combineMatchup(hrGObj?.grade,pitHRSupG,b.order);
       const tbScore=combineMatchup(tbGObj?.grade,(pitG*0.6+pitHRSupG*0.4),b.order);
       const expectedTB=batterExpectedTB(p,pHand,b.bats,b.order,park,wx,venue);
@@ -4569,7 +4608,7 @@ function buildAllMatchups(){
         verified:!!(g.aLineupConfirmed&&!b.unconfirmed&&g.hSP?.id),
         pitcherId:g.hSP?.id,pitcherName:g.hSP?.name||'TBD',pHand,
         hitGrade:hitGObj,hrGrade:hrGObj,tbGrade:tbGObj,
-        pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,
+        pitHitSup:pitG,pitHRSup:pitHRSupG,pitKGen:pitKProneG,hitMath,pitSupDetail,
         hitScore,hrScore,tbScore,expectedTB,expectedBB,bbScore,batterKScore,batterExpectedK:batterExpectedKVal,
         partial:(p.prev?.isPrevSeason?(!p.prev.overall.pa||p.prev.overall.pa<Q.bPA):(!p.overall.pa||p.overall.pa<Q.bPA))
       });
@@ -4767,8 +4806,11 @@ function gameHRExpectation(g){
 }
 
 // Pitcher "hittability" grade (0-100, higher = harder to hit against = worse for batter)
-function pitcherHitSuppressG(pitcher,bHand){
-  if(!pitcher||!pitcher.overall.ip)return 50;
+function pitcherHitSuppressG(pitcher,bHand,returnDetail){
+  if(!pitcher||!pitcher.overall.ip){
+    if(returnDetail)return {grade:50,reason:'no pitcher data',ip:0};
+    return 50;
+  }
   const L=STATE.leagueAvg;
   const ov=pitcher.prev?.isPrevSeason?pitcher.prev.overall:pitcher.overall;
   const sp=pitcherSplit(pitcher,bHand);
@@ -4780,7 +4822,7 @@ function pitcherHitSuppressG(pitcher,bHand){
   const kr=blendStat(sp,ov,'k_rate',150)??ov.k_rate;
   
   // Higher = tougher
-  const c1=100-scale(xBA,L.p_xBA,L.p_xBA*1.22); // lower xBA = tougher
+  const c1=100-scale(xBA,L.p_xBA,L.p_xBA*1.22);
   const c2=100-scale(avg,L.p_xBA,L.p_xBA*1.22);
   const c3=100-scale(xwOBA,L.p_xwOBA,L.p_xwOBA*1.22);
   const c4=whip!=null?100-scale(whip,L.p_whip,L.p_whip*1.3):50;
@@ -4789,7 +4831,30 @@ function pitcherHitSuppressG(pitcher,bHand){
   const ip=ov.ip||0;
   const sampleW=clamp(ip/50,0.4,1);
   const raw=c1*0.30+c2*0.15+c3*0.25+c4*0.15+c5*0.15;
-  return Math.round((50+(raw-50)*sampleW)*10)/10;
+  const final=Math.round((50+(raw-50)*sampleW)*10)/10;
+  if(returnDetail){
+    return {
+      grade:final,
+      ip,
+      sampleW:Math.round(sampleW*1000)/1000,
+      raw:Math.round(raw*1000)/1000,
+      inputs:{
+        xBA:xBA==null?null:Math.round(xBA*1000)/1000,
+        avg:avg==null?null:Math.round(avg*1000)/1000,
+        xwOBA:xwOBA==null?null:Math.round(xwOBA*1000)/1000,
+        whip:whip==null?null:Math.round(whip*100)/100,
+        k_rate:kr==null?null:Math.round(kr*1000)/1000
+      },
+      components:[
+        {l:'xBA-against',raw:xBA,scaled:Math.round(c1),weight:0.30},
+        {l:'AVG-against',raw:avg,scaled:Math.round(c2),weight:0.15},
+        {l:'xwOBA-against',raw:xwOBA,scaled:Math.round(c3),weight:0.25},
+        {l:'WHIP',raw:whip,scaled:Math.round(c4),weight:0.15},
+        {l:'K-rate',raw:kr,scaled:Math.round(c5),weight:0.15}
+      ]
+    };
+  }
+  return final;
 }
 function pitcherHRSuppressG(pitcher,bHand){
   if(!pitcher||!pitcher.overall.ip)return 50;
@@ -4833,12 +4898,30 @@ function pitcherKGenG(pitcher,bHand){
 
 // Combine batter grade (higher=good for batter) with pitcher grade (higher=tougher)
 // Final score 0-100 where higher = better bet FOR THE BATTER to succeed
-function combineMatchup(batterG,pitcherG,order){
-  if(batterG==null)return null;
+// Combines batter grade with pitcher suppression and order-weighted PA factor.
+// Returns either a number (legacy callers) or, with returnDetail=true, the full math.
+function combineMatchup(batterG,pitcherG,order,returnDetail){
+  if(batterG==null)return returnDetail?null:null;
   const pG=pitcherG??50;
   const paF=paFactor(order);
   const raw=50+(batterG-pG)/2;
-  return Math.round(clamp(raw*paF/1.04+(paF-1)*10,0,100)*10)/10;
+  const beforeClamp=raw*paF/1.04+(paF-1)*10;
+  const final=Math.round(clamp(beforeClamp,0,100)*10)/10;
+  if(returnDetail){
+    return {
+      final,
+      batterG:Math.round(batterG*1000)/1000,
+      pitcherG:Math.round(pG*1000)/1000,
+      order,
+      paFactor:Math.round(paF*1000)/1000,
+      diff:Math.round((batterG-pG)*1000)/1000,
+      raw:Math.round(raw*1000)/1000,
+      afterPaF:Math.round((raw*paF/1.04)*1000)/1000,
+      paBonus:Math.round((paF-1)*10*1000)/1000,
+      beforeClamp:Math.round(beforeClamp*1000)/1000
+    };
+  }
+  return final;
 }
 
 // Rating from score
@@ -9162,6 +9245,71 @@ function renderGradeHistory(batterId){
     }
     const statBlock=statRows?`<details style="margin-top:4px"><summary style="font-size:.55rem;color:var(--ac);cursor:pointer">stats behind this grade</summary><div style="font-size:.55rem;margin-top:4px;padding-left:4px">${statRows}</div></details>`:'';
     
+    // FULL MATH AUDIT — every input feeding the final grade.
+    let mathBlock='';
+    if(e.math){
+      const m=e.math;
+      const prevM=prev&&prev.math?prev.math:null;
+      const cell=(label,val,prevVal,fmt)=>{
+        const f=v=>v==null?'—':(fmt==='int'?String(v):(typeof v==='number'?v.toFixed(fmt==='2'?2:3).replace(/^-?0\.000$/,'0.000'):String(v)));
+        const changed=prevM&&prevVal!=null&&val!=null&&Math.abs(prevVal-val)>0.0001;
+        const col=changed?'var(--gd)':'var(--tx)';
+        const arrow=changed?` <span style="color:var(--gd)">(was ${f(prevVal)})</span>`:'';
+        return `<div style="display:flex;justify-content:space-between;gap:8px;padding:1px 0">
+          <span style="color:var(--mt2)">${label}</span>
+          <span style="color:${col};font-weight:${changed?'700':'400'}">${f(val)}${arrow}</span>
+        </div>`;
+      };
+      mathBlock=`<details style="margin-top:4px"><summary style="font-size:.55rem;color:var(--ac);cursor:pointer">grade math (audit trail)</summary><div style="font-size:.55rem;margin-top:4px;padding-left:4px">
+        ${cell('Batter raw grade',m.batterG,prevM?.batterG,'2')}
+        ${cell('Pitcher suppression',m.pitcherG,prevM?.pitcherG,'2')}
+        ${cell('Diff (batter − pitcher)',m.diff,prevM?.diff,'2')}
+        ${cell('Order',m.order,prevM?.order,'int')}
+        ${cell('PA factor (order weight)',m.paFactor,prevM?.paFactor,'3')}
+        ${cell('Raw = 50 + diff/2',m.raw,prevM?.raw,'2')}
+        ${cell('After PA factor / 1.04',m.afterPaF,prevM?.afterPaF,'2')}
+        ${cell('PA bonus (paF−1)×10',m.paBonus,prevM?.paBonus,'2')}
+        ${cell('Before clamp',m.beforeClamp,prevM?.beforeClamp,'2')}
+        ${cell('Final',m.final,prevM?.final,'1')}
+      </div></details>`;
+    }
+    
+    // Pitcher suppression breakdown
+    let pitBlock='';
+    if(e.pitSup){
+      const ps=e.pitSup;
+      const prevPS=prev&&prev.pitSup?prev.pitSup:null;
+      const compRows=(ps.components||[]).map(c=>{
+        const prevC=prevPS&&prevPS.components?prevPS.components.find(x=>x.l===c.l):null;
+        const changed=prevC&&Math.abs((prevC.v??0)-(c.v??0))>0.0001;
+        const col=changed?'var(--gd)':'var(--tx)';
+        const arrow=changed?` <span style="color:var(--gd)">(was ${prevC.v==null?'—':prevC.v})</span>`:'';
+        return `<div style="display:flex;justify-content:space-between;gap:8px;padding:1px 0">
+          <span style="color:var(--mt2)">${c.l} (w=${(c.w*100).toFixed(0)}%)</span>
+          <span style="color:${col};font-weight:${changed?'700':'400'}">${c.v??'—'} → ${c.s}${arrow}</span>
+        </div>`;
+      }).join('');
+      pitBlock=`<details style="margin-top:4px"><summary style="font-size:.55rem;color:var(--ac);cursor:pointer">pitcher suppression breakdown (vs this batter)</summary><div style="font-size:.55rem;margin-top:4px;padding-left:4px">
+        <div style="color:var(--mt2);margin-bottom:3px">IP ${ps.ip||0} · sample weight ${ps.sampleW??1}</div>
+        ${compRows}
+      </div></details>`;
+    }
+    
+    // Determinism check: if this grade differs from the previous one, did ANY input
+    // actually change? If not, flag it loudly because the model should be deterministic.
+    let determinismFlag='';
+    if(prev){
+      const statsSame=Array.isArray(e.stats)&&Array.isArray(prev.stats)&&e.stats.every((c,i)=>{
+        const pc=prev.stats[i];return pc&&pc.l===c.l&&pc.v===c.v;
+      });
+      const mathInputsSame=e.math&&prev.math&&Math.abs(e.math.batterG-prev.math.batterG)<0.001&&
+        Math.abs(e.math.pitcherG-prev.math.pitcherG)<0.001&&e.math.order===prev.math.order;
+      const gradesDiffer=Math.abs(e.grade-prev.grade)>0.01;
+      if(gradesDiffer&&statsSame&&mathInputsSame){
+        determinismFlag=`<div style="color:var(--rd);background:rgba(255,0,0,.08);padding:4px 6px;border-radius:4px;font-size:.55rem;margin-top:4px;font-weight:700">⚠ Identical inputs but different grade — possible bug. Send this log to Claude.</div>`;
+      }
+    }
+    
     return `<div style="padding:7px 0;border-bottom:1px solid var(--bdr)">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <span style="color:var(--mt2);font-size:.58rem">${t}</span>
@@ -9171,7 +9319,10 @@ function renderGradeHistory(batterId){
         ${e.verified?'<span style="color:var(--gn)">✓ verified</span>':'<span style="color:var(--gd)">⚠ unverified</span>'} · order #${e.order??'?'} · vs ${e.pHand}HP ${e.pitcher}
       </div>
       ${changeStr}
+      ${determinismFlag}
       ${statBlock}
+      ${pitBlock}
+      ${mathBlock}
     </div>`;
   }).join('');
   
