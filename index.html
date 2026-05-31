@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.60 · Prop Intelligence</title>
+<title>Diamond IQ v6.61 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.60 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.61 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -891,7 +891,17 @@ function predSnapshot(){
     highK:m.highK,
     expectedBB:m.expectedBB,
     bbGrade:m.bbGrade,
-    verified:!!m.verified
+    verified:!!m.verified,
+    // Pitcher K calibration metadata — captured for adaptive learning audit
+    pitcherKMeta:m.expectedK!=null?{
+      lineupL:m.lineupL??null,
+      lineupR:m.lineupR??null,
+      lineupSide:m.lineupL!=null&&m.lineupR!=null?(m.lineupL>=m.lineupR?'L':'R'):null,
+      preCalibratedK:m.preCalibratedK??null,
+      calibrationFactor:m.calibrationFactor??1,
+      bucketMult:m.bucketMult??1,
+      handMult:m.handMult??1
+    }:null
   }));
   const totals=(STATE.totals||[]).filter(t=>t.total!=null).map(t=>{
     const g=t.game;
@@ -1187,6 +1197,19 @@ const LEARN_CATEGORIES={
     // TB "hit" = got 2+ total bases (typical TB1.5 line). May refine later.
     outcome:(b,r)=>r?(r.tb>=2?true:(r.ab>0||r.pa>0?false:null)):null,
     kind:'batter'
+  },
+  pitcherK:{
+    label:'Pitcher Strikeouts',
+    propKey:'k',
+    kind:'pitcher_regression',   // continuous prediction, not binary
+    gradeField:'kGrade',         // 0-100 grade (for threshold)
+    predictedField:'xK',         // predicted K count
+    actualField:'actualKs',      // actual K count from boxscore
+    defaultThreshold:75,
+    defaultTarget:75,            // % within ±1 K (matches FC view tolerance)
+    // For regression, no per-component weights — just a single calibration multiplier
+    // bounded ±15% per run.
+    calibrationDefault:1.0
   }
 };
 
@@ -1198,25 +1221,43 @@ let HR_WEIGHTS={...HR_WEIGHTS_DEFAULT};
 const TB_WEIGHTS_DEFAULT={...LEARN_CATEGORIES.tb.weightsDefault};
 let TB_WEIGHTS={...TB_WEIGHTS_DEFAULT};
 
+// Pitcher K — multi-dimensional adaptive calibration. Tunes 6 parameters from data:
+//   • 3 bucket multipliers (low <6, mid 6-8, high >8 predicted Ks)
+//   • 2 handedness multipliers (vs L-heavy and R-heavy lineups)
+//   • 1 recent-form blend weight
+// All bounded ±15% per run, blended 60% original / 40% data-driven, applied
+// multiplicatively to the final expectedK in pitcherKExpectation. Disabled = defaults.
+const K_PARAMS_DEFAULT={
+  bucketLow:1.0,      // <6 predicted Ks
+  bucketMid:1.0,      // 6-8 predicted Ks
+  bucketHigh:1.0,     // >8 predicted Ks
+  handL:1.0,          // vs left-handed-heavy lineup
+  handR:1.0,          // vs right-handed-heavy lineup
+  recentBlend:0.35    // 0-1, fraction of recent K-rate to blend in
+};
+let K_PARAMS={...K_PARAMS_DEFAULT};
+
 // Helper to read/write the active weights for a category id
 function getActiveWeights(catId){
   if(catId==='hits')return HIT_WEIGHTS;
   if(catId==='hr')return HR_WEIGHTS;
   if(catId==='tb')return TB_WEIGHTS;
+  if(catId==='pitcherK')return {...K_PARAMS};
   return null;
 }
 function setActiveWeights(catId,w){
   if(catId==='hits')HIT_WEIGHTS={...w};
   else if(catId==='hr')HR_WEIGHTS={...w};
   else if(catId==='tb')TB_WEIGHTS={...w};
+  else if(catId==='pitcherK')K_PARAMS={...K_PARAMS_DEFAULT,...w};
 }
 
 // ── ADAPTIVE LEARNING STATE ──
 const LEARN={
-  enabled:{hits:false,hr:false,tb:false},   // per-category toggle
-  targetHitRate:{hits:80,hr:25,tb:70},       // per-category target
-  lastRunTs:{hits:0,hr:0,tb:0},
-  log:{hits:[],hr:[],tb:[]},                 // per-category log
+  enabled:{hits:false,hr:false,tb:false,pitcherK:false},
+  targetHitRate:{hits:80,hr:25,tb:70,pitcherK:75},
+  lastRunTs:{hits:0,hr:0,tb:0,pitcherK:0},
+  log:{hits:[],hr:[],tb:[],pitcherK:[]},
   windowDays:60,
   _view:'detailed',
   _selectedCat:'hits'
@@ -1240,6 +1281,12 @@ function learnLoad(){
             setActiveWeights(catId,{...def,...d.weights[catId]});
           }
         });
+        // Pitcher K — regression params under weights.pitcherK
+        if(LEARN.enabled.pitcherK&&d.weights.pitcherK){
+          K_PARAMS={...K_PARAMS_DEFAULT,...d.weights.pitcherK};
+        }else if(!LEARN.enabled.pitcherK){
+          K_PARAMS={...K_PARAMS_DEFAULT};
+        }
       }
     }
     // v1 backward compat: migrate old { enabled:bool, log:[], targetHitRate:n, weights:{} }
@@ -1262,7 +1309,8 @@ function learnSave(){
     const weights={
       hits:LEARN.enabled.hits?HIT_WEIGHTS:null,
       hr:LEARN.enabled.hr?HR_WEIGHTS:null,
-      tb:LEARN.enabled.tb?TB_WEIGHTS:null
+      tb:LEARN.enabled.tb?TB_WEIGHTS:null,
+      pitcherK:LEARN.enabled.pitcherK?K_PARAMS:null
     };
     localStorage.setItem(LEARN_KEY,JSON.stringify({
       enabled:LEARN.enabled,targetHitRate:LEARN.targetHitRate,
@@ -1291,6 +1339,12 @@ async function pullLearnSettings(){
             if(LEARN.enabled[catId]&&d.weights[catId])setActiveWeights(catId,{...def,...d.weights[catId]});
             else if(!LEARN.enabled[catId])setActiveWeights(catId,{...def});
           });
+          // Pitcher K
+          if(LEARN.enabled.pitcherK&&d.weights.pitcherK){
+            K_PARAMS={...K_PARAMS_DEFAULT,...d.weights.pitcherK};
+          }else if(!LEARN.enabled.pitcherK){
+            K_PARAMS={...K_PARAMS_DEFAULT};
+          }
         }
       }else{
         // v1 flat shape — migrate
@@ -1310,7 +1364,8 @@ async function pushLearnSettings(){
     const weights={
       hits:LEARN.enabled.hits?HIT_WEIGHTS:null,
       hr:LEARN.enabled.hr?HR_WEIGHTS:null,
-      tb:LEARN.enabled.tb?TB_WEIGHTS:null
+      tb:LEARN.enabled.tb?TB_WEIGHTS:null,
+      pitcherK:LEARN.enabled.pitcherK?K_PARAMS:null
     };
     await FB.db.collection('app_settings').doc('learn').set(sanitizeForFirebase({
       enabled:LEARN.enabled,targetHitRate:LEARN.targetHitRate,
@@ -1323,8 +1378,12 @@ async function pushLearnSettings(){
 function toggleLearn(catId,on){
   LEARN.enabled[catId]=!!on;
   if(!on){
-    // Toggle off for this category = immediate revert to defaults for that category only
-    setActiveWeights(catId,{...LEARN_CATEGORIES[catId].weightsDefault});
+    // Toggle off = immediate revert to defaults for that category only
+    if(catId==='pitcherK'){
+      K_PARAMS={...K_PARAMS_DEFAULT};
+    }else{
+      setActiveWeights(catId,{...LEARN_CATEGORIES[catId].weightsDefault});
+    }
   }
   learnSave();
   pushLearnSettings();
@@ -1342,9 +1401,11 @@ async function applyRecommendedThreshold(catId){
   }
   const newT=latest.recommendedThreshold;
   const cat=LEARN_CATEGORIES[catId];
-  const curT=LOCKS[catId]??cat.defaultThreshold;
+  // pitcherK uses LOCKS.k, batter cats use LOCKS[catId]
+  const locksKey=catId==='pitcherK'?'k':catId;
+  const curT=LOCKS[locksKey]??cat.defaultThreshold;
   if(!confirm(`Apply suggested lock threshold for ${cat.label}?\n\nCurrent: ${curT}\nSuggested: ${newT}\n\nBased on ${LEARN.targetHitRate[catId]}% target rate over ${latest.samples} samples. This syncs to all league members.`))return;
-  LOCKS[catId]=newT;
+  LOCKS[locksKey]=newT;
   if(typeof pushSharedLocks==='function')pushSharedLocks();
   const status=document.getElementById('learn-status');
   if(status){status.style.color='var(--gn)';status.textContent=`✓ ${cat.label} lock threshold set to ${newT}`;}
@@ -1413,22 +1474,58 @@ function renderLearnLog(){
   
   const fmtW=v=>(v*100).toFixed(1)+'%';
   const fmtC=v=>(v>=0?'+':'')+v.toFixed(3);
+  const fmtMult=v=>v.toFixed(3);
   const rows=log.map((e,idx)=>{
     const dt=new Date(e.ts).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
-    const compKeys=Object.keys(e.newWeights);
+    const isRegression=e.kind==='pitcher_regression';
     
-    const weightRows=compKeys.map(k=>{
-      const oldW=e.oldWeights[k]||0,newW=e.newWeights[k]||0,corr=e.correlations[k]||0;
-      const delta=newW-oldW;
-      const noChange=Math.abs(delta)<0.0005;
-      const col=noChange?'var(--mt)':delta>0?'var(--gn)':'var(--rd)';
-      const arrow=noChange?'(no change)':`${fmtW(oldW)} → <strong style="color:${col}">${fmtW(newW)}</strong>`;
-      return `<div style="display:flex;justify-content:space-between;gap:6px;padding:1px 0;font-size:.55rem">
-        <span style="color:var(--mt2);min-width:90px">${k}</span>
-        <span style="color:var(--tx)">${arrow}</span>
-        <span style="color:var(--mt2);min-width:60px;text-align:right">corr ${fmtC(corr)}</span>
-      </div>`;
-    }).join('');
+    let weightRows='';
+    if(isRegression){
+      // Pitcher K params block: bucket multipliers, hand multipliers, recent blend
+      const paramKeys=['bucketLow','bucketMid','bucketHigh','handL','handR','recentBlend'];
+      const paramLabels={
+        bucketLow:'Low bucket (<6 xK)',bucketMid:'Mid bucket (6-8 xK)',bucketHigh:'High bucket (>8 xK)',
+        handL:'L-heavy lineup',handR:'R-heavy lineup',recentBlend:'Recent K% blend weight'
+      };
+      weightRows=paramKeys.map(k=>{
+        const oldV=e.oldParams?.[k]??1,newV=e.newParams?.[k]??1;
+        const delta=newV-oldV;
+        const noChange=Math.abs(delta)<0.001;
+        const col=noChange?'var(--mt)':delta>0?'var(--gn)':'var(--rd)';
+        const arrow=noChange?'(no change)':`${fmtMult(oldV)} → <strong style="color:${col}">${fmtMult(newV)}</strong>`;
+        // Show the bucket's measured ratio if relevant
+        let extra='';
+        if(k.startsWith('bucket')){
+          const bucketKey=k.replace('bucket','').toLowerCase();
+          const r=e.bucketResults?.[bucketKey];
+          if(r&&r.n>=10)extra=` <span style="color:var(--mt)">(n=${r.n}, actual/pred=${r.ratio.toFixed(2)})</span>`;
+          else if(r)extra=` <span style="color:var(--mt)">(n=${r.n}, too few)</span>`;
+        }else if(k.startsWith('hand')){
+          const handKey=k.slice(-1);
+          const r=e.handResults?.[handKey];
+          if(r&&r.n>=15)extra=` <span style="color:var(--mt)">(n=${r.n}, ratio=${r.ratio.toFixed(2)})</span>`;
+          else if(r)extra=` <span style="color:var(--mt)">(n=${r.n}, too few)</span>`;
+        }
+        return `<div style="display:flex;justify-content:space-between;gap:6px;padding:1px 0;font-size:.55rem">
+          <span style="color:var(--mt2);min-width:140px">${paramLabels[k]}</span>
+          <span style="color:var(--tx)">${arrow}${extra}</span>
+        </div>`;
+      }).join('');
+    }else{
+      const compKeys=Object.keys(e.newWeights||{});
+      weightRows=compKeys.map(k=>{
+        const oldW=e.oldWeights[k]||0,newW=e.newWeights[k]||0,corr=e.correlations[k]||0;
+        const delta=newW-oldW;
+        const noChange=Math.abs(delta)<0.0005;
+        const col=noChange?'var(--mt)':delta>0?'var(--gn)':'var(--rd)';
+        const arrow=noChange?'(no change)':`${fmtW(oldW)} → <strong style="color:${col}">${fmtW(newW)}</strong>`;
+        return `<div style="display:flex;justify-content:space-between;gap:6px;padding:1px 0;font-size:.55rem">
+          <span style="color:var(--mt2);min-width:90px">${k}</span>
+          <span style="color:var(--tx)">${arrow}</span>
+          <span style="color:var(--mt2);min-width:60px;text-align:right">corr ${fmtC(corr)}</span>
+        </div>`;
+      }).join('');
+    }
     
     let calibrationBlock='';
     if(Array.isArray(e.calibration)&&e.calibration.length){
@@ -1456,15 +1553,20 @@ function renderLearnLog(){
       recBlock=`<div style="color:var(--mt2);font-size:.55rem;margin-top:4px">No threshold reaches target ${e.targetHitRate}% with current data</div>`;
     }
     
+    const headerStats=isRegression?`<div style="font-size:.55rem;color:var(--mt2);margin-top:2px">
+        <span style="color:var(--ac)">Within ±1 K: ${e.withinOneRate}%</span> · Mean error: ${e.meanError>=0?'+':''}${e.meanError} · Overall ratio: ${e.overallRatio}
+        ${e.lockHitRate!=null?` · <span style="color:var(--ac)">Locks (≥${e.currentThreshold}) hit ${e.lockHitRate}% (n=${e.lockSamples})</span>`:''}
+      </div>`:`<div style="font-size:.55rem;color:var(--mt2);margin-top:2px">
+        <span title="Across ALL graded players who played — training data, not a performance metric">Base rate (all graded): ${e.prevHitRate}%</span>
+        ${e.lockHitRate!=null?` · <span style="color:var(--ac)">Locks (≥${e.currentThreshold}) hit ${e.lockHitRate}% (n=${e.lockSamples})</span>`:''}
+      </div>`;
+    
     return `<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:8px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;font-size:.58rem">
         <span style="color:var(--ac);font-weight:600">${dt}</span>
         <span style="color:var(--mt2)">${e.trigger} · ${e.samples} samples · ${e.windowDays||14}d</span>
       </div>
-      <div style="font-size:.55rem;color:var(--mt2);margin-top:2px">
-        <span title="Across ALL graded players who played — training data, not a performance metric">Base rate (all graded): ${e.prevHitRate}%</span>
-        ${e.lockHitRate!=null?` · <span style="color:var(--ac)">Locks (≥${e.currentThreshold}) hit ${e.lockHitRate}% (n=${e.lockSamples})</span>`:''}
-      </div>
+      ${headerStats}
       <div style="margin-top:5px">${weightRows}</div>
       ${calibrationBlock}
       ${recBlock}
@@ -1479,11 +1581,16 @@ function renderWeightTimeline(catId){
   const log=LEARN.log[catId]||[];
   if(!log.length)return '<div style="color:var(--mt)">No runs yet.</div>';
   const cat=LEARN_CATEGORIES[catId];
-  const compKeys=Object.keys(cat.weightsDefault);
-  // Reverse the log so oldest is first (so we can read top-down chronologically)
+  const isRegression=cat.kind==='pitcher_regression';
+  // For regression categories the keys come from K_PARAMS_DEFAULT, not weightsDefault
+  const defaults=isRegression?K_PARAMS_DEFAULT:cat.weightsDefault;
+  const compKeys=Object.keys(defaults);
+  // Reverse the log so oldest is first
   const runsChrono=[...log].reverse();
   
-  const fmtW=v=>(v*100).toFixed(1)+'%';
+  // For regression, params are raw multipliers (0.85 - 1.15 range, default 1.0).
+  // For binary categories, weights are percentages (0-1, summed to 1.0).
+  const fmtW=isRegression?(v=>v.toFixed(3)):(v=>(v*100).toFixed(1)+'%');
   
   // Header
   const headCells=compKeys.map(k=>`<th style="font-size:.5rem;padding:3px 4px;color:var(--gd);text-align:right">${k}</th>`).join('');
@@ -1493,7 +1600,6 @@ function renderWeightTimeline(catId){
     ${headCells}
   </tr></thead>`;
   
-  const defaults=cat.weightsDefault;
   const active=getActiveWeights(catId);
   const defRow=`<tr style="border-bottom:1px solid var(--gd)">
     <td style="font-size:.55rem;padding:3px 4px;color:var(--gd)"><strong>Defaults</strong></td>
@@ -1504,9 +1610,11 @@ function renderWeightTimeline(catId){
   const rows=runsChrono.map((e,i)=>{
     const dt=new Date(e.ts).toLocaleDateString([],{month:'short',day:'numeric'});
     const time=new Date(e.ts).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+    const newSrc=isRegression?(e.newParams||{}):(e.newWeights||{});
+    const oldSrc=isRegression?(e.oldParams||{}):(e.oldWeights||{});
     const cells=compKeys.map(k=>{
-      const newW=e.newWeights[k]||0;
-      const oldW=e.oldWeights[k]||0;
+      const newW=newSrc[k]??(isRegression?1:0);
+      const oldW=oldSrc[k]??(isRegression?1:0);
       const d=newW-oldW;
       let arrow='';
       if(Math.abs(d)>=0.0005){
@@ -1579,10 +1687,198 @@ function collectLearningSamples(catId){
 }
 
 // Run adaptive learning for one category.
+// Collect verified pitcher K predictions joined with actual K outcomes from boxscores.
+// Each sample carries: predicted K, actual K, pitcher hand, lineup mix (L/R counts), grade.
+function collectPitcherKSamples(){
+  const samples=[];
+  const dates=Object.keys(PRED.byDate||{}).filter(d=>HISTORY.byDate[d]).sort().reverse().slice(0,LEARN.windowDays);
+  let skipNoPred=0,skipNoOutcome=0,skipUnverified=0,skipNoActualK=0;
+  dates.forEach(date=>{
+    const pred=PRED.byDate[date];
+    const hist=HISTORY.byDate[date];
+    if(!pred?.pitchers||!hist?.pitchers)return;
+    const outcomes=hist.pitchers;
+    pred.pitchers.forEach(p=>{
+      if(p.verified===false){skipUnverified++;return;}
+      if(p.xK==null||p.grade==null){skipNoPred++;return;}
+      const r=outcomes[String(p.id)]||outcomes[p.id];
+      if(!r){skipNoOutcome++;return;}
+      if(r.k==null){skipNoActualK++;return;}
+      samples.push({
+        predicted:p.xK,
+        actual:r.k,
+        grade:p.grade,
+        // We don't have lineup mix saved per-pitcher in snapshot — we'd need to capture it
+        // going forward. For now bucket-only learning works; handedness needs the
+        // pitcherKMeta field which we'll start writing in this version.
+        bucket:p.xK<6?'low':p.xK<=8?'mid':'high',
+        // pitcherKMeta written by future snapshots — fall back gracefully
+        lineupSide:p.pitcherKMeta?.lineupSide||null,
+        oppHand:p.pHand||'R'
+      });
+    });
+  });
+  collectPitcherKSamples._debug={dates:dates.length,skipNoPred,skipNoOutcome,skipUnverified,skipNoActualK,kept:samples.length};
+  return samples;
+}
+
+// Regression-based adaptive learning for pitcher K's. Tunes 6 parameters:
+//  - 3 bucket multipliers (low/mid/high predicted K) corrected by mean residual ratio
+//  - 2 handedness multipliers (L-heavy vs R-heavy lineups), using lineupSide if available
+//  - 1 recent-form blend weight — tuned by which value would have minimized MAE
+//
+// Each multiplier corrected so that on past samples in its bucket, mean(actual)/mean(predicted) → 1.
+// Bounded ±15% per run, blended 60% original / 40% data-driven, applied multiplicatively.
+async function runPitcherKLearning(catId,opts){
+  opts=opts||{};
+  const cat=LEARN_CATEGORIES[catId];
+  const prog=opts.onProgress||(()=>{});
+  prog(`[${cat.label}] Collecting samples…`);
+  const samples=collectPitcherKSamples();
+  if(samples.length<30){
+    const dbg=collectPitcherKSamples._debug||{};
+    const detail=` (scanned ${dbg.dates||0} days · skipped: ${dbg.skipNoPred||0} no prediction, ${dbg.skipNoOutcome||0} no outcome, ${dbg.skipUnverified||0} unverified, ${dbg.skipNoActualK||0} no actual K)`;
+    return {ok:false,reason:`[${cat.label}] Not enough samples (${samples.length}). Need 30.${detail}`};
+  }
+  prog(`[${cat.label}] Computing bias per bucket (${samples.length} samples)…`);
+  
+  // Per-bucket calibration: ratio of mean(actual)/mean(predicted) for each bucket
+  const buckets={low:[],mid:[],high:[]};
+  samples.forEach(s=>buckets[s.bucket].push(s));
+  const bucketResults={};
+  ['low','mid','high'].forEach(b=>{
+    const arr=buckets[b];
+    if(arr.length<10){
+      bucketResults[b]={ratio:1.0,n:arr.length,meanPred:null,meanActual:null,bias:null};
+      return;
+    }
+    const sumPred=arr.reduce((s,x)=>s+x.predicted,0);
+    const sumAct=arr.reduce((s,x)=>s+x.actual,0);
+    const meanPred=sumPred/arr.length;
+    const meanActual=sumAct/arr.length;
+    const ratio=sumPred>0?sumAct/sumPred:1.0;
+    const bias=meanActual-meanPred;
+    bucketResults[b]={ratio,n:arr.length,meanPred:Math.round(meanPred*100)/100,meanActual:Math.round(meanActual*100)/100,bias:Math.round(bias*100)/100};
+  });
+  
+  // Handedness calibration — only learnable if we have lineupSide data
+  const handBuckets={L:[],R:[]};
+  samples.forEach(s=>{if(s.lineupSide==='L'||s.lineupSide==='R')handBuckets[s.lineupSide].push(s);});
+  const handResults={};
+  ['L','R'].forEach(h=>{
+    const arr=handBuckets[h];
+    if(arr.length<15){
+      handResults[h]={ratio:1.0,n:arr.length};
+      return;
+    }
+    const sumPred=arr.reduce((s,x)=>s+x.predicted,0);
+    const sumAct=arr.reduce((s,x)=>s+x.actual,0);
+    handResults[h]={ratio:sumPred>0?sumAct/sumPred:1.0,n:arr.length};
+  });
+  
+  // Recent-form blend: grid search over candidate values to find the one that
+  // minimizes mean absolute error on the sample set. We can't directly re-evaluate
+  // past predictions with a different blend (would need to re-run the model), but
+  // we can use bias direction as a proxy: if model systematically over-predicts and
+  // recent K rate < season K rate on average, lowering the blend helps (less weight
+  // on recent which is dragging things up). If under-predicts and recent > season,
+  // raising blend helps. This is a heuristic adjustment, not a true grid search.
+  // We move the blend by a small step in the direction the bias signals.
+  const overallSumPred=samples.reduce((s,x)=>s+x.predicted,0);
+  const overallSumAct=samples.reduce((s,x)=>s+x.actual,0);
+  const overallRatio=overallSumPred>0?overallSumAct/overallSumPred:1.0;
+  const currentBlend=K_PARAMS.recentBlend;
+  let candidateBlend=currentBlend;
+  // If over-predicting overall (ratio<1), reduce blend slightly; under-predicting, increase
+  if(overallRatio<0.97)candidateBlend=Math.max(0.10,currentBlend-0.05);
+  else if(overallRatio>1.03)candidateBlend=Math.min(0.60,currentBlend+0.05);
+  
+  // Build raw data-driven multipliers, then blend 60/40 with defaults, then cap ±15%, then store.
+  const buildMult=(dataRatio,currentVal,defaultVal)=>{
+    if(dataRatio==null||isNaN(dataRatio))return currentVal;
+    // 60% default + 40% data-driven
+    const blended=0.6*defaultVal+0.4*dataRatio;
+    // Cap ±15% from current
+    const capped=Math.min(currentVal*1.15,Math.max(currentVal*0.85,blended));
+    return Math.round(capped*1000)/1000;
+  };
+  
+  const newParams={
+    bucketLow:buildMult(bucketResults.low.ratio,K_PARAMS.bucketLow,K_PARAMS_DEFAULT.bucketLow),
+    bucketMid:buildMult(bucketResults.mid.ratio,K_PARAMS.bucketMid,K_PARAMS_DEFAULT.bucketMid),
+    bucketHigh:buildMult(bucketResults.high.ratio,K_PARAMS.bucketHigh,K_PARAMS_DEFAULT.bucketHigh),
+    handL:buildMult(handResults.L.ratio,K_PARAMS.handL,K_PARAMS_DEFAULT.handL),
+    handR:buildMult(handResults.R.ratio,K_PARAMS.handR,K_PARAMS_DEFAULT.handR),
+    recentBlend:Math.round(candidateBlend*1000)/1000
+  };
+  
+  // Compute accuracy metrics for the log
+  const errors=samples.map(s=>s.actual-s.predicted);
+  const meanError=errors.reduce((s,e)=>s+e,0)/errors.length;
+  const meanAbsError=errors.reduce((s,e)=>s+Math.abs(e),0)/errors.length;
+  const withinOne=samples.filter(s=>Math.abs(s.actual-s.predicted)<=1).length;
+  const withinOneRate=Math.round((withinOne/samples.length)*1000)/10;
+  
+  // Calibration table by grade tier (existing helper works on samples with grade)
+  const calibSamples=samples.map(s=>({grade:s.grade,gotHit:Math.abs(s.actual-s.predicted)<=1}));
+  const calibration=buildCalibration(calibSamples);
+  const targetRate=LEARN.targetHitRate[catId]||cat.defaultTarget;
+  const recommendedThreshold=recommendThreshold(calibSamples,targetRate);
+  const currentThreshold=LOCKS.k??cat.defaultThreshold;
+  const lockSamples=calibSamples.filter(s=>s.grade>=currentThreshold);
+  const lockHits=lockSamples.filter(s=>s.gotHit).length;
+  const lockHitRate=lockSamples.length?Math.round((lockHits/lockSamples.length)*1000)/10:null;
+  
+  const entry={
+    ts:Date.now(),
+    catId,
+    samples:samples.length,
+    oldParams:{...K_PARAMS},
+    newParams,
+    bucketResults,
+    handResults,
+    overallRatio:Math.round(overallRatio*1000)/1000,
+    meanError:Math.round(meanError*100)/100,
+    meanAbsError:Math.round(meanAbsError*100)/100,
+    withinOneRate,
+    trigger:opts.trigger||'manual',
+    windowDays:LEARN.windowDays,
+    calibration,
+    recommendedThreshold,
+    targetHitRate:targetRate,
+    currentThreshold,
+    lockHitRate,
+    lockSamples:lockSamples.length,
+    kind:'pitcher_regression'
+  };
+  setActiveWeights(catId,newParams);
+  LEARN.lastRunTs[catId]=entry.ts;
+  LEARN.log[catId]=LEARN.log[catId]||[];
+  LEARN.log[catId].unshift(entry);
+  if(LEARN.log[catId].length>20)LEARN.log[catId]=LEARN.log[catId].slice(0,20);
+  learnSave();
+  prog(`[${cat.label}] Saving to Firebase…`);
+  try{
+    await Promise.race([
+      pushLearnSettings(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('Firebase push timed out (15s)')),15000))
+    ]);
+  }catch(e){
+    console.warn('[DIQ-LEARN]',e.message);
+    prog(`[${cat.label}] ⚠ Saved locally (Firebase slow)`);
+  }
+  prog(`[${cat.label}] Done`);
+  return {ok:true,entry};
+}
+
 async function runAdaptiveLearning(catId,opts){
   opts=opts||{};
   const cat=LEARN_CATEGORIES[catId];
   if(!cat)return {ok:false,reason:`Unknown category: ${catId}`};
+  // Dispatch by kind: binary correlation (batter props) vs regression (pitcherK)
+  if(cat.kind==='pitcher_regression'){
+    return runPitcherKLearning(catId,opts);
+  }
   const prog=opts.onProgress||(()=>{});
   prog(`[${cat.label}] Collecting samples…`);
   const samples=collectLearningSamples(catId);
@@ -4316,20 +4612,19 @@ function pitcherKExpectation(pitcher,oppLineup,pHand,park,wx){
   const rec=pitcher.recent||{};
   
   // ── 1. RECENT FORM BLEND ──────────────────────────────────────────────
-  // Recent K% gets 35% weight when we have ≥3 starts and ≥10 IP
+  // Recent K% gets K_PARAMS.recentBlend weight (default 35%, learnable). Requires
+  // ≥3 starts and ≥10 IP to be meaningful.
+  const recentBlendW=K_PARAMS.recentBlend;
   let effectiveKRate=ov.k_rate;
   let recentKRate=null,recentBlendUsed=0;
   if(rec.g>=3&&rec.ip>=10&&rec.k!=null){
-    // K rate from recent = strikeouts / (IP × ~4.2 batters/inning approximation)
-    // More accurate: recent K / (IP × 4.2). But better still — use BF if we had it.
-    // Using IP as a proxy: 1 inning ≈ 4.3 PAs faced
     const recentBFEst=rec.ip*4.3;
     recentKRate=recentBFEst>0?rec.k/recentBFEst:null;
     if(recentKRate!=null){
       // Cap recent at +/- 35% from season K to limit volatility from a single dominant start
       const capped=clamp(recentKRate,ov.k_rate*0.65,ov.k_rate*1.50);
-      effectiveKRate=ov.k_rate*0.65+capped*0.35;
-      recentBlendUsed=0.35;
+      effectiveKRate=ov.k_rate*(1-recentBlendW)+capped*recentBlendW;
+      recentBlendUsed=recentBlendW;
     }
   }
   
@@ -4420,7 +4715,27 @@ function pitcherKExpectation(pitcher,oppLineup,pHand,park,wx){
     kComponentsForVariance.push(kForBatter);
   });
   
-  // ── 6. UNCERTAINTY RANGE ──────────────────────────────────────────────
+  // ── 7. ADAPTIVE CALIBRATION ───────────────────────────────────────────
+  // Multi-dimensional learned correction. Bucket by predicted-K range and lineup
+  // handedness mix. Each multiplier is tuned by adaptive learning from past
+  // (predicted, actual) pairs to correct systematic bias.
+  const preCalibrated=totalExpectedK;
+  // Bucket by predicted K count
+  const bucketMult=preCalibrated<6?K_PARAMS.bucketLow:preCalibrated<=8?K_PARAMS.bucketMid:K_PARAMS.bucketHigh;
+  // Handedness: count L/R batters in the opposing lineup, pick dominant side
+  let lCount=0,rCount=0;
+  oppLineup.forEach(b=>{
+    const bObj=STATE.players[b.id];
+    if(!bObj)return;
+    const bh=bObj.batHand||b.bats||'R';
+    if(bh==='L'||bh==='S')lCount++;else rCount++;
+  });
+  const handMult=lCount>=rCount?K_PARAMS.handL:K_PARAMS.handR;
+  // Apply both multiplicatively. Final calibration factor stored for the log.
+  const calibrationFactor=bucketMult*handMult;
+  totalExpectedK=preCalibrated*calibrationFactor;
+  
+  // ── 8. UNCERTAINTY RANGE (re-derived from calibrated total) ───────────
   // Standard deviation: per-PA Bernoulli σ = sqrt(p(1-p)). Sum of independent PAs
   // gives total σ ≈ sqrt(Σ p_i(1-p_i)). For ~24 PAs with mean K rate 0.24, σ ≈ 2.1 Ks.
   let varianceSum=0;
@@ -4455,7 +4770,14 @@ function pitcherKExpectation(pitcher,oppLineup,pHand,park,wx){
     oppOBP:Math.round(oppOBPAvg*1000)/1000,
     oppIPMult:Math.round(oppIPMult*100)/100,
     parkKMult:Math.round(parkKMult*100)/100,
-    parkK:park?.k||1.0
+    parkK:park?.k||1.0,
+    // Adaptive calibration metadata (for audit + the grade log)
+    preCalibratedK:Math.round(preCalibrated*10)/10,
+    calibrationFactor:Math.round(calibrationFactor*1000)/1000,
+    bucketMult:Math.round(bucketMult*1000)/1000,
+    handMult:Math.round(handMult*1000)/1000,
+    lineupL:lCount,
+    lineupR:rCount
   };
 }
 
@@ -4625,7 +4947,7 @@ function buildAllMatchups(){
           pitcherId:g.hSP.id,pitcherName:g.hSP.name,pHand:g.hSPHand||'R',
           oppLineup:g.aLineup,
           verified:!!(g.aLineupConfirmed&&g.hSP?.id),
-          expectedK:k.expectedK,expectedIP:k.expectedIP,kGrade:k.grade,
+          expectedK:k.expectedK,expectedIP:k.expectedIP,kGrade:k.grade,preCalibratedK:k.preCalibratedK,calibrationFactor:k.calibrationFactor,bucketMult:k.bucketMult,handMult:k.handMult,lineupL:k.lineupL,lineupR:k.lineupR,
           kRate:k.kRate,avgBaseline:k.avgBaseline,
           lowK:k.lowK,highK:k.highK,stdDev:k.stdDev,
           recentBlendUsed:k.recentBlendUsed,recentKRate:k.recentKRate,seasonKRate:k.seasonKRate,
@@ -4645,7 +4967,7 @@ function buildAllMatchups(){
           pitcherId:g.aSP.id,pitcherName:g.aSP.name,pHand:g.aSPHand||'R',
           oppLineup:g.hLineup,
           verified:!!(g.hLineupConfirmed&&g.aSP?.id),
-          expectedK:k.expectedK,expectedIP:k.expectedIP,kGrade:k.grade,
+          expectedK:k.expectedK,expectedIP:k.expectedIP,kGrade:k.grade,preCalibratedK:k.preCalibratedK,calibrationFactor:k.calibrationFactor,bucketMult:k.bucketMult,handMult:k.handMult,lineupL:k.lineupL,lineupR:k.lineupR,
           kRate:k.kRate,avgBaseline:k.avgBaseline,
           lowK:k.lowK,highK:k.highK,stdDev:k.stdDev,
           recentBlendUsed:k.recentBlendUsed,recentKRate:k.recentKRate,seasonKRate:k.seasonKRate,
