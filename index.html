@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.61 · Prop Intelligence</title>
+<title>Diamond IQ v6.62 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.61 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.62 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -1258,6 +1258,7 @@ const LEARN={
   targetHitRate:{hits:80,hr:25,tb:70,pitcherK:75},
   lastRunTs:{hits:0,hr:0,tb:0,pitcherK:0},
   log:{hits:[],hr:[],tb:[],pitcherK:[]},
+  archived:{hits:null,hr:null,tb:null,pitcherK:null}, // last learned weights preserved during pause
   windowDays:60,
   _view:'detailed',
   _selectedCat:'hits'
@@ -1273,6 +1274,9 @@ function learnLoad(){
       if(d.lastRunTs&&typeof d.lastRunTs==='object')Object.assign(LEARN.lastRunTs,d.lastRunTs);
       if(d.log&&typeof d.log==='object'){
         Object.keys(LEARN.log).forEach(k=>{if(Array.isArray(d.log[k]))LEARN.log[k]=d.log[k];});
+      }
+      if(d.archived&&typeof d.archived==='object'){
+        Object.keys(LEARN.archived).forEach(k=>{if(d.archived[k])LEARN.archived[k]=d.archived[k];});
       }
       if(d.weights){
         ['hits','hr','tb'].forEach(catId=>{
@@ -1314,7 +1318,8 @@ function learnSave(){
     };
     localStorage.setItem(LEARN_KEY,JSON.stringify({
       enabled:LEARN.enabled,targetHitRate:LEARN.targetHitRate,
-      lastRunTs:LEARN.lastRunTs,log:LEARN.log,weights
+      lastRunTs:LEARN.lastRunTs,log:LEARN.log,weights,
+      archived:LEARN.archived
     }));
   }catch(e){}
 }
@@ -1333,6 +1338,7 @@ async function pullLearnSettings(){
         Object.assign(LEARN.targetHitRate,d.targetHitRate||{});
         Object.assign(LEARN.lastRunTs,d.lastRunTs||{});
         if(d.log)Object.keys(LEARN.log).forEach(k=>{if(Array.isArray(d.log[k]))LEARN.log[k]=d.log[k];});
+        if(d.archived)Object.keys(LEARN.archived).forEach(k=>{if(d.archived[k])LEARN.archived[k]=d.archived[k];});
         if(d.weights){
           ['hits','hr','tb'].forEach(catId=>{
             const def=LEARN_CATEGORIES[catId].weightsDefault;
@@ -1370,25 +1376,107 @@ async function pushLearnSettings(){
     await FB.db.collection('app_settings').doc('learn').set(sanitizeForFirebase({
       enabled:LEARN.enabled,targetHitRate:LEARN.targetHitRate,
       lastRunTs:LEARN.lastRunTs,log:LEARN.log,weights,
+      archived:LEARN.archived,
       updatedAt:Date.now()
     }));
   }catch(e){console.warn('[DIQ] pushLearnSettings failed',e.message);}
 }
 
 function toggleLearn(catId,on){
-  LEARN.enabled[catId]=!!on;
-  if(!on){
-    // Toggle off = immediate revert to defaults for that category only
+  // Turning ON: restore archived weights if we have them (resume previous progress),
+  // otherwise just start fresh from current defaults.
+  if(on){
+    LEARN.enabled[catId]=true;
+    const archived=LEARN.archived[catId];
+    if(archived){
+      if(catId==='pitcherK')K_PARAMS={...K_PARAMS_DEFAULT,...archived};
+      else setActiveWeights(catId,{...LEARN_CATEGORIES[catId].weightsDefault,...archived});
+    }
+    learnSave();
+    pushLearnSettings();
+    const status=document.getElementById('learn-status');
+    if(status){
+      status.style.color='var(--gn)';
+      status.textContent=archived?`✓ ${LEARN_CATEGORIES[catId].label} learning resumed from archived weights`:`✓ ${LEARN_CATEGORIES[catId].label} learning enabled`;
+    }
+    return;
+  }
+  
+  // Turning OFF: show pause-vs-reset choice. The checkbox already flipped to unchecked
+  // visually; we'll re-check it if the user cancels.
+  const cat=LEARN_CATEGORIES[catId];
+  const checkbox=document.querySelector(`input[type="checkbox"][data-learn-toggle="${catId}"]`);
+  showPauseResetPrompt(catId,cat,checkbox);
+}
+
+// Modal asking whether to PAUSE (keep learned weights for later) or RESET (wipe everything).
+function showPauseResetPrompt(catId,cat,checkbox){
+  const existing=document.getElementById('learn-toggle-modal');
+  if(existing)existing.remove();
+  const hasLog=(LEARN.log[catId]||[]).length>0;
+  const modal=document.createElement('div');
+  modal.id='learn-toggle-modal';
+  modal.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);z-index:10000;display:flex;align-items:center;justify-content:center;padding:24px';
+  modal.innerHTML=`
+    <div style="background:var(--s1);border:1px solid var(--gd);border-radius:12px;padding:20px;max-width:380px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.5)">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.1rem;letter-spacing:1px;color:var(--gd);margin-bottom:10px">Turn off ${cat.label} learning</div>
+      <div style="font-size:.7rem;color:var(--tx);line-height:1.55;margin-bottom:14px">How do you want to handle the learned weights?</div>
+      <button class="btn bp" style="width:100%;font-size:.7rem;padding:11px;margin-bottom:8px;text-align:left" onclick="confirmLearnToggle('${catId}','pause')">
+        <div style="font-weight:700">⏸ Pause (keep progress)</div>
+        <div style="font-size:.55rem;color:var(--mt2);font-weight:400;margin-top:2px">Revert to defaults for now. Your learned weights are archived. Turning learning back on later restores them.</div>
+      </button>
+      <button class="btn bg" style="width:100%;font-size:.7rem;padding:11px;margin-bottom:8px;text-align:left;border-color:var(--rd);color:var(--rd)" onclick="confirmLearnToggle('${catId}','reset')">
+        <div style="font-weight:700">🗑 Reset (wipe progress)</div>
+        <div style="font-size:.55rem;color:var(--mt2);font-weight:400;margin-top:2px">Revert to defaults AND erase all learned weights${hasLog?` and ${LEARN.log[catId].length} log entries`:''}. Cannot be undone. Re-enabling starts fresh.</div>
+      </button>
+      <button class="btn bg" style="width:100%;font-size:.65rem;padding:8px" onclick="cancelLearnToggle('${catId}')">Cancel</button>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function confirmLearnToggle(catId,action){
+  const cat=LEARN_CATEGORIES[catId];
+  const modal=document.getElementById('learn-toggle-modal');
+  if(modal)modal.remove();
+  
+  if(action==='pause'){
+    // Archive current learned weights before reverting
     if(catId==='pitcherK'){
+      LEARN.archived[catId]={...K_PARAMS};
       K_PARAMS={...K_PARAMS_DEFAULT};
     }else{
-      setActiveWeights(catId,{...LEARN_CATEGORIES[catId].weightsDefault});
+      LEARN.archived[catId]={...getActiveWeights(catId)};
+      setActiveWeights(catId,{...cat.weightsDefault});
     }
+    LEARN.enabled[catId]=false;
+  }else if(action==='reset'){
+    // Wipe everything — archive, log, learned weights
+    LEARN.archived[catId]=null;
+    LEARN.log[catId]=[];
+    LEARN.lastRunTs[catId]=0;
+    if(catId==='pitcherK')K_PARAMS={...K_PARAMS_DEFAULT};
+    else setActiveWeights(catId,{...cat.weightsDefault});
+    LEARN.enabled[catId]=false;
   }
   learnSave();
   pushLearnSettings();
   const status=document.getElementById('learn-status');
-  if(status)status.textContent=on?`✓ ${LEARN_CATEGORIES[catId].label} learning enabled`:`↺ ${LEARN_CATEGORIES[catId].label} reverted to defaults`;
+  if(status){
+    status.style.color='var(--gn)';
+    status.textContent=action==='pause'
+      ?`⏸ ${cat.label} paused — weights archived for later`
+      :`🗑 ${cat.label} reset — all progress erased`;
+  }
+  // Re-render the learn log to reflect cleared state if "reset" was chosen
+  if(typeof renderLearnLog==='function')renderLearnLog();
+}
+
+function cancelLearnToggle(catId){
+  // User backed out — re-check the toggle so it reflects the still-enabled state
+  const modal=document.getElementById('learn-toggle-modal');
+  if(modal)modal.remove();
+  const checkbox=document.querySelector(`input[type="checkbox"][data-learn-toggle="${catId}"]`);
+  if(checkbox)checkbox.checked=true;
 }
 
 // Apply the recommended lock threshold from the most recent run of a category.
@@ -8699,7 +8787,7 @@ function renderSettings(){
             <div style="font-size:.7rem;color:var(--ac);font-weight:600;margin-bottom:6px">${cat.label}</div>
             <label class="sw-row" style="cursor:pointer">
               <span class="sw-lbl" style="font-size:.6rem">Enabled</span>
-              <input type="checkbox" ${LEARN.enabled[catId]?'checked':''} onchange="toggleLearn('${catId}',this.checked)">
+              <input type="checkbox" data-learn-toggle="${catId}" ${LEARN.enabled[catId]?'checked':''} onchange="toggleLearn('${catId}',this.checked)">
             </label>
             <div class="sw-row">
               <span class="sw-lbl" style="font-size:.6rem">Target hit rate (%)</span>
