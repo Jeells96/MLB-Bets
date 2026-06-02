@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.63 · Prop Intelligence</title>
+<title>Diamond IQ v6.64 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.63 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.64 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -3497,6 +3497,43 @@ async function overrideTodayPredictions(){
   // SESSION is already unlocked since we're inside PIN-gated Settings.
   await _performReload(false);
   wlog(`✓ Done. Fresh ratings live for everyone.`);
+}
+
+// Force all adaptive-learning state to v6.2 defaults AND recompute everything for the
+// active slate, overriding verified locks. Use this when grades feel wrong and you want
+// a clean baseline — confirms "grades shown are exactly what v6.2 produced."
+async function forceDefaultGrading(){
+  const log=document.getElementById('override-log');
+  const wlog=msg=>{if(log)log.innerHTML+=`<div>${msg}</div>`;console.log('[DIQ-DEF]',msg);};
+  if(!confirm(`Reset ALL grading to v6.2 defaults?\n\nThis will:\n• Wipe all adaptive learning progress (hits, HR, TB, pitcher K)\n• Erase all learning archives (re-enabling won't resume)\n• Reset weights to original v6.2 baseline values\n• Recompute today's slate including verified/locked matchups\n• Sync to the entire league\n\nThis cannot be undone. Continue?`))return;
+  
+  wlog('Resetting all learning state to v6.2 defaults…');
+  // Wipe per-category learned weights and archives
+  HIT_WEIGHTS={...HIT_WEIGHTS_DEFAULT};
+  HR_WEIGHTS={...HR_WEIGHTS_DEFAULT};
+  TB_WEIGHTS={...TB_WEIGHTS_DEFAULT};
+  K_PARAMS={...K_PARAMS_DEFAULT};
+  // Turn off all learning toggles
+  Object.keys(LEARN.enabled).forEach(k=>{LEARN.enabled[k]=false;});
+  // Wipe archives so re-enabling doesn't resume from old learned state
+  Object.keys(LEARN.archived).forEach(k=>{LEARN.archived[k]=null;});
+  // Wipe logs too — they reference old weights that no longer apply
+  Object.keys(LEARN.log).forEach(k=>{LEARN.log[k]=[];});
+  Object.keys(LEARN.lastRunTs).forEach(k=>{LEARN.lastRunTs[k]=0;});
+  learnSave();
+  await pushLearnSettings();
+  wlog('✓ Learning state reset and synced to league.');
+  
+  if(!STATE.date){
+    wlog('No active slate to recompute. Refresh Home to apply.');
+    return;
+  }
+  wlog(`Recomputing ${STATE.date} with default weights, overriding locks…`);
+  PRED.overrides=PRED.overrides||{};
+  PRED.overrides[STATE.date]=true;
+  // preserveVerified=false → all matchups recomputed, locks overridden
+  await _performReload(false);
+  wlog(`✓ Done. v6.2 default grades live for everyone.`);
 }
 
 // Auto-refresh the status panel when settings opens
@@ -8974,7 +9011,9 @@ function renderSettings(){
         <div style="font-size:.6rem;color:var(--mt2);line-height:1.5;margin-bottom:8px">Predictions are saved to Firebase the first time anyone loads them, so they don't change as the day goes on. Use Override to force-recalculate today's predictions (e.g. after lineups confirm) and overwrite the saved snapshot for everyone.</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn bg" style="font-size:.65rem" onclick="overrideTodayPredictions()">⚠ Override Today's Predictions</button>
+          <button class="btn bg" style="font-size:.65rem;border-color:var(--rd);color:var(--rd)" onclick="forceDefaultGrading()">↺ Force v6.2 Default Grading</button>
         </div>
+        <div style="font-size:.55rem;color:var(--mt2);margin-top:6px;line-height:1.4"><strong style="color:var(--rd)">Force v6.2 Default Grading</strong> wipes ALL learning state (weights, archives, logs) and recomputes today's slate with original v6.2 baseline weights — overriding any verified locks. Useful if you suspect old verified grades carry stale learned weights. Cannot be undone.</div>
         <div id="override-log" style="margin-top:8px;font-size:.55rem;color:var(--mt);font-family:'DM Mono',monospace"></div>
       </div>
       <div class="sw-grp">
