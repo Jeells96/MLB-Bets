@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.69 · Prop Intelligence</title>
+<title>Diamond IQ v6.70 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.69 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.70 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -2957,6 +2957,16 @@ async function pullSharedOdds(date){
 // (predictions + boxscore results) to Firestore. On app boot, all users pull
 // the most recent 14 days so they get history even if they're new.
 const FB={app:null,db:null,ready:false,uploadedDates:{}};
+
+// Timeout guard: if Firebase doesn't come online in 5 seconds, mark it dead
+// to prevent infinite waits or hangs during the app lifecycle
+setTimeout(()=>{
+  if(!FB.ready){
+    console.warn('[DIQ] Firebase init timeout — running offline');
+    FB.ready=false; // explicitly offline
+  }
+}, 5000);
+
 try{
   const firebaseConfig={
     apiKey:"AIzaSyAm8TgK3Hl5ndWmqpYlBJs-u64JbeIg2W0",
@@ -3119,12 +3129,13 @@ function triggerLaunchNotice(){
 }
 // iOS Safari often restores a frozen page instead of reloading. Detect that and
 // re-show the notice so "close and reopen" works as expected.
-window.addEventListener('pageshow',e=>{
-  if(e.persisted){
-    window._launchMsgShown=false;
-    triggerLaunchNotice();
-  }
-});
+// DISABLED: was causing repeated popups. Will only show on explicit Refresh.
+// window.addEventListener('pageshow',e=>{
+//   if(e.persisted){
+//     window._launchMsgShown=false;
+//     triggerLaunchNotice();
+//   }
+// });
 
 // ─── AUTO-PUSH ANY PENDING DATES ───
 // Walks through saved predictions + cached results and pushes any past date
