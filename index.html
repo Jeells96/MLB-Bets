@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.67 · Prop Intelligence</title>
+<title>Diamond IQ v6.68 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,11 +419,12 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.67 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.68 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
       <button class="btn bp" id="loadBtn" onclick="refreshUnverified()" title="Refresh — pulls latest lineups, updates unverified matchups, locks verified ones">↻ Refresh</button>
+      <button class="btn bg" style="font-size:.65rem" onclick="syncFirebaseNow()" title="Sync with Firebase — pulls league updates">⇄ Sync</button>
     </div>
   </div>
   <div id="prog"><div id="progText">Loading…</div><div class="pbar"><div class="pfill" id="pfill"></div></div></div>
@@ -10422,16 +10423,23 @@ function openHRLineMo(gamePk,opts={}){
     setMain(`<div class="empty"><b>Loading today's data\u2026</b><div class="spin"></div></div>`);
   // }
 
-  // Always sync with Firebase in the background so the freshest shared snapshot wins.
-  (async()=>{
+  // Firebase sync disabled on boot to prevent crashes. User taps Sync button manually.
+  // (async()=>{
+  //   ... all the sync code commented out ...
+  // })();
+  
+  // Manual sync function for user to call
+  window.syncFirebaseNow=async function(){
+    const log=document.getElementById('override-log');
+    const wlog=msg=>{if(log)log.innerHTML+=`<div>${msg}</div>`;console.log('[DIQ-SYNC]',msg);};
+    wlog('Syncing with Firebase…');
     let waited=0;
-    while(!FB.ready&&waited<10000){
+    while(!FB.ready&&waited<5000){
       await new Promise(r=>setTimeout(r,200));
       waited+=200;
     }
     if(!FB.ready){
-      // Autoload disabled — user must manually tap Refresh
-      // if(!STATE.ready)loadAll(); // fall through to local/fetch path
+      wlog('✗ Firebase not ready');
       return;
     }
     try{
@@ -10459,11 +10467,12 @@ function openHRLineMo(gamePk,opts={}){
         }
       });
       predSave();
-    }catch(e){console.warn('[DIQ] boot pull failed',e.message);}
-
-    // After Firebase pull: if we haven't loaded yet, user must manually tap Refresh
-    // if(!STATE.ready)loadAll();
-  })();
+      wlog('✓ Firebase synced');
+    }catch(e){
+      wlog('✗ Sync failed: '+e.message);
+      console.warn('[DIQ] sync failed',e);
+    }
+  };
 
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
 })();
