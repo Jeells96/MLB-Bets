@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.65 · Prop Intelligence</title>
+<title>Diamond IQ v6.66 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.65 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.66 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -10414,12 +10414,13 @@ function openHRLineMo(gamePk,opts={}){
   const today=todayStr();
   document.getElementById('dp').value=today;
 
-  // If we already have today locally, render instantly.
-  if(PRED.byDate[today]){
-    setTimeout(()=>loadAll(),20);
-  }else{
+  // Autoload disabled due to intermittent Firebase timeout crashes on launch.
+  // User must click Refresh to load grades. Keeps things stable.
+  // if(PRED.byDate[today]){
+  //   setTimeout(()=>loadAll(),20);
+  // }else{
     setMain(`<div class="empty"><b>Loading today's data\u2026</b><div class="spin"></div></div>`);
-  }
+  // }
 
   // Always sync with Firebase in the background so the freshest shared snapshot wins.
   (async()=>{
