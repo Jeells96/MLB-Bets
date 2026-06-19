@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.66 · Prop Intelligence</title>
+<title>Diamond IQ v6.67 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -419,7 +419,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.66 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.67 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -10430,7 +10430,8 @@ function openHRLineMo(gamePk,opts={}){
       waited+=200;
     }
     if(!FB.ready){
-      if(!STATE.ready)loadAll(); // fall through to local/fetch path
+      // Autoload disabled — user must manually tap Refresh
+      // if(!STATE.ready)loadAll(); // fall through to local/fetch path
       return;
     }
     try{
@@ -10460,8 +10461,8 @@ function openHRLineMo(gamePk,opts={}){
       predSave();
     }catch(e){console.warn('[DIQ] boot pull failed',e.message);}
 
-    // After Firebase pull: if we haven't loaded yet, load today now.
-    if(!STATE.ready)loadAll();
+    // After Firebase pull: if we haven't loaded yet, user must manually tap Refresh
+    // if(!STATE.ready)loadAll();
   })();
 
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMo();});
