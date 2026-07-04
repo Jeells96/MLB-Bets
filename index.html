@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Fable Hits v1.2</title>
+<title>Fable Hits v1.3</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -72,6 +72,29 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 .sumbox{margin:8px 16px;padding:12px;background:var(--card);border:1px solid var(--bdr);border-radius:10px;font-size:.78rem;line-height:1.8}
 .sumbox b{font-variant-numeric:tabular-nums}
 .goal{color:var(--warm)}
+#gate{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px}
+.gcard{max-width:340px;width:100%;background:var(--card);border:1px solid var(--bdr);border-radius:14px;padding:24px;text-align:center}
+.gcard h2{letter-spacing:.14em;margin-bottom:6px}
+.gcard h2 span{color:var(--hit)}
+.gcard p{font-size:.72rem;color:var(--mt);margin-bottom:14px;line-height:1.5}
+.gcard input{width:100%;background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:11px 12px;border-radius:8px;font-size:.9rem;margin-bottom:10px;text-align:center}
+.gcard button{width:100%}
+#gmsg{font-size:.68rem;color:var(--warm);margin-top:10px;min-height:16px;line-height:1.5}
+.glink{font-size:.62rem;color:var(--mt2);margin-top:14px;text-decoration:underline;cursor:pointer}
+#setmodal{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9000;display:none;overflow-y:auto;padding:24px 16px}
+.smcard{max-width:440px;margin:0 auto;background:var(--card);border:1px solid var(--bdr);border-radius:14px;padding:18px}
+.smh{font-weight:800;letter-spacing:.08em;font-size:.85rem;margin:14px 0 8px;color:var(--warm)}
+.smh:first-child{margin-top:0}
+.setrow{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:.72rem;border-bottom:1px solid var(--bdr)}
+.setrow span:first-child{color:var(--mt)}
+.setrow span:last-child{font-variant-numeric:tabular-nums}
+.accrow{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--bdr);font-size:.76rem}
+.accrow .st{font-size:.6rem;padding:2px 8px;border-radius:5px}
+.st.ok{background:rgba(74,222,128,.12);color:var(--hit)}
+.st.wait{background:rgba(245,184,65,.12);color:var(--warm)}
+.abtn{background:var(--card2);color:var(--tx);border:1px solid var(--bdr);padding:6px 12px;border-radius:7px;font-size:.66rem;font-weight:600}
+.inrow{display:flex;gap:8px;margin-top:8px}
+.inrow input{flex:1;background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:9px 10px;border-radius:8px;font-size:.8rem}
 @media(prefers-reduced-motion:no-preference){.mfill{transition:width .5s ease}}
 </style>
 </head>
@@ -85,6 +108,38 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 <div class="tabs">
   <button class="tab on" id="tab-today" onclick="showView('today')">TODAY</button>
   <button class="tab" id="tab-results" onclick="showView('results')">RESULTS</button>
+  <button class="tab" style="margin-left:auto" onclick="openSettings()">⚙</button>
+</div>
+
+<div id="gate">
+  <div class="gcard">
+    <h2>FABLE <span>HITS</span></h2>
+    <p>Enter your first and last name. New names need commissioner approval before the site unlocks.</p>
+    <input id="gname" placeholder="First Last" autocomplete="name">
+    <button onclick="gateSubmit()">Enter</button>
+    <div id="gmsg"></div>
+    <div class="glink" onclick="gatePin()">Commissioner PIN</div>
+  </div>
+</div>
+
+<div id="setmodal" onclick="if(event.target===this)this.style.display='none'">
+  <div class="smcard">
+    <div class="smh">LOCK THRESHOLD</div>
+    <div class="inrow">
+      <input id="lockIn" type="number" min="60" max="95" step="1" placeholder="78">
+      <button class="abtn" onclick="saveLockThreshold()">Save league-wide</button>
+    </div>
+    <div style="font-size:.62rem;color:var(--mt2);margin-top:6px">Probability (%) required for a batter to show as LOCK. Syncs to everyone via Firebase.</div>
+    <div class="smh">MODEL PARAMETERS</div>
+    <div id="paramList"></div>
+    <div class="smh">ACCESS REQUESTS</div>
+    <div id="acclist" style="min-height:24px;font-size:.7rem;color:var(--mt)">Loading…</div>
+    <div class="inrow">
+      <input id="accname" placeholder="First Last">
+      <button class="abtn" onclick="addAccess()">Allow</button>
+    </div>
+    <div style="margin-top:14px"><button class="abtn" style="width:100%" onclick="document.getElementById('setmodal').style.display='none'">Close</button></div>
+  </div>
 </div>
 
 <div id="vToday">
@@ -173,6 +228,138 @@ function showView(v){
   document.getElementById('vRes').style.display=v==='results'?'':'none';
   document.getElementById('tab-today').classList.toggle('on',v==='today');
   document.getElementById('tab-results').classList.toggle('on',v==='results');
+}
+
+/* ── config (lock threshold), PIN, and access gate ── */
+const PIN='2325';
+const CONFIG={lock:0.78};
+try{const c=JSON.parse(localStorage.getItem('fablehits_cfg')||'null');if(c&&c.lock)CONFIG.lock=c.lock;}catch(e){}
+function cfgSave(){try{localStorage.setItem('fablehits_cfg',JSON.stringify(CONFIG));}catch(e){}}
+async function cfgPull(){
+  if(!FBH.ready)return;
+  try{
+    const doc=await withTO(FBH.db.collection('fable_settings').doc('config').get(),6000);
+    if(doc.exists&&doc.data().lock)CONFIG.lock=doc.data().lock;
+    cfgSave();
+  }catch(e){}
+}
+async function cfgPush(){
+  if(!FBH.ready)return;
+  try{await withTO(FBH.db.collection('fable_settings').doc('config').set({lock:CONFIG.lock,updatedAt:Date.now()},{merge:true}),6000);}catch(e){}
+}
+
+const nameKey=n=>n.trim().toLowerCase().replace(/[^a-z ]/g,'').replace(/\s+/g,'_');
+let USER=null;
+try{USER=JSON.parse(localStorage.getItem('fablehits_user')||'null');}catch(e){}
+
+function unlockGate(){
+  try{localStorage.setItem('fablehits_access_ok','1');}catch(e){}
+  document.getElementById('gate').style.display='none';
+}
+async function gateSubmit(){
+  const raw=document.getElementById('gname').value.trim();
+  const msg=document.getElementById('gmsg');
+  if(raw.split(/\s+/).length<2){msg.textContent='First and last name, please.';return;}
+  USER={name:raw,key:nameKey(raw)};
+  try{localStorage.setItem('fablehits_user',JSON.stringify(USER));}catch(e){}
+  if(!FBH.ready){msg.textContent="Can't reach the league server. Try again, or use the commissioner PIN.";return;}
+  msg.textContent='Checking access…';
+  try{
+    const ref=FBH.db.collection('fable_access').doc(USER.key);
+    await withTO(ref.set({name:raw,requestedAt:Date.now()},{merge:true}),7000);
+    const doc=await withTO(ref.get(),7000);
+    if(doc.exists&&doc.data().allowed===true){unlockGate();}
+    else msg.textContent='Request sent. Ask the commissioner to approve you in Settings, then tap Enter again.';
+  }catch(e){msg.textContent='League server timed out — try again, or use the commissioner PIN.';}
+}
+function gatePin(){
+  const p=prompt('Commissioner PIN:');
+  if(p!==PIN){alert('Wrong PIN');return;}
+  const raw=document.getElementById('gname').value.trim()||USER?.name;
+  if(raw&&FBH.ready){
+    const k=nameKey(raw);
+    USER={name:raw,key:k};
+    try{localStorage.setItem('fablehits_user',JSON.stringify(USER));}catch(e){}
+    FBH.db.collection('fable_access').doc(k).set({name:raw,allowed:true,requestedAt:Date.now()},{merge:true}).catch(()=>{});
+  }
+  unlockGate();
+}
+async function bootGate(){
+  const gate=document.getElementById('gate');
+  let ok=false;
+  try{ok=localStorage.getItem('fablehits_access_ok')==='1';}catch(e){}
+  if(USER&&ok){gate.style.display='none';return;}
+  gate.style.display='flex';
+  if(USER){
+    document.getElementById('gname').value=USER.name;
+    // one crash-safe re-check for returning users still waiting on approval
+    if(FBH.ready){
+      try{
+        const doc=await withTO(FBH.db.collection('fable_access').doc(USER.key).get(),6000);
+        if(doc.exists&&doc.data().allowed===true)unlockGate();
+        else document.getElementById('gmsg').textContent='Waiting on commissioner approval.';
+      }catch(e){}
+    }
+  }
+}
+
+/* ── settings (PIN-gated) ── */
+const PARAM_ROWS=[
+  ['xBA weight in base blend','60%'],['Actual AVG weight in base blend','40%'],
+  ['Base regression (PA to stabilize)','200 PA'],
+  ['Split vs hand — cap','±12%'],['Split regression','120 AB'],
+  ['Recent form blend (last 15 games)','20%'],['Recent form minimum','30 AB'],
+  ['Pitcher BAA — cap','±15%'],['Pitcher regression','50 IP'],
+  ['Pitch-type arsenal matchup — cap','±7%'],['Per-pitch regression','150 pitches'],
+  ['Park factor range','0.95–1.09×'],
+  ['Per-AB probability clamp','12–40%'],
+  ['STRONG tier','≥72%'],['LEAN tier','≥66%']
+];
+async function openSettings(){
+  const p=prompt('Settings PIN:');
+  if(p!==PIN){if(p!=null)alert('Wrong PIN');return;}
+  document.getElementById('setmodal').style.display='block';
+  document.getElementById('lockIn').value=Math.round(CONFIG.lock*100);
+  document.getElementById('paramList').innerHTML=PARAM_ROWS.map(r=>`<div class="setrow"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');
+  cfgPull().then(()=>{document.getElementById('lockIn').value=Math.round(CONFIG.lock*100);});
+  renderAccess();
+}
+async function saveLockThreshold(){
+  const v=parseFloat(document.getElementById('lockIn').value);
+  if(isNaN(v)||v<60||v>95){alert('Enter 60–95');return;}
+  CONFIG.lock=v/100;
+  cfgSave();
+  await cfgPush();
+  if(ROWS.length)render(null);
+  alert('Lock threshold set to '+v+'% league-wide.');
+}
+async function renderAccess(){
+  const el=document.getElementById('acclist');
+  if(!FBH.ready){el.textContent='Firebase unavailable — access list needs it.';return;}
+  try{
+    const snap=await withTO(FBH.db.collection('fable_access').limit(100).get(),8000);
+    const rows=[];
+    snap.forEach(doc=>{const d=doc.data();rows.push({key:doc.id,name:d.name||doc.id,allowed:d.allowed===true,ts:d.requestedAt||0});});
+    rows.sort((a,b)=>(a.allowed===b.allowed)?b.ts-a.ts:(a.allowed?1:-1));
+    el.innerHTML=rows.length?rows.map(r=>`<div class="accrow">
+      <span style="flex:1">${r.name}</span>
+      <span class="st ${r.allowed?'ok':'wait'}">${r.allowed?'Allowed':'Waiting'}</span>
+      <button class="abtn" onclick="accessSet('${r.key}','${r.name.replace(/'/g,'')}',${r.allowed?'false':'true'})">${r.allowed?'Revoke':'Allow'}</button>
+    </div>`).join(''):'No requests yet.';
+  }catch(e){el.textContent='Pull failed: '+e.message;}
+}
+async function accessSet(key,name,allowed){
+  if(!FBH.ready)return;
+  try{
+    await withTO(FBH.db.collection('fable_access').doc(key).set({name,allowed,updatedAt:Date.now()},{merge:true}),7000);
+    renderAccess();
+  }catch(e){alert('Save failed: '+e.message);}
+}
+function addAccess(){
+  const raw=document.getElementById('accname').value.trim();
+  if(raw.split(/\s+/).length<2){alert('First and last name');return;}
+  document.getElementById('accname').value='';
+  accessSet(nameKey(raw),raw,true);
 }
 
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
@@ -529,6 +716,7 @@ async function loadDay(){
     }
 
     prog('Fetching batter pitch-type profiles…');
+    await cfgPull(); // league lock threshold
     await fetchBatterPitchTypes(); // one Savant CSV for everyone; degrades gracefully
 
     prog('Getting handedness…');
@@ -649,12 +837,12 @@ async function gradeResults(){
       <span class="rres ${cls}">${sym}</span>
       <span style="min-width:52px;font-variant-numeric:tabular-nums;color:var(--mt)">${(g.prob*100).toFixed(1)}%</span>
       <span class="tier ${tc}">${tl}</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name}${g.verified?'':' <span class="vbadge">○ projected — excluded</span>'}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name}${g.verified?'':' <span class="vbadge">○ matchup not confirmed — result not counted</span>'}</span>
       <span style="color:var(--mt2);font-size:.68rem">${g.team}</span>
     </div>`;
   }).join('');
   out.innerHTML=`<div class="sumbox">
-    <div>LOCK (≥78%): <b>${L.r==null?'—':L.r+'%'}</b> (${L.h}/${L.n}) <span class="goal">· goal 85%</span></div>
+    <div>LOCK (≥${Math.round(CONFIG.lock*100)}%): <b>${L.r==null?'—':L.r+'%'}</b> (${L.h}/${L.n}) <span class="goal">· goal 85%</span></div>
     <div>STRONG: <b>${S.r==null?'—':S.r+'%'}</b> (${S.h}/${S.n}) · LEAN: <b>${E.r==null?'—':E.r+'%'}</b> (${E.h}/${E.n})</div>
     <div>All verified &amp; played: <b>${played.length?Math.round(allH/played.length*1000)/10+'%':'—'}</b> (${allH}/${played.length})</div>
     <div style="color:var(--mt2);font-size:.62rem">— means didn't play (excluded). Projected rows never count toward stats.</div>
@@ -678,7 +866,7 @@ async function allTimeStats(){
         const o=d.results[r.id]||d.results[String(r.id)];
         if(!o||!(o.ab>=1||o.h>=1))return;
         an++;if(o.h>=1)ah++;
-        if(r.prob>=0.78){ln++;if(o.h>=1)lh++;}
+        if(r.prob>=CONFIG.lock){ln++;if(o.h>=1)lh++;}
       });
     });
     const box=`<div class="sumbox">
@@ -693,7 +881,7 @@ async function allTimeStats(){
 
 /* ============ RENDER ============ */
 function tier(p){
-  if(p>=0.78)return['LOCK','t-lock'];
+  if(p>=CONFIG.lock)return['LOCK','t-lock'];
   if(p>=0.72)return['STRONG','t-strong'];
   if(p>=0.66)return['LEAN','t-lean'];
   return['PASS','t-pass'];
@@ -737,7 +925,7 @@ function drawList(rows){
       <div class="crow">
         <div class="prob ${pcls}">${pct}%</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'●':'○'}</span>${r.locked?' <span title="Verified — score locked" style="font-size:.6rem">🔒</span>':''}</div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${r.locked?' <span title="Verified — score locked" style="font-size:.6rem">🔒</span>':''}</div>
           <div class="meta">${r.team} #${r.slot} vs ${r.pit} (${r.pHand}HP) · ${r.opp}</div>
         </div>
         <span class="tier ${tc}">${tl}</span>
@@ -767,6 +955,7 @@ function applyFilter(){
   try{
     if(localStorage.getItem('fablehits_'+todayStr()))$('cacheBtn').style.display='';
   }catch(e){}
+  bootGate();
 })();
 </script>
 </body>
