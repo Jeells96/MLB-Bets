@@ -4,7 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Fable Hits v1.1</title>
+<title>Fable Hits v1.2</title>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#0B0E14; --card:#131824; --card2:#1A2130; --bdr:#232B3D;
@@ -61,6 +63,15 @@ button:disabled{opacity:.45}
 .empty{padding:60px 24px;text-align:center;color:var(--mt)}
 .empty b{display:block;font-size:1rem;color:var(--tx);margin-bottom:8px}
 footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;border-top:1px solid var(--bdr);margin-top:16px}
+.tabs{display:flex;gap:6px;padding:12px 16px 0}
+.tab{background:transparent;color:var(--mt);border:1px solid var(--bdr);padding:8px 16px;border-radius:8px;font-size:.72rem;font-weight:700;letter-spacing:.08em;cursor:pointer}
+.tab.on{background:var(--card);color:var(--tx);border-color:var(--mt2)}
+.rrow{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--bdr);font-size:.8rem}
+.rres{min-width:30px;text-align:center;font-weight:800}
+.rY{color:var(--hit)} .rN{color:var(--cold)} .rD{color:var(--mt2)}
+.sumbox{margin:8px 16px;padding:12px;background:var(--card);border:1px solid var(--bdr);border-radius:10px;font-size:.78rem;line-height:1.8}
+.sumbox b{font-variant-numeric:tabular-nums}
+.goal{color:var(--warm)}
 @media(prefers-reduced-motion:no-preference){.mfill{transition:width .5s ease}}
 </style>
 </head>
@@ -71,6 +82,12 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
   <div class="sub">WHO GETS A HIT TODAY — AND WHY</div>
 </header>
 
+<div class="tabs">
+  <button class="tab on" id="tab-today" onclick="showView('today')">TODAY</button>
+  <button class="tab" id="tab-results" onclick="showView('results')">RESULTS</button>
+</div>
+
+<div id="vToday">
 <div class="ctl">
   <input type="date" id="dp">
   <button id="loadBtn" onclick="loadDay()">Load</button>
@@ -78,7 +95,20 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 </div>
 <div id="prog"></div>
 <div id="out">
-  <div class="empty"><b>Pick a date and tap Load</b>Pulls today's lineups, probable pitchers, and every batter's stats straight from MLB. Nothing loads automatically.</div>
+  <div class="empty"><b>Pick a date and tap Load</b>Pulls today's lineups (or projects from each team's last game if not posted yet), probable pitchers, and every batter's stats straight from MLB. Verified matchups lock; projected ones get overridden on every Load. Nothing loads automatically.</div>
+</div>
+</div>
+
+<div id="vRes" style="display:none">
+<div class="ctl">
+  <input type="date" id="rdp">
+  <button onclick="gradeResults()">Grade day</button>
+  <button class="ghost" onclick="allTimeStats()">All-time success</button>
+</div>
+<div id="rprog" style="padding:0 16px 8px;font-size:.7rem;color:var(--mt);min-height:18px"></div>
+<div id="rout">
+  <div class="empty"><b>Pick a date and tap Grade day</b>Joins that day's saved predictions with the real box scores, shows every ✓/✗, and saves the success rate to the league's shared Firebase. Only verified matchups count toward the stats.</div>
+</div>
 </div>
 
 <footer>
@@ -105,6 +135,45 @@ const PARK_HIT={ // mild hit factors; unknown parks default 1.0
 const PITCH_NAME={FF:'four-seam fastball',SI:'sinker',FC:'cutter',SL:'slider',ST:'sweeper',CU:'curveball',KC:'knuckle-curve',CH:'changeup',FS:'splitter',SV:'slurve',KN:'knuckleball',FO:'forkball',SC:'screwball'};
 let BATTER_PT={};      // player_id -> {FF:{xba,n},...} from Savant
 let SAVANT_OK=null;    // null=untried, true/false after attempt
+
+// ── Firebase (same league project as Diamond IQ, its own collection: fable_hits) ──
+// Init is local-only (no network). NOTHING is pulled automatically — every read and
+// write happens inside a user-initiated Load or Grade, wrapped in timeouts.
+const FBH={app:null,db:null,ready:false};
+try{
+  if(typeof firebase!=='undefined'){
+    FBH.app=firebase.initializeApp({
+      apiKey:"AIzaSyAm8TgK3Hl5ndWmqpYlBJs-u64JbeIg2W0",
+      authDomain:"mlb-bets-d196c.firebaseapp.com",
+      projectId:"mlb-bets-d196c",
+      storageBucket:"mlb-bets-d196c.firebasestorage.app",
+      messagingSenderId:"716889601772",
+      appId:"1:716889601772:web:33a4a231ee996ed76e17c9"
+    },'fablehits');
+    FBH.db=FBH.app.firestore();
+    FBH.ready=true;
+  }
+}catch(e){console.warn('[FH] Firebase init failed — running local-only',e.message);}
+
+const withTO=(p,ms)=>Promise.race([p,new Promise((_,rj)=>setTimeout(()=>rj(new Error('timeout')),ms))]);
+async function fbPull(date){
+  if(!FBH.ready)return null;
+  try{const doc=await withTO(FBH.db.collection('fable_hits').doc(date).get(),8000);return doc.exists?doc.data():null;}catch(e){return null;}
+}
+async function fbPush(date,payload){
+  if(!FBH.ready)return false;
+  try{await withTO(FBH.db.collection('fable_hits').doc(date).set(payload,{merge:true}),8000);return true;}catch(e){console.warn('[FH] push failed',e.message);return false;}
+}
+function addDays(dstr,n){
+  const d=new Date(dstr+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);
+  return d.toISOString().slice(0,10);
+}
+function showView(v){
+  document.getElementById('vToday').style.display=v==='today'?'':'none';
+  document.getElementById('vRes').style.display=v==='results'?'':'none';
+  document.getElementById('tab-today').classList.toggle('on',v==='today');
+  document.getElementById('tab-results').classList.toggle('on',v==='results');
+}
 
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
 const nn=(v,fb=0)=>sf(v)??fb;
@@ -277,6 +346,41 @@ async function fetchBatterPitchTypes(){
   return SAVANT_OK;
 }
 
+// Projected lineup fallback: the team's most recent completed game's batting order.
+async function fetchTeamLastLineup(teamId,date){
+  try{
+    const sched=await fetchJSON(`${MLB}/api/v1/schedule?sportId=1&teamId=${teamId}&startDate=${addDays(date,-6)}&endDate=${addDays(date,-1)}`);
+    const gs=[];(sched?.dates||[]).forEach(d=>(d.games||[]).forEach(g=>gs.push(g)));
+    const done=gs.filter(g=>g.status?.abstractGameState==='Final')
+      .sort((a,b)=>(b.officialDate||b.gameDate||'').localeCompare(a.officialDate||a.gameDate||''));
+    const g=done[0];if(!g)return[];
+    const box=await fetchJSON(`${MLB}/api/v1/game/${g.gamePk}/boxscore`);
+    const side=box?.teams?.home?.team?.id===teamId?'home':'away';
+    return Object.values(box?.teams?.[side]?.players||{})
+      .filter(p=>p.battingOrder&&parseInt(p.battingOrder)%100===0)
+      .sort((a,b)=>parseInt(a.battingOrder)-parseInt(b.battingOrder))
+      .slice(0,9).map(p=>({id:p.person.id,fullName:p.person.fullName}));
+  }catch(e){return[];}
+}
+
+// Actual outcomes for a date: playerId -> {h, ab} from every Final box score.
+async function fetchDayHits(date,onProg){
+  const games=await fetchScheduleDay(date);
+  const finals=games.filter(g=>g.status?.abstractGameState==='Final');
+  const out={};
+  for(let i=0;i<finals.length;i++){
+    if(onProg)onProg(`Box scores ${i+1}/${finals.length}…`);
+    const box=await fetchJSON(`${MLB}/api/v1/game/${finals[i].gamePk}/boxscore`);
+    ['home','away'].forEach(side=>{
+      Object.values(box?.teams?.[side]?.players||{}).forEach(p=>{
+        const b=p?.stats?.batting;
+        if(b&&(b.atBats!=null||b.hits!=null))out[p.person.id]={h:nn(b.hits),ab:nn(b.atBats)};
+      });
+    });
+  }
+  return out;
+}
+
 /* ============ MODEL ============ */
 function scoreBatter(b,slot,pitcher,pHand,parkName,verified){
   const ov=b.overall;
@@ -367,7 +471,7 @@ function scoreBatter(b,slot,pitcher,pHand,parkName,verified){
 
   if(slot<=2)reasons.push({t:`Batting ${slot===1?'leadoff':'#'+slot}: ~${ab.toFixed(1)} at-bats`,k:'good'});
   else if(slot>=7)reasons.push({t:`Batting #${slot}: only ~${ab.toFixed(1)} at-bats`,k:'bad'});
-  if(!verified)reasons.push({t:'Projected lineup — not confirmed yet',k:'info'});
+  if(!verified)reasons.push({t:"Projected from the last game's lineup — will be overridden when lineups post",k:'info'});
 
   return {prob,pAB,ab,splitMult,pitMult,ptMult,parkF,reasons};
 }
@@ -394,25 +498,30 @@ async function loadDay(){
     const games=await fetchScheduleDay(date);
     if(!games.length){render('No games scheduled for '+date+'.');return;}
 
-    // collect batter jobs from posted lineups
-    const jobs=[];       // {pid, slot, teamAbbr, oppPitId, pHand?, park, verified}
+    // collect batter jobs: posted lineups verify+lock; missing ones project from last game
+    const jobs=[];
     const pitcherIds=new Set();
-    games.forEach(g=>{
+    for(const g of games){
       const park=g.venue?.name||'';
       const home=g.teams?.home,away=g.teams?.away;
       const hAb=home?.team?.abbreviation||home?.team?.teamName||'HOME';
       const aAb=away?.team?.abbreviation||away?.team?.teamName||'AWAY';
+      const hId=home?.team?.id,aId=away?.team?.id;
       const hSP=home?.probablePitcher,aSP=away?.probablePitcher;
       if(hSP)pitcherIds.add(hSP.id);
       if(aSP)pitcherIds.add(aSP.id);
-      const hL=g.lineups?.homePlayers||[],aL=g.lineups?.awayPlayers||[];
-      const verified=hL.length>=9&&aL.length>=9;
-      if(!verified){
-        PENDING.push(`${aAb} @ ${hAb} — lineups not posted yet`);
-      }
-      aL.slice(0,9).forEach((pl,i)=>jobs.push({pid:pl.id,name:pl.fullName,slot:i+1,team:aAb,opp:hAb,oppPit:hSP?.id||null,oppPitName:hSP?.fullName||null,park,verified}));
-      hL.slice(0,9).forEach((pl,i)=>jobs.push({pid:pl.id,name:pl.fullName,slot:i+1,team:hAb,opp:aAb,oppPit:aSP?.id||null,oppPitName:aSP?.fullName||null,park,verified}));
-    });
+      let hL=(g.lineups?.homePlayers||[]).slice(0,9);
+      let aL=(g.lineups?.awayPlayers||[]).slice(0,9);
+      const hPosted=hL.length>=9,aPosted=aL.length>=9;
+      if(!aPosted&&aId){prog(`Projecting ${aAb} from last game…`);aL=await fetchTeamLastLineup(aId,date);}
+      if(!hPosted&&hId){prog(`Projecting ${hAb} from last game…`);hL=await fetchTeamLastLineup(hId,date);}
+      if(!aL.length)PENDING.push(`${aAb} @ ${hAb} — no ${aAb} lineup available yet`);
+      if(!hL.length)PENDING.push(`${aAb} @ ${hAb} — no ${hAb} lineup available yet`);
+      // verified = this team's lineup is POSTED and the opposing starter is known
+      const aVer=aPosted&&!!hSP,hVer=hPosted&&!!aSP;
+      aL.forEach((pl,i)=>jobs.push({pid:pl.id,name:pl.fullName,slot:i+1,team:aAb,opp:hAb,oppPit:hSP?.id||null,oppPitName:hSP?.fullName||null,park,verified:aVer}));
+      hL.forEach((pl,i)=>jobs.push({pid:pl.id,name:pl.fullName,slot:i+1,team:hAb,opp:aAb,oppPit:aSP?.id||null,oppPitName:aSP?.fullName||null,park,verified:hVer}));
+    }
 
     if(!jobs.length){
       render(null);
@@ -451,14 +560,38 @@ async function loadDay(){
       const pHand=j.oppPit?(hands[j.oppPit]?.throw||'R'):'R';
       const s=scoreBatter(b,j.slot,pit,pHand,j.park,j.verified);
       ROWS.push({
-        name:j.name,team:j.team,opp:j.opp,slot:j.slot,
+        id:j.pid,name:j.name,team:j.team,opp:j.opp,slot:j.slot,
         pit:j.oppPitName||'TBD',pHand,verified:j.verified,
         prob:s.prob,pAB:s.pAB,ab:s.ab,reasons:s.reasons,
         splitMult:s.splitMult,pitMult:s.pitMult,ptMult:s.ptMult,parkF:s.parkF
       });
     });
+    // LOCK RULE: any row that was VERIFIED in an earlier run (local or league Firebase)
+    // keeps its original score — refresh only overrides unverified/projected rows.
+    prog('Checking earlier runs…');
+    const prior={};
+    try{
+      const lc=JSON.parse(localStorage.getItem('fablehits_'+date)||'null');
+      (lc?.rows||[]).forEach(r=>{if(r.verified&&r.id!=null)prior[r.id]=r;});
+    }catch(e){}
+    const remote=await fbPull(date);
+    (remote?.rows||[]).forEach(r=>{
+      if(r.verified&&r.id!=null&&!prior[r.id]){
+        prior[r.id]={...r,reasons:r.reasons||[{t:'Locked from an earlier verified run',k:'info'}],
+          pAB:r.pAB??0,ab:r.ab??4,splitMult:r.splitMult??1,pitMult:r.pitMult??1,ptMult:r.ptMult??1,parkF:r.parkF??1};
+      }
+    });
+    const seen=new Set();
+    ROWS=ROWS.map(r=>{seen.add(r.id);return prior[r.id]?{...prior[r.id],locked:true}:r;});
+    // keep verified rows whose player dropped out of today's fresh pull (late scratch etc.)
+    Object.values(prior).forEach(r=>{if(!seen.has(r.id))ROWS.push({...r,locked:true});});
+
     ROWS.sort((a,b)=>b.prob-a.prob);
     try{localStorage.setItem('fablehits_'+date,JSON.stringify({ts:Date.now(),rows:ROWS,pending:PENDING}));}catch(e){}
+    // push compact snapshot for the league (results field preserved via merge)
+    prog('Saving to league…');
+    const compact=ROWS.map(r=>({id:r.id,name:r.name,team:r.team,opp:r.opp,slot:r.slot,pit:r.pit,pHand:r.pHand,verified:!!r.verified,prob:Math.round(r.prob*1000)/1000}));
+    await fbPush(date,{rows:compact,ts:Date.now()});
     render(null);
   }catch(e){
     render('Something broke while loading: '+e.message+'. Tap Load to retry.');
@@ -476,6 +609,86 @@ function showCached(){
     ROWS=c.rows||[];PENDING=c.pending||[];CUR_DATE=date;
     render(null,new Date(c.ts));
   }catch(e){render('Cached data unreadable. Tap Load for fresh.');}
+}
+
+/* ============ RESULTS / FACT CHECK ============ */
+async function gradeResults(){
+  const date=$('rdp').value;
+  const rp=t=>{$('rprog').textContent=t;};
+  const out=$('rout');
+  if(!date){out.innerHTML='<div class="empty"><b>Pick a date first</b></div>';return;}
+  rp('Loading predictions…');
+  let rows=null;
+  try{rows=(JSON.parse(localStorage.getItem('fablehits_'+date)||'null')||{}).rows||null;}catch(e){}
+  if(!rows||!rows.length){
+    const remote=await fbPull(date);
+    rows=remote?.rows||null;
+  }
+  if(!rows||!rows.length){rp('');out.innerHTML='<div class="empty"><b>No predictions saved for '+date+'</b>Load that day on the Today tab first — or a league member needs to have.</div>';return;}
+  rp('Fetching box scores…');
+  const res=await fetchDayHits(date,rp);
+  if(!Object.keys(res).length){rp('');out.innerHTML='<div class="empty"><b>No final games yet for '+date+'</b>Grade after games finish.</div>';return;}
+  rp('Grading…');
+  const graded=rows.map(r=>{
+    const o=res[r.id];
+    const played=o&&(o.ab>=1||o.h>=1);
+    return {...r,outcome:o?(played?(o.h>=1?'Y':'N'):'D'):'D'};
+  });
+  const played=graded.filter(g=>g.verified&&g.outcome!=='D');
+  const st=t=>{const s=played.filter(g=>tier(g.prob)[0]===t);const h=s.filter(g=>g.outcome==='Y').length;return{n:s.length,h,r:s.length?Math.round(h/s.length*1000)/10:null};};
+  const L=st('LOCK'),S=st('STRONG'),E=st('LEAN');
+  const allH=played.filter(g=>g.outcome==='Y').length;
+  // persist outcomes league-wide
+  fbPush(date,{results:res,graded:true,gradedTs:Date.now()});
+  graded.sort((a,b)=>b.prob-a.prob);
+  const rowsH=graded.map(g=>{
+    const [tl,tc]=tier(g.prob);
+    const sym=g.outcome==='Y'?'✓':g.outcome==='N'?'✗':'—';
+    const cls=g.outcome==='Y'?'rY':g.outcome==='N'?'rN':'rD';
+    return `<div class="rrow">
+      <span class="rres ${cls}">${sym}</span>
+      <span style="min-width:52px;font-variant-numeric:tabular-nums;color:var(--mt)">${(g.prob*100).toFixed(1)}%</span>
+      <span class="tier ${tc}">${tl}</span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name}${g.verified?'':' <span class="vbadge">○ projected — excluded</span>'}</span>
+      <span style="color:var(--mt2);font-size:.68rem">${g.team}</span>
+    </div>`;
+  }).join('');
+  out.innerHTML=`<div class="sumbox">
+    <div>LOCK (≥78%): <b>${L.r==null?'—':L.r+'%'}</b> (${L.h}/${L.n}) <span class="goal">· goal 85%</span></div>
+    <div>STRONG: <b>${S.r==null?'—':S.r+'%'}</b> (${S.h}/${S.n}) · LEAN: <b>${E.r==null?'—':E.r+'%'}</b> (${E.h}/${E.n})</div>
+    <div>All verified &amp; played: <b>${played.length?Math.round(allH/played.length*1000)/10+'%':'—'}</b> (${allH}/${played.length})</div>
+    <div style="color:var(--mt2);font-size:.62rem">— means didn't play (excluded). Projected rows never count toward stats.</div>
+  </div>`+rowsH;
+  rp('');
+}
+
+async function allTimeStats(){
+  const rp=t=>{$('rprog').textContent=t;};
+  if(!FBH.ready){rp('Firebase unavailable in this browser — all-time stats need it.');return;}
+  rp('Pulling all graded days…');
+  try{
+    const snap=await withTO(FBH.db.collection('fable_hits').limit(120).get(),12000);
+    let days=0,lh=0,ln=0,ah=0,an=0;
+    snap.forEach(doc=>{
+      const d=doc.data();
+      if(!d.rows||!d.results)return;
+      days++;
+      d.rows.forEach(r=>{
+        if(!r.verified)return;
+        const o=d.results[r.id]||d.results[String(r.id)];
+        if(!o||!(o.ab>=1||o.h>=1))return;
+        an++;if(o.h>=1)ah++;
+        if(r.prob>=0.78){ln++;if(o.h>=1)lh++;}
+      });
+    });
+    const box=`<div class="sumbox">
+      <div><b>All-time · ${days} graded day${days===1?'':'s'}</b></div>
+      <div>LOCK success: <b>${ln?Math.round(lh/ln*1000)/10+'%':'—'}</b> (${lh}/${ln}) <span class="goal">· goal 85%</span></div>
+      <div>All verified picks: <b>${an?Math.round(ah/an*1000)/10+'%':'—'}</b> (${ah}/${an})</div>
+    </div>`;
+    $('rout').innerHTML=box+$('rout').innerHTML;
+    rp('');
+  }catch(e){rp('Pull failed: '+e.message);}
 }
 
 /* ============ RENDER ============ */
@@ -524,7 +737,7 @@ function drawList(rows){
       <div class="crow">
         <div class="prob ${pcls}">${pct}%</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'●':'○'}</span></div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'●':'○'}</span>${r.locked?' <span title="Verified — score locked" style="font-size:.6rem">🔒</span>':''}</div>
           <div class="meta">${r.team} #${r.slot} vs ${r.pit} (${r.pHand}HP) · ${r.opp}</div>
         </div>
         <span class="tier ${tc}">${tl}</span>
@@ -550,6 +763,7 @@ function applyFilter(){
 /* boot: set date only. NOTHING auto-loads. */
 (function(){
   $('dp').value=todayStr();
+  $('rdp').value=addDays(todayStr(),-1);
   try{
     if(localStorage.getItem('fablehits_'+todayStr()))$('cacheBtn').style.display='';
   }catch(e){}
