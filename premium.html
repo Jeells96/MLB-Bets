@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v1.6</title>
+<title>Diamond IQ Premium v1.7</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -172,13 +172,12 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 
 <div id="vRes" style="display:none">
 <div class="ctl">
-  <input type="date" id="rdp">
-  <button onclick="gradeResults()">Grade day</button>
-  <button class="ghost" onclick="allTimeStats()">All-time success</button>
+  <input type="date" id="rdp" onchange="resultsAuto()">
+  <button class="ghost" onclick="reRunResults()">↻ Re-check results</button>
 </div>
 <div id="rprog" style="padding:0 16px 8px;font-size:.7rem;color:var(--mt);min-height:18px"></div>
 <div id="rout">
-  <div class="empty"><b>Pick a date and tap Grade day</b>Joins that day's saved predictions with the real box scores, shows every ✓/✗, and saves the success rate to the league's shared Firebase. Only verified matchups count toward the stats.</div>
+  <div class="empty"><b>Results load automatically</b>Prior days grade themselves whenever anyone taps Load on the Today tab. Open this tab or pick a date and everything appears — every market, every ✓/✗, confirmed matchups only in the stats.</div>
 </div>
 </div>
 
@@ -247,6 +246,7 @@ function showView(v){
   document.getElementById('vRes').style.display=v==='results'?'':'none';
   document.getElementById('tab-today').classList.toggle('on',v==='today');
   document.getElementById('tab-results').classList.toggle('on',v==='results');
+  if(v==='results')resultsAuto();
 }
 
 /* ── config (lock threshold), PIN, and access gate ── */
@@ -595,8 +595,10 @@ async function fetchTeamLastLineup(teamId,date){
   }catch(e){return[];}
 }
 
-// Actual outcomes for a date: playerId -> {h, ab} from every Final box score.
-async function fetchDayHits(date,onProg){
+// Actual outcomes for a date from every Final box score.
+// Returns {res: playerId -> {h,ab,so,bb,hr,pk,pbb}, finals, total} so callers can
+// tell a fully-final day (graded permanently) from a partial one (regrade later).
+async function fetchDayScores(date,onProg){
   const games=await fetchScheduleDay(date);
   const finals=games.filter(g=>g.status?.abstractGameState==='Final');
   const out={};
@@ -618,7 +620,7 @@ async function fetchDayHits(date,onProg){
       });
     });
   }
-  return out;
+  return {res:out,finals:finals.length,total:games.length};
 }
 
 /* ── DK odds: read Diamond IQ's shared props doc (app_settings/props_{date}) ── */
@@ -991,6 +993,19 @@ async function loadDay(){
     ROWS=ROWS.map(r=>{seen.add(r.id);return prior[r.id]?{...prior[r.id],locked:true}:r;});
     // keep verified rows whose player dropped out of today's fresh pull (late scratch etc.)
     Object.values(prior).forEach(r=>{if(!seen.has(r.id))ROWS.push({...r,locked:true});});
+    // same lock rule for every market: verified rows from earlier runs are kept as-is
+    const priorMk={};
+    try{
+      const lc2=JSON.parse(localStorage.getItem('fablehits_'+date)||'null');
+      Object.keys(MK).forEach(m=>{(lc2?.mk?.[m]||[]).forEach(r=>{if(r.verified&&r.id!=null)(priorMk[m]=priorMk[m]||{})[r.id]=r;});});
+    }catch(e){}
+    Object.keys(MK).forEach(m=>{((remote?.mk?.[m])||[]).forEach(r=>{if(r.verified&&r.id!=null&&!(priorMk[m]&&priorMk[m][r.id]))(priorMk[m]=priorMk[m]||{})[r.id]=r;});});
+    Object.keys(MK).forEach(m=>{
+      const pm=priorMk[m]||{};
+      const seenM=new Set();
+      MK[m]=MK[m].map(r=>{seenM.add(r.id);return pm[r.id]?{...pm[r.id],locked:true,reasons:pm[r.id].reasons||null}:r;});
+      Object.values(pm).forEach(r=>{if(!seenM.has(r.id))MK[m].push({...r,locked:true,reasons:r.reasons||null});});
+    });
 
     ROWS.sort((a,b)=>b.prob-a.prob);
     try{localStorage.setItem('fablehits_'+date,JSON.stringify({ts:Date.now(),rows:ROWS,mk:MK,pending:PENDING}));}catch(e){}
@@ -1006,6 +1021,7 @@ async function loadDay(){
         edge:r.edge!=null?Math.round(r.edge*100)/100:null}));
     });
     await fbPush(date,{rows:compact,mk:mkCompact,ts:Date.now()});
+    await autoGradePriorDays(date,prog);
     computeSuccessStats(); // refresh header stats in background
     render(null);
   }catch(e){
@@ -1026,68 +1042,176 @@ function showCached(){
   }catch(e){render('Cached data unreadable. Tap Load for fresh.');}
 }
 
-/* ============ RESULTS / FACT CHECK ============ */
-async function gradeResults(){
-  const date=$('rdp').value;
-  const rp=t=>{$('rprog').textContent=t;};
-  const out=$('rout');
-  if(!date){out.innerHTML='<div class="empty"><b>Pick a date first</b></div>';return;}
-  rp('Loading predictions…');
-  let rows=null;
-  try{rows=(JSON.parse(localStorage.getItem('fablehits_'+date)||'null')||{}).rows||null;}catch(e){}
-  if(!rows||!rows.length){
-    const remote=await fbPull(date);
-    rows=remote?.rows||null;
-  }
-  if(!rows||!rows.length){
-    rp('');
-    const why=FBH.lastErr
-      ?(isPermErr(FBH.lastErr)?'The league pull was refused — Firestore rules are blocking the Premium collections.':'The league pull failed: '+FBH.lastErr.message)
-      :'Nothing saved on this device and nothing found in the league Firebase.';
-    out.innerHTML='<div class="empty"><b>No predictions found for '+date+'</b>'+why+' If you loaded that day on a different device, sync must be working for grading to see it.</div>';
-    return;
-  }
-  rp('Fetching box scores…');
-  const res=await fetchDayHits(date,rp);
-  if(!Object.keys(res).length){rp('');out.innerHTML='<div class="empty"><b>No final games yet for '+date+'</b>Grade after games finish.</div>';return;}
-  rp('Grading…');
-  const graded=rows.map(r=>{
-    const o=res[r.id];
-    const played=o&&(o.ab>=1||o.h>=1);
-    return {...r,outcome:o?(played?(o.h>=1?'Y':'N'):'D'):'D'};
-  });
-  const played=graded.filter(g=>g.verified&&g.outcome!=='D');
-  const st=t=>{const s=played.filter(g=>tier(g.prob)[0]===t);const h=s.filter(g=>g.outcome==='Y').length;return{n:s.length,h,r:s.length?Math.round(h/s.length*1000)/10:null};};
-  const L=st('LOCK'),S=st('STRONG'),E=st('LEAN');
-  const allH=played.filter(g=>g.outcome==='Y').length;
-  // persist outcomes league-wide
-  fbPush(date,{results:res,graded:true,gradedTs:Date.now()}).then(()=>computeSuccessStats());
-  graded.sort((a,b)=>b.prob-a.prob);
-  const rowsH=graded.map(g=>{
-    const [tl,tc]=tier(g.prob);
-    const sym=g.outcome==='Y'?'✓':g.outcome==='N'?'✗':'—';
-    const cls=g.outcome==='Y'?'rY':g.outcome==='N'?'rN':'rD';
-    return `<div class="rrow">
-      <span class="rres ${cls}">${sym}</span>
-      <span style="min-width:52px;font-variant-numeric:tabular-nums;color:var(--mt)">${(g.prob*100).toFixed(1)}%</span>
-      <span class="tier ${tc}">${tl}</span>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${g.name}${g.verified?'':' <span class="vbadge">○ matchup not confirmed — result not counted</span>'}</span>
-      <span style="color:var(--mt2);font-size:.68rem">${g.team}</span>
-    </div>`;
-  }).join('');
-  out.innerHTML=`<div class="sumbox">
-    <div>LOCK (≥${Math.round(CONFIG.lock*100)}%): <b>${L.r==null?'—':L.r+'%'}</b> (${L.h}/${L.n}) <span class="goal">· goal 85%</span></div>
-    <div>STRONG: <b>${S.r==null?'—':S.r+'%'}</b> (${S.h}/${S.n}) · LEAN: <b>${E.r==null?'—':E.r+'%'}</b> (${E.h}/${E.n})</div>
-    <div>All verified &amp; played: <b>${played.length?Math.round(allH/played.length*1000)/10+'%':'—'}</b> (${allH}/${played.length})</div>
-    <div style="color:var(--mt2);font-size:.62rem">— means didn't play (excluded). Projected rows never count toward stats.</div>
-    ${played.length===0?'<div style="color:var(--warm);font-size:.66rem">No confirmed matchups were saved for this day — every result below is shown for reference only.</div>':''}
-  </div>`+rowsH;
-  rp('');
+/* ============ RESULTS — FULLY AUTOMATED ============ */
+// No grade button anywhere. Prior days grade themselves during any Load on the
+// Today tab; the Results tab just reads what's stored (and self-heals if a day
+// somehow got missed). "graded" is only marked permanent once every scheduled
+// game that day went Final — partial days regrade on the next Load.
+
+async function storeResults(date,g){
+  const payload={results:g.res,gradedTs:Date.now(),graded:g.finals>0&&g.finals>=g.total};
+  await fbPush(date,payload);
+  try{
+    const c=JSON.parse(localStorage.getItem('fablehits_'+date)||'null')||{};
+    c.results=g.res;c.graded=payload.graded;c.gradedTs=payload.gradedTs;
+    localStorage.setItem('fablehits_'+date,JSON.stringify(c));
+  }catch(e){}
 }
 
-// Aggregates lock success (all-time + last 14 days) across every graded day in
-// Firebase. Caches to localStorage so the header stats render instantly on boot
-// with zero network — refreshed on every Load / Grade / All-time tap.
+// Runs inside every Load: sweep the last 5 days, grade anything with predictions
+// that isn't permanently graded yet.
+async function autoGradePriorDays(fromDate,prog){
+  for(let i=1;i<=5;i++){
+    const d=addDays(fromDate,-i);
+    let local=null;
+    try{local=JSON.parse(localStorage.getItem('fablehits_'+d)||'null');}catch(e){}
+    let remote=null;
+    if(FBH.ready)remote=await fbPull(d);
+    const hasRows=(local?.rows?.length||0)>0||(remote?.rows?.length||0)>0;
+    const done=(remote?.graded===true)||(local?.graded===true);
+    if(!hasRows||done)continue;
+    prog(`Auto-grading ${d}…`);
+    const g=await fetchDayScores(d,t=>prog(`Auto-grading ${d} — ${t}`));
+    if(!Object.keys(g.res).length)continue;
+    await storeResults(d,g);
+  }
+}
+
+/* ── stored-day access + per-market grading ── */
+let RDATA=null,RM='hits';
+const playedBat=o=>!!o&&((o.ab||0)>=1||(o.h||0)>=1);
+function lineGrade(r,actual){
+  if(r.line==null||!r.lean||r.lean==='—'||actual==null)return null;
+  if(actual>r.line)return r.lean==='OVER'?'W':'L';
+  if(actual<r.line)return r.lean==='UNDER'?'W':'L';
+  return 'P';
+}
+const MK_ACTUAL={kB:o=>o?.so??null,bbB:o=>o?.bb??null,kP:o=>o?.pk??null,bbP:o=>o?.pbb??null};
+
+async function loadStoredDay(date){
+  let local=null;
+  try{local=JSON.parse(localStorage.getItem('fablehits_'+date)||'null');}catch(e){}
+  let remote=null;
+  if(FBH.ready)remote=await fbPull(date);
+  if(!local&&!remote)return null;
+  return {
+    date,
+    rows:(local?.rows?.length?local.rows:remote?.rows)||[],
+    mk:(local?.mk&&Object.values(local.mk).some(a=>a&&a.length)?local.mk:remote?.mk)||{},
+    results:remote?.results||local?.results||null,
+    graded:(remote?.graded??local?.graded)===true
+  };
+}
+
+// Entry point: runs whenever the Results tab opens or the date changes.
+async function resultsAuto(force){
+  const rp=t=>{$('rprog').textContent=t;};
+  const date=$('rdp').value||addDays(todayStr(),-1);
+  rp('Loading stored day…');
+  RDATA=await loadStoredDay(date);
+  if(!RDATA){
+    rp('');
+    const why=FBH.lastErr?(isPermErr(FBH.lastErr)?'The league pull was refused — Firestore rules are blocking the Premium collections.':'League pull failed: '+FBH.lastErr.message):'No predictions were saved for this date.';
+    $('rout').innerHTML='<div class="empty"><b>Nothing stored for '+date+'</b>'+why+'</div>';
+    renderAllTimeBox();
+    return;
+  }
+  // self-heal: fetch scores if missing (or forced), for past dates
+  if((!RDATA.results||force)&&date<todayStr()){
+    rp('Fetching box scores…');
+    const g=await fetchDayScores(date,rp);
+    if(Object.keys(g.res).length){
+      await storeResults(date,g);
+      RDATA.results=g.res;RDATA.graded=g.finals>0&&g.finals>=g.total;
+      computeSuccessStats();
+    }
+  }
+  rp('');
+  renderResultsDay();
+  renderAllTimeBox();
+}
+function reRunResults(){resultsAuto(true);}
+
+function dayMarketSummary(){
+  const R=RDATA,res=R.results||{};
+  const out={};
+  // hits
+  {
+    const played=(R.rows||[]).filter(r=>r.verified&&playedBat(res[r.id]));
+    const tally=t=>{const s=played.filter(r=>tier(r.prob)[0]===t);const h=s.filter(r=>(res[r.id].h||0)>=1).length;return{h,n:s.length};};
+    out.hits={lock:tally('LOCK'),all:{h:played.filter(r=>(res[r.id].h||0)>=1).length,n:played.length}};
+  }
+  // hr
+  {
+    const rows=(R.mk?.hr)||[];
+    const played=rows.filter(r=>r.verified&&playedBat(res[r.id]));
+    const lock=played.filter(r=>(r.prob||0)>=0.10);
+    out.hr={lock:{h:lock.filter(r=>(res[r.id].hr||0)>=1).length,n:lock.length},
+            all:{h:played.filter(r=>(res[r.id].hr||0)>=1).length,n:played.length}};
+  }
+  // line markets
+  ['kP','kB','bbP','bbB'].forEach(m=>{
+    let w=0,l=0,p=0;
+    ((R.mk?.[m])||[]).forEach(r=>{
+      if(!r.verified)return;
+      const gr=lineGrade(r,MK_ACTUAL[m](res[r.id]));
+      if(gr==='W')w++;else if(gr==='L')l++;else if(gr==='P')p++;
+    });
+    out[m]={w,l,p};
+  });
+  return out;
+}
+
+function renderResultsDay(){
+  const R=RDATA,res=R.results||{};
+  const sm=dayMarketSummary();
+  const pc=(h,n)=>n?Math.round(h/n*1000)/10+'%':'—';
+  const rec=o=>o.w+o.l?`${o.w}-${o.l}${o.p?'-'+o.p+'P':''} (${Math.round(o.w/(o.w+o.l)*100)}%)`:'—';
+  let h=`<div class="sumbox">
+    <div><b>${R.date}</b> ${R.results?(R.graded?'· final':'· partial — regrades on next Load'):'· no results yet'}</div>
+    <div>HITS lock (≥${Math.round(CONFIG.lock*100)}%): <b>${pc(sm.hits.lock.h,sm.hits.lock.n)}</b> (${sm.hits.lock.h}/${sm.hits.lock.n}) <span class="goal">· goal 85%</span> · all verified: ${pc(sm.hits.all.h,sm.hits.all.n)} (${sm.hits.all.h}/${sm.hits.all.n})</div>
+    <div>HR lock (≥10%): <b>${pc(sm.hr.lock.h,sm.hr.lock.n)}</b> (${sm.hr.lock.h}/${sm.hr.lock.n}) · all verified: ${pc(sm.hr.all.h,sm.hr.all.n)} (${sm.hr.all.h}/${sm.hr.all.n})</div>
+    <div>O/U vs DK — P-K: <b>${rec(sm.kP)}</b> · B-K: <b>${rec(sm.kB)}</b> · P-BB: <b>${rec(sm.bbP)}</b> · B-BB: <b>${rec(sm.bbB)}</b></div>
+    <div style="color:var(--mt2);font-size:.62rem">Confirmed matchups only. O/U records count leaned picks (edge past threshold) with a DK line.</div>
+  </div>
+  <div class="chips">${Object.keys(MK_LABEL).map(m=>`<span class="chip mk ${RM===m?'on':''}" onclick="setRMarket('${m}')">${MK_LABEL[m]}</span>`).join('')}</div>
+  <div id="rlist"></div>`;
+  $('rout').innerHTML=h;
+  drawRList();
+}
+function setRMarket(m){RM=m;renderResultsDay();}
+function drawRList(){
+  const R=RDATA,res=R.results||{};
+  const el=document.getElementById('rlist');
+  if(!el)return;
+  const note=r=>r.verified?'':' <span class="vbadge">○ matchup not confirmed — result not counted</span>';
+  let rows;
+  if(RM==='hits'||RM==='hr'){
+    const src=RM==='hits'?(R.rows||[]):((R.mk?.hr)||[]);
+    rows=[...src].sort((a,b)=>(b.prob||0)-(a.prob||0)).map(r=>{
+      const o=res[r.id];
+      const played=playedBat(o);
+      const yes=played&&((RM==='hits'?o.h:o.hr)||0)>=1;
+      const sym=!R.results?'—':!played?'—':yes?'✓':'✗';
+      const cls=sym==='✓'?'rY':sym==='✗'?'rN':'rD';
+      const [tl,tc]=(RM==='hits'?tier:tierHR)(r.prob||0);
+      return `<div class="rrow"><span class="rres ${cls}">${sym}</span><span style="min-width:52px;font-variant-numeric:tabular-nums;color:var(--mt)">${((r.prob||0)*100).toFixed(1)}%</span><span class="tier ${tc}">${tl}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}${note(r)}</span><span style="color:var(--mt2);font-size:.68rem">${r.team}</span></div>`;
+    });
+  }else{
+    const src=(R.mk?.[RM])||[];
+    rows=[...src].sort((a,b)=>Math.abs(b.edge??0)-Math.abs(a.edge??0)).map(r=>{
+      const act=MK_ACTUAL[RM](res[r.id]);
+      const gr=R.results?lineGrade(r,act):null;
+      const sym=gr==='W'?'✓':gr==='L'?'✗':gr==='P'?'P':'—';
+      const cls=gr==='W'?'rY':gr==='L'?'rN':'rD';
+      const dk=r.line!=null?`DK ${r.line} ${r.lean&&r.lean!=='—'?r.lean:''}`:'no line';
+      return `<div class="rrow"><span class="rres ${cls}">${sym}</span><span style="min-width:46px;font-variant-numeric:tabular-nums;color:var(--mt)">exp ${(r.exp??0).toFixed(1)}</span><span style="min-width:44px;font-variant-numeric:tabular-nums;color:var(--tx)">${act!=null?'act '+act:'—'}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}${note(r)}</span><span style="color:var(--mt2);font-size:.62rem;white-space:nowrap">${dk}</span></div>`;
+    });
+  }
+  el.innerHTML=rows.join('')||'<div class="empty">No rows for this market.</div>';
+}
+
+/* ── aggregate stats: hits header numbers + per-market all-time records ── */
 async function computeSuccessStats(){
   if(!FBH.ready)return null;
   try{
@@ -1095,22 +1219,39 @@ async function computeSuccessStats(){
     const cutoff=addDays(todayStr(),-14);
     let days=0;
     const all={h:0,n:0},d14={h:0,n:0};
+    const mkAll={hr:{h:0,n:0},kP:{w:0,l:0,p:0},kB:{w:0,l:0,p:0},bbP:{w:0,l:0,p:0},bbB:{w:0,l:0,p:0}};
     snap.forEach(doc=>{
       const d=doc.data();
       if(!d.rows||!d.results)return;
       days++;
       const recent=doc.id>=cutoff;
+      const res=d.results;
       d.rows.forEach(r=>{
         if(!r.verified)return;
-        const o=d.results[r.id]||d.results[String(r.id)];
-        if(!o||!(o.ab>=1||o.h>=1))return;
+        const o=res[r.id]||res[String(r.id)];
+        if(!playedBat(o))return;
         if(r.prob>=CONFIG.lock){
-          all.n++;if(o.h>=1)all.h++;
-          if(recent){d14.n++;if(o.h>=1)d14.h++;}
+          all.n++;if((o.h||0)>=1)all.h++;
+          if(recent){d14.n++;if((o.h||0)>=1)d14.h++;}
         }
       });
+      if(d.mk){
+        (d.mk.hr||[]).forEach(r=>{
+          if(!r.verified||(r.prob||0)<0.10)return;
+          const o=res[r.id]||res[String(r.id)];
+          if(!playedBat(o))return;
+          mkAll.hr.n++;if((o.hr||0)>=1)mkAll.hr.h++;
+        });
+        ['kP','kB','bbP','bbB'].forEach(m=>{
+          (d.mk[m]||[]).forEach(r=>{
+            if(!r.verified)return;
+            const gr=lineGrade(r,MK_ACTUAL[m](res[r.id]||res[String(r.id)]));
+            if(gr==='W')mkAll[m].w++;else if(gr==='L')mkAll[m].l++;else if(gr==='P')mkAll[m].p++;
+          });
+        });
+      }
     });
-    const stats={ts:Date.now(),days,all,d14};
+    const stats={ts:Date.now(),days,all,d14,mkAll};
     try{localStorage.setItem('fablehits_stats',JSON.stringify(stats));}catch(e){}
     renderHeaderStats();
     return stats;
@@ -1129,20 +1270,21 @@ function renderHeaderStats(){
   put(s?.all,'hsAll','hsAllN');
   put(s?.d14,'hs14','hs14N');
 }
-
-async function allTimeStats(){
-  const rp=t=>{$('rprog').textContent=t;};
-  if(!FBH.ready){rp('Firebase unavailable in this browser — all-time stats need it.');return;}
-  rp('Pulling all graded days…');
-  const s=await computeSuccessStats();
-  if(!s){rp('Pull failed — check Firestore rules or connection.');return;}
-  const pct=o=>o.n?Math.round(o.h/o.n*1000)/10+'%':'—';
-  $('rout').innerHTML=`<div class="sumbox">
-    <div><b>All-time · ${s.days} graded day${s.days===1?'':'s'}</b></div>
-    <div>LOCK success: <b>${pct(s.all)}</b> (${s.all.h}/${s.all.n}) <span class="goal">· goal 85%</span></div>
-    <div>Last 14 days: <b>${pct(s.d14)}</b> (${s.d14.h}/${s.d14.n})</div>
-  </div>`+$('rout').innerHTML;
-  rp('');
+function renderAllTimeBox(){
+  let s=null;
+  try{s=JSON.parse(localStorage.getItem('fablehits_stats')||'null');}catch(e){}
+  if(!s)return;
+  const pc=o=>o&&o.n?Math.round(o.h/o.n*1000)/10+'%':'—';
+  const rec=o=>o&&(o.w+o.l)?`${o.w}-${o.l}${o.p?'-'+o.p+'P':''} (${Math.round(o.w/(o.w+o.l)*100)}%)`:'—';
+  const m=s.mkAll||{};
+  const box=`<div class="sumbox">
+    <div><b>All-time · ${s.days||0} graded day${s.days===1?'':'s'}</b></div>
+    <div>HITS lock: <b>${pc(s.all)}</b> (${s.all?.h||0}/${s.all?.n||0}) <span class="goal">· goal 85%</span> · last 14d: ${pc(s.d14)} (${s.d14?.h||0}/${s.d14?.n||0})</div>
+    <div>HR lock (≥10%): <b>${pc(m.hr)}</b> (${m.hr?.h||0}/${m.hr?.n||0})</div>
+    <div>O/U vs DK — P-K: <b>${rec(m.kP)}</b> · B-K: <b>${rec(m.kB)}</b> · P-BB: <b>${rec(m.bbP)}</b> · B-BB: <b>${rec(m.bbB)}</b></div>
+  </div>`;
+  const out=$('rout');
+  if(out)out.innerHTML=box+out.innerHTML;
 }
 
 /* ============ RENDER ============ */
@@ -1231,7 +1373,7 @@ function drawProbList(rows,tierFn,fmt){
       <div class="crow">
         <div class="prob ${r.prob>=0.09?'p-hi':r.prob>=0.06?'p-md':'p-lo'}">${fmt(r)}</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span></div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}</div>
           <div class="meta">${r.team}${r.slot?' #'+r.slot:''} vs ${r.pit||r.opp}${r.pHand?' ('+r.pHand+'HP)':''} · ${r.opp}</div>
         </div>
         <span class="tier ${tc}">${tl}</span>
@@ -1259,7 +1401,7 @@ function drawLineList(rows){
       <div class="crow">
         <div class="prob p-md">${(r.exp??0).toFixed(1)}</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span></div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}</div>
           <div class="meta">${r.team} vs ${r.opp}${r.pit?' · '+r.pit:''}</div>
         </div>
         ${dk}
