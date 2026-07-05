@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v1.7</title>
+<title>Diamond IQ Premium v1.8</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -140,12 +140,19 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 
 <div id="setmodal" onclick="if(event.target===this)this.style.display='none'">
   <div class="smcard">
-    <div class="smh">LOCK THRESHOLD</div>
+    <div class="smh">LOCK &amp; EDGE THRESHOLDS</div>
+    <div class="setrow"><span>Hits lock (%)</span><span><input id="lockIn" type="number" min="60" max="95" step="1" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <div class="setrow"><span>HR lock (%)</span><span><input id="hrLockIn" type="number" min="4" max="25" step="0.5" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <div class="setrow"><span>Strikeout edge (Ks past DK line to lean)</span><span><input id="kEdgeIn" type="number" min="0.1" max="2" step="0.05" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <div class="setrow"><span>Walk edge (BBs past DK line to lean)</span><span><input id="bbEdgeIn" type="number" min="0.05" max="1.5" step="0.05" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <button class="abtn" style="width:100%;margin-top:10px" onclick="saveThresholds()">Save all league-wide</button>
+    <div style="font-size:.62rem;color:var(--mt2);margin-top:6px">Locks gate the tier badges and every success stat. Edges decide when a K/BB pick leans OVER or UNDER vs the DK line. Syncs to everyone.</div>
+    <div class="smh">DK LINES — PREMIUM-ONLY PULL</div>
+    <div style="font-size:.62rem;color:var(--mt2);line-height:1.5">Auto-pull runs once when the first person logs in — only if today's lines aren't pulled yet AND it's before 9 AM PT. Past 9am or already pulled: nothing happens automatically. This button works any time.</div>
     <div class="inrow">
-      <input id="lockIn" type="number" min="60" max="95" step="1" placeholder="78">
-      <button class="abtn" onclick="saveLockThreshold()">Save league-wide</button>
+      <button class="abtn" style="flex:1" onclick="manualPullDK()">Pull DK lines now</button>
     </div>
-    <div style="font-size:.62rem;color:var(--mt2);margin-top:6px">Probability (%) required for a batter to show as LOCK. Syncs to everyone via Firebase.</div>
+    <div id="dkStatus" style="font-size:.64rem;color:var(--warm);min-height:16px;margin-top:6px"></div>
     <div class="smh">MODEL PARAMETERS</div>
     <div id="paramList"></div>
     <div class="smh">ACCESS REQUESTS</div>
@@ -251,20 +258,26 @@ function showView(v){
 
 /* ── config (lock threshold), PIN, and access gate ── */
 const PIN='2325';
-const CONFIG={lock:0.78};
-try{const c=JSON.parse(localStorage.getItem('fablehits_cfg')||'null');if(c&&c.lock)CONFIG.lock=c.lock;}catch(e){}
+const CONFIG={lock:0.78,hrLock:0.10,kEdge:0.45,bbEdge:0.25};
+try{
+  const c=JSON.parse(localStorage.getItem('fablehits_cfg')||'null');
+  if(c)['lock','hrLock','kEdge','bbEdge'].forEach(k=>{if(typeof c[k]==='number')CONFIG[k]=c[k];});
+}catch(e){}
 function cfgSave(){try{localStorage.setItem('fablehits_cfg',JSON.stringify(CONFIG));}catch(e){}}
 async function cfgPull(){
   if(!FBH.ready)return;
   try{
     const doc=await withTO(FBH.db.collection('fable_settings').doc('config').get(),6000);
-    if(doc.exists&&doc.data().lock)CONFIG.lock=doc.data().lock;
+    if(doc.exists){
+      const d=doc.data();
+      ['lock','hrLock','kEdge','bbEdge'].forEach(k=>{if(typeof d[k]==='number')CONFIG[k]=d[k];});
+    }
     cfgSave();
   }catch(e){}
 }
 async function cfgPush(){
   if(!FBH.ready)return;
-  try{await withTO(FBH.db.collection('fable_settings').doc('config').set({lock:CONFIG.lock,updatedAt:Date.now()},{merge:true}),6000);}catch(e){}
+  try{await withTO(FBH.db.collection('fable_settings').doc('config').set({lock:CONFIG.lock,hrLock:CONFIG.hrLock,kEdge:CONFIG.kEdge,bbEdge:CONFIG.bbEdge,updatedAt:Date.now()},{merge:true}),6000);}catch(e){}
 }
 
 const nameKey=n=>n.trim().toLowerCase().replace(/[^a-z ]/g,'').replace(/\s+/g,'_');
@@ -349,19 +362,41 @@ async function openSettings(){
   const p=prompt('Settings PIN:');
   if(p!==PIN){if(p!=null)alert('Wrong PIN');return;}
   document.getElementById('setmodal').style.display='block';
-  document.getElementById('lockIn').value=Math.round(CONFIG.lock*100);
+  const fill=()=>{
+    document.getElementById('lockIn').value=Math.round(CONFIG.lock*100);
+    document.getElementById('hrLockIn').value=Math.round(CONFIG.hrLock*1000)/10;
+    document.getElementById('kEdgeIn').value=CONFIG.kEdge;
+    document.getElementById('bbEdgeIn').value=CONFIG.bbEdge;
+  };
+  fill();
   document.getElementById('paramList').innerHTML=PARAM_ROWS.map(r=>`<div class="setrow"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');
-  cfgPull().then(()=>{document.getElementById('lockIn').value=Math.round(CONFIG.lock*100);});
+  cfgPull().then(fill);
   renderAccess();
 }
-async function saveLockThreshold(){
-  const v=parseFloat(document.getElementById('lockIn').value);
-  if(isNaN(v)||v<60||v>95){alert('Enter 60–95');return;}
-  CONFIG.lock=v/100;
+async function saveThresholds(){
+  const g=id=>parseFloat(document.getElementById(id).value);
+  const lock=g('lockIn'),hr=g('hrLockIn'),ke=g('kEdgeIn'),be=g('bbEdgeIn');
+  if(isNaN(lock)||lock<60||lock>95){alert('Hits lock: 60–95');return;}
+  if(isNaN(hr)||hr<4||hr>25){alert('HR lock: 4–25');return;}
+  if(isNaN(ke)||ke<0.1||ke>2){alert('K edge: 0.1–2');return;}
+  if(isNaN(be)||be<0.05||be>1.5){alert('BB edge: 0.05–1.5');return;}
+  CONFIG.lock=lock/100;CONFIG.hrLock=hr/100;CONFIG.kEdge=ke;CONFIG.bbEdge=be;
   cfgSave();
   await cfgPush();
+  // re-lean already-computed K/BB rows against the new edges (no refetch needed)
+  [['kB',CONFIG.kEdge],['kP',CONFIG.kEdge],['bbB',CONFIG.bbEdge],['bbP',CONFIG.bbEdge]].forEach(([m,th])=>{
+    (MK[m]||[]).forEach(r=>{if(r.line!=null){r.lean=leanFor(r.exp,r.line,th);}});
+  });
   if(ROWS.length)render(null);
-  alert('Lock threshold set to '+v+'% league-wide.');
+  alert('Thresholds saved league-wide.');
+}
+async function manualPullDK(){
+  const el=document.getElementById('dkStatus');
+  el.textContent='Pulling…';
+  const r=await fetchDKPropsAndPush(todayStr(),t=>{el.textContent=t;});
+  el.textContent=r.ok
+    ?`✓ Pulled ${r.count} games league-wide (${r.calls??'?'} API calls left). Tap Load on Today to attach the lines.`
+    :'✗ '+r.reason;
 }
 async function renderAccess(){
   const el=document.getElementById('acclist');
@@ -623,8 +658,76 @@ async function fetchDayScores(date,onProg){
   return {res:out,finals:finals.length,total:games.length};
 }
 
-/* ── DK odds: read Diamond IQ's shared props doc (app_settings/props_{date}) ── */
-let ODDSP={date:null,events:null};
+/* ── DK odds: Premium now OWNS the pull. Same The-Odds-API flow Diamond IQ used,
+   same props_{date} doc shape, so both sites keep reading identically. ── */
+const ODDS_API_KEY='370bfb0e8958dcfc4e4880fedfb548b1';
+const PLAYER_PROP_MARKETS=['batter_total_bases','batter_walks','batter_strikeouts','pitcher_strikeouts','pitcher_hits_allowed','pitcher_walks'];
+let ODDSP={date:null,events:null},DK_CALLS=null;
+
+function ptNow(){return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));}
+
+async function fetchDKPropsAndPush(date,onProg){
+  const say=onProg||(()=>{});
+  try{
+    say('DK: fetching event list…');
+    const evRes=await fetch(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events?apiKey=${ODDS_API_KEY}`);
+    if(!evRes.ok)throw new Error('Events API '+evRes.status);
+    const rem=evRes.headers.get('x-requests-remaining');
+    if(rem!=null)DK_CALLS=parseInt(rem,10);
+    const events=await evRes.json();
+    const dateEvents=events.filter(ev=>{
+      if(!ev.commence_time)return false;
+      const d=new Date(ev.commence_time);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`===date;
+    }).filter(ev=>new Date(ev.commence_time).getTime()>Date.now()); // pre-game lines only
+    if(!dateEvents.length)return{ok:false,reason:'No upcoming MLB events for '+date};
+    const results={};
+    const marketsParam=PLAYER_PROP_MARKETS.join(',');
+    let i=0;
+    for(const ev of dateEvents){
+      i++;say(`DK: props ${i}/${dateEvents.length}…`);
+      try{
+        const res=await fetch(`https://api.the-odds-api.com/v4/sports/baseball_mlb/events/${ev.id}/odds?apiKey=${ODDS_API_KEY}&regions=us&bookmakers=draftkings&markets=${marketsParam}&oddsFormat=american`);
+        const r2=res.headers.get('x-requests-remaining');
+        if(r2!=null)DK_CALLS=parseInt(r2,10);
+        if(!res.ok)continue;
+        const data=await res.json();
+        results[ev.id]={home_team:ev.home_team,away_team:ev.away_team,commence_time:ev.commence_time,
+          markets:data.bookmakers?.[0]?.markets||[],fetchedAt:Date.now()};
+      }catch(e){}
+    }
+    if(!Object.keys(results).length)return{ok:false,reason:'Every event fetch failed'};
+    const payload={date,events:results,fetchedAt:Date.now(),updatedAt:Date.now()};
+    if(FBH.ready){
+      try{await withTO(FBH.db.collection('app_settings').doc('props_'+date).set(payload),10000);}catch(e){}
+    }
+    ODDSP={date,events:results};
+    say('');
+    return{ok:true,count:Object.keys(results).length,calls:DK_CALLS};
+  }catch(e){
+    say('');
+    return{ok:false,reason:e.message};
+  }
+}
+
+// First-login auto-pull rule (exactly as specified): pull ONLY when today's props
+// doc doesn't exist yet AND it's before 9 AM PT. Past 9am and/or already pulled →
+// do nothing. Manual pull in Settings works any time.
+async function maybeAutoPullDK(){
+  const date=todayStr();
+  try{
+    if(localStorage.getItem('fablehits_dkpull_'+date))return;
+  }catch(e){}
+  if(ptNow().getHours()>=9)return;
+  if(!FBH.ready)return;
+  try{
+    const doc=await withTO(FBH.db.collection('app_settings').doc('props_'+date).get(),8000);
+    if(doc.exists)return; // already pulled — do nothing
+  }catch(e){return;}
+  try{localStorage.setItem('fablehits_dkpull_'+date,'1');}catch(e){}
+  const r=await fetchDKPropsAndPush(date,prog);
+  if(r.ok)prog(`DK lines pulled for the league (${r.count} games · ${r.calls??'?'} API calls left)`);
+}
 async function fetchLeagueProps(date){
   ODDSP={date,events:null};
   if(!FBH.ready)return;
@@ -793,7 +896,7 @@ function scoreHR(b,slot,pitcher,pHand,parkName,verified){
   return{prob,pPA,paEst,splitMult,pitMult,parkF,reasons};
 }
 function tierHR(p){
-  if(p>=0.10)return['LOCK','t-lock'];
+  if(p>=CONFIG.hrLock)return['LOCK','t-lock'];
   if(p>=0.075)return['STRONG','t-strong'];
   if(p>=0.055)return['LEAN','t-lean'];
   return['PASS','t-pass'];
@@ -946,7 +1049,7 @@ async function loadDay(){
         pit:j.oppPitName||'TBD',pHand,verified:j.verified,prob:hs.prob,reasons:hs.reasons,
         math:'per-PA '+(hs.pPA*100).toFixed(2)+'% \u00d7 ~'+hs.paEst.toFixed(1)+' PA \u00b7 split \u00d7'+hs.splitMult.toFixed(2)+' \u00b7 pitcher \u00d7'+hs.pitMult.toFixed(2)+' \u00b7 park \u00d7'+hs.parkF.toFixed(2)});
       // batter K + BB markets with DK lines
-      [['k','kB','batter_strikeouts',0.45],['bb','bbB','batter_walks',0.25]].forEach(([kind,mk,mkt,th])=>{
+      [['k','kB','batter_strikeouts',CONFIG.kEdge],['bb','bbB','batter_walks',CONFIG.bbEdge]].forEach(([kind,mk,mkt,th])=>{
         const bl=batterLine(b,j.slot,pit,kind);
         const dk=propFor(j.name,mkt);
         MK[mk].push({id:j.pid,name:j.name,team:j.team,opp:j.opp,
@@ -961,7 +1064,7 @@ async function loadDay(){
       const pit=PIT[pj.pid];
       if(!pit)return;
       const oppB=pj.oppIds.map(id=>BAT[id]).filter(Boolean);
-      [['k','kP','pitcher_strikeouts',0.45],['bb','bbP','pitcher_walks',0.25]].forEach(([kind,mk,mkt,th])=>{
+      [['k','kP','pitcher_strikeouts',CONFIG.kEdge],['bb','bbP','pitcher_walks',CONFIG.bbEdge]].forEach(([kind,mk,mkt,th])=>{
         const pl=pitcherLine(pit,oppB,kind);
         if(!pl)return;
         const dk=propFor(pit.name,mkt);
@@ -1145,7 +1248,7 @@ function dayMarketSummary(){
   {
     const rows=(R.mk?.hr)||[];
     const played=rows.filter(r=>r.verified&&playedBat(res[r.id]));
-    const lock=played.filter(r=>(r.prob||0)>=0.10);
+    const lock=played.filter(r=>(r.prob||0)>=CONFIG.hrLock);
     out.hr={lock:{h:lock.filter(r=>(res[r.id].hr||0)>=1).length,n:lock.length},
             all:{h:played.filter(r=>(res[r.id].hr||0)>=1).length,n:played.length}};
   }
@@ -1170,7 +1273,7 @@ function renderResultsDay(){
   let h=`<div class="sumbox">
     <div><b>${R.date}</b> ${R.results?(R.graded?'· final':'· partial — regrades on next Load'):'· no results yet'}</div>
     <div>HITS lock (≥${Math.round(CONFIG.lock*100)}%): <b>${pc(sm.hits.lock.h,sm.hits.lock.n)}</b> (${sm.hits.lock.h}/${sm.hits.lock.n}) <span class="goal">· goal 85%</span> · all verified: ${pc(sm.hits.all.h,sm.hits.all.n)} (${sm.hits.all.h}/${sm.hits.all.n})</div>
-    <div>HR lock (≥10%): <b>${pc(sm.hr.lock.h,sm.hr.lock.n)}</b> (${sm.hr.lock.h}/${sm.hr.lock.n}) · all verified: ${pc(sm.hr.all.h,sm.hr.all.n)} (${sm.hr.all.h}/${sm.hr.all.n})</div>
+    <div>HR lock (≥${Math.round(CONFIG.hrLock*100)}%): <b>${pc(sm.hr.lock.h,sm.hr.lock.n)}</b> (${sm.hr.lock.h}/${sm.hr.lock.n}) · all verified: ${pc(sm.hr.all.h,sm.hr.all.n)} (${sm.hr.all.h}/${sm.hr.all.n})</div>
     <div>O/U vs DK — P-K: <b>${rec(sm.kP)}</b> · B-K: <b>${rec(sm.kB)}</b> · P-BB: <b>${rec(sm.bbP)}</b> · B-BB: <b>${rec(sm.bbB)}</b></div>
     <div style="color:var(--mt2);font-size:.62rem">Confirmed matchups only. O/U records count leaned picks (edge past threshold) with a DK line.</div>
   </div>
@@ -1237,7 +1340,7 @@ async function computeSuccessStats(){
       });
       if(d.mk){
         (d.mk.hr||[]).forEach(r=>{
-          if(!r.verified||(r.prob||0)<0.10)return;
+          if(!r.verified||(r.prob||0)<CONFIG.hrLock)return;
           const o=res[r.id]||res[String(r.id)];
           if(!playedBat(o))return;
           mkAll.hr.n++;if((o.hr||0)>=1)mkAll.hr.h++;
@@ -1280,7 +1383,7 @@ function renderAllTimeBox(){
   const box=`<div class="sumbox">
     <div><b>All-time · ${s.days||0} graded day${s.days===1?'':'s'}</b></div>
     <div>HITS lock: <b>${pc(s.all)}</b> (${s.all?.h||0}/${s.all?.n||0}) <span class="goal">· goal 85%</span> · last 14d: ${pc(s.d14)} (${s.d14?.h||0}/${s.d14?.n||0})</div>
-    <div>HR lock (≥10%): <b>${pc(m.hr)}</b> (${m.hr?.h||0}/${m.hr?.n||0})</div>
+    <div>HR lock (≥${Math.round(CONFIG.hrLock*100)}%): <b>${pc(m.hr)}</b> (${m.hr?.h||0}/${m.hr?.n||0})</div>
     <div>O/U vs DK — P-K: <b>${rec(m.kP)}</b> · B-K: <b>${rec(m.kB)}</b> · P-BB: <b>${rec(m.bbP)}</b> · B-BB: <b>${rec(m.bbB)}</b></div>
   </div>`;
   const out=$('rout');
@@ -1326,7 +1429,7 @@ function drawCurrent(rowsOverride){
     head.innerHTML=`<div class="chips"><span class="chip"><b>${counts.LOCK}</b> lock ≥${Math.round(CONFIG.lock*100)}%</span><span class="chip"><b>${counts.STRONG}</b> strong</span><span class="chip"><b>${counts.LEAN}</b> lean</span><span class="chip"><b>${ROWS.length}</b> batters</span></div>`;
     drawList(rows);
   }else if(MARKET==='hr'){
-    head.innerHTML=`<div class="chips"><span class="chip"><b>${rows.length}</b> batters · P(home run) · tiers: LOCK ≥10% · STRONG ≥7.5% · LEAN ≥5.5%</span></div>`;
+    head.innerHTML=`<div class="chips"><span class="chip"><b>${rows.length}</b> batters · P(home run) · tiers: LOCK ≥${(CONFIG.hrLock*100).toFixed(0)}% · STRONG ≥7.5% · LEAN ≥5.5%</span></div>`;
     drawProbList(rows,tierHR,r=>(r.prob*100).toFixed(1)+'%');
   }else{
     const withLine=rows.filter(r=>r.line!=null).length;
@@ -1446,6 +1549,7 @@ async function bootLeagueLoad(){
     }
     computeSuccessStats();
   }
+  maybeAutoPullDK(); // premium-only DK pull — before-9am, not-yet-pulled rule
 }
 
 /* boot: set date only. NOTHING auto-loads. */
