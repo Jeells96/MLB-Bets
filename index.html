@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.71 · Prop Intelligence</title>
+<title>Diamond IQ v6.72 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -439,7 +439,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.71 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.72 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -2487,7 +2487,8 @@ function isPast9amPT(dateStr){
 async function maybeAutoPull(date){
   if(!FB.ready)return;
   if(!isPast9amPT(date))return;
-  if(!AUTOPULL.gameOdds&&!AUTOPULL.playerProps)return;
+  // Player-prop auto-pull moved to Premium (before-9am first-login rule lives there).
+  if(!AUTOPULL.gameOdds)return;
   
   // Game lines: pull only if Firebase has none for today yet
   if(AUTOPULL.gameOdds){
@@ -2510,7 +2511,7 @@ async function maybeAutoPull(date){
   }
   
   // Player props: pull only if Firebase has none for today yet
-  if(AUTOPULL.playerProps){
+  if(false&&AUTOPULL.playerProps){ // premium-only now
     const haveProps=ODDS.props[date]?.events&&Object.keys(ODDS.props[date].events).length>0;
     if(!haveProps){
       try{
@@ -3354,7 +3355,7 @@ function renderOddsPanel(){
     
     <div style="margin-top:10px;font-size:.6rem;color:var(--ac);font-weight:600;letter-spacing:.05em">PLAYER PROPS (~${eventCount||15} calls — one per game)</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-      <button class="btn bg" style="font-size:.62rem" onclick="triggerPropsFetch(false)">${ODDS.loadingProps?'Loading…':'↻ Refresh Props'}</button>
+      <span style="font-size:.6rem;color:var(--gd)">⭐ Player-prop pulls are Premium-only now — pull from Premium ⚙ Settings. Lines still display here once pulled.</span>
       <button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerSharedPropsPull()">↓ Pull from Firebase</button>
       ${propsEntry&&propsFresh?`<button class="btn" style="font-size:.6rem;background:var(--bg2)" onclick="triggerPropsFetch(true)">⚠ Force Refresh</button>`:''}
     </div>
@@ -3442,6 +3443,8 @@ async function triggerSharedOddsPull(){
 
 // Fetch player props from API for all events on the date. WARNING: ~15 calls.
 async function triggerPropsFetch(force){
+  alert('Player-prop pulls moved to Diamond IQ Premium.\n\nOpen Premium \u2192 \u2699 Settings \u2192 Pull DK lines now. Lines sync back here automatically.');
+  return;
   const date=STATE.date||todayStr();
   const eventCount=ODDS.data[date]?.games?.length||15;
   if(!confirm(`Player props uses ~${eventCount} API calls (one per game).\n\nCalls remaining: ${ODDS.callsRemaining ?? '?'}\n\nProceed?`))return;
