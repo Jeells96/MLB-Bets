@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v1.8</title>
+<title>Diamond IQ Premium v1.9</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -77,6 +77,10 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 .rrow{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--bdr);font-size:.8rem}
 .rres{min-width:30px;text-align:center;font-weight:800}
 .rY{color:var(--hit)} .rN{color:var(--cold)} .rD{color:var(--mt2)}
+.rmark{font-weight:800;margin-left:4px}
+.rmark.Y{color:var(--hit)}.rmark.N{color:var(--cold)}.rmark.P{color:var(--mt2)}
+.drow{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--bdr);font-size:.85rem;cursor:pointer}
+.dexp{background:rgba(0,0,0,.18)}
 .sumbox{margin:8px 16px;padding:12px;background:var(--card);border:1px solid var(--bdr);border-radius:10px;font-size:.78rem;line-height:1.8}
 .sumbox b{font-variant-numeric:tabular-nums}
 .goal{color:var(--warm)}
@@ -178,13 +182,10 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 </div>
 
 <div id="vRes" style="display:none">
-<div class="ctl">
-  <input type="date" id="rdp" onchange="resultsAuto()">
-  <button class="ghost" onclick="reRunResults()">↻ Re-check results</button>
-</div>
+
 <div id="rprog" style="padding:0 16px 8px;font-size:.7rem;color:var(--mt);min-height:18px"></div>
 <div id="rout">
-  <div class="empty"><b>Results load automatically</b>Prior days grade themselves whenever anyone taps Load on the Today tab. Open this tab or pick a date and everything appears — every market, every ✓/✗, confirmed matchups only in the stats.</div>
+  <div class="empty"><b>Loading success history…</b></div>
 </div>
 </div>
 
@@ -253,7 +254,7 @@ function showView(v){
   document.getElementById('vRes').style.display=v==='results'?'':'none';
   document.getElementById('tab-today').classList.toggle('on',v==='today');
   document.getElementById('tab-results').classList.toggle('on',v==='results');
-  if(v==='results')resultsAuto();
+  if(v==='results')renderResultsTab();
 }
 
 /* ── config (lock threshold), PIN, and access gate ── */
@@ -1125,6 +1126,11 @@ async function loadDay(){
     });
     await fbPush(date,{rows:compact,mk:mkCompact,ts:Date.now()});
     await autoGradePriorDays(date,prog);
+    DAY_RESULTS=null;
+    if(date<todayStr()){
+      const own=await fbPull(date);
+      DAY_RESULTS=own?.results||null;
+    }
     computeSuccessStats(); // refresh header stats in background
     render(null);
   }catch(e){
@@ -1151,14 +1157,52 @@ function showCached(){
 // somehow got missed). "graded" is only marked permanent once every scheduled
 // game that day went Final — partial days regrade on the next Load.
 
+function dayTallies(rows,mk,res){
+  const t={hits:{h:0,n:0},hr:{h:0,n:0},kP:{w:0,l:0,p:0},kB:{w:0,l:0,p:0},bbP:{w:0,l:0,p:0},bbB:{w:0,l:0,p:0}};
+  (rows||[]).forEach(r=>{
+    if(!r.verified||(r.prob||0)<CONFIG.lock)return;
+    const o=res[r.id]||res[String(r.id)];
+    if(!playedBat(o))return;
+    t.hits.n++;if((o.h||0)>=1)t.hits.h++;
+  });
+  ((mk&&mk.hr)||[]).forEach(r=>{
+    if(!r.verified||(r.prob||0)<CONFIG.hrLock)return;
+    const o=res[r.id]||res[String(r.id)];
+    if(!playedBat(o))return;
+    t.hr.n++;if((o.hr||0)>=1)t.hr.h++;
+  });
+  ['kP','kB','bbP','bbB'].forEach(m=>{
+    ((mk&&mk[m])||[]).forEach(r=>{
+      if(!r.verified)return;
+      const gr=lineGrade(r,MK_ACTUAL[m](res[r.id]||res[String(r.id)]));
+      if(gr==='W')t[m].w++;else if(gr==='L')t[m].l++;else if(gr==='P')t[m].p++;
+    });
+  });
+  return t;
+}
+async function pushDaySummary(date,tallies){
+  if(!FBH.ready)return;
+  try{await withTO(FBH.db.collection('fable_settings').doc('summary').set({days:{[date]:tallies},updatedAt:Date.now()},{merge:true}),8000);}catch(e){}
+}
 async function storeResults(date,g){
-  const payload={results:g.res,gradedTs:Date.now(),graded:g.finals>0&&g.finals>=g.total};
+  // trim box-score map to only players we actually predicted — keeps day docs small
+  let day=null;
+  try{day=JSON.parse(localStorage.getItem('fablehits_'+date)||'null');}catch(e){}
+  if(!day||!day.rows)day=await fbPull(date)||{};
+  const keep=new Set();
+  (day.rows||[]).forEach(r=>keep.add(String(r.id)));
+  Object.values(day.mk||{}).forEach(arr=>(arr||[]).forEach(r=>keep.add(String(r.id))));
+  const trimmed={};
+  Object.keys(g.res).forEach(k=>{if(!keep.size||keep.has(String(k)))trimmed[k]=g.res[k];});
+  const payload={results:trimmed,gradedTs:Date.now(),graded:g.finals>0&&g.finals>=g.total};
   await fbPush(date,payload);
   try{
     const c=JSON.parse(localStorage.getItem('fablehits_'+date)||'null')||{};
-    c.results=g.res;c.graded=payload.graded;c.gradedTs=payload.gradedTs;
+    c.results=trimmed;c.graded=payload.graded;c.gradedTs=payload.gradedTs;
     localStorage.setItem('fablehits_'+date,JSON.stringify(c));
   }catch(e){}
+  // tiny summary doc powers every stats display — one small read instead of scanning
+  await pushDaySummary(date,dayTallies(day.rows,day.mk,trimmed));
 }
 
 // Runs inside every Load: sweep the last 5 days, grade anything with predictions
@@ -1181,7 +1225,8 @@ async function autoGradePriorDays(fromDate,prog){
 }
 
 /* ── stored-day access + per-market grading ── */
-let RDATA=null,RM='hits';
+let RM='hits',RVIEW='14d',REXP=null;
+let DAY_RESULTS=null; // outcomes for the date shown on the Today tab (past days)
 const playedBat=o=>!!o&&((o.ab||0)>=1||(o.h||0)>=1);
 function lineGrade(r,actual){
   if(r.line==null||!r.lean||r.lean==='—'||actual==null)return null;
@@ -1206,88 +1251,93 @@ async function loadStoredDay(date){
   };
 }
 
-// Entry point: runs whenever the Results tab opens or the date changes.
-async function resultsAuto(force){
+/* ── RESULTS TAB: per-day success list (14D / All-time), one list per market ── */
+function statsCache(){try{return JSON.parse(localStorage.getItem('fablehits_stats')||'null');}catch(e){return null;}}
+const fmtDayDate=d=>{const dt=new Date(d+'T12:00:00Z');return dt.toLocaleDateString([],{month:'short',day:'numeric',timeZone:'UTC'});};
+function dayLineFor(t,m){
+  if(m==='hits'||m==='hr'){
+    const o=t[m]||{h:0,n:0};
+    if(!o.n)return null;
+    return `${o.h}/${o.n} · ${Math.round(o.h/o.n*100)}%`;
+  }
+  const o=t[m]||{w:0,l:0,p:0};
+  if(!(o.w+o.l+o.p))return null;
+  return `${o.w}-${o.l}${o.p?'-'+o.p+'P':''}${(o.w+o.l)?' · '+Math.round(o.w/(o.w+o.l)*100)+'%':''}`;
+}
+async function renderResultsTab(){
   const rp=t=>{$('rprog').textContent=t;};
-  const date=$('rdp').value||addDays(todayStr(),-1);
-  rp('Loading stored day…');
-  RDATA=await loadStoredDay(date);
-  if(!RDATA){
+  let s=statsCache();
+  if(!s||!s.daysMap){
+    rp('Loading success history…');
+    s=await computeSuccessStats();
     rp('');
-    const why=FBH.lastErr?(isPermErr(FBH.lastErr)?'The league pull was refused — Firestore rules are blocking the Premium collections.':'League pull failed: '+FBH.lastErr.message):'No predictions were saved for this date.';
-    $('rout').innerHTML='<div class="empty"><b>Nothing stored for '+date+'</b>'+why+'</div>';
-    renderAllTimeBox();
-    return;
+    if(!s){$('rout').innerHTML='<div class="empty"><b>No stats yet</b>'+(FBH.ready?'Nothing graded so far — days grade themselves whenever anyone taps Load on the Today tab.':'League server unreachable and nothing cached on this device.')+'</div>';return;}
+  }else{
+    computeSuccessStats(); // silent background refresh
   }
-  // self-heal: fetch scores if missing (or forced), for past dates
-  if((!RDATA.results||force)&&date<todayStr()){
-    rp('Fetching box scores…');
-    const g=await fetchDayScores(date,rp);
-    if(Object.keys(g.res).length){
-      await storeResults(date,g);
-      RDATA.results=g.res;RDATA.graded=g.finals>0&&g.finals>=g.total;
-      computeSuccessStats();
-    }
-  }
-  rp('');
-  renderResultsDay();
-  renderAllTimeBox();
+  drawResultsList();
 }
-function reRunResults(){resultsAuto(true);}
-
-function dayMarketSummary(){
-  const R=RDATA,res=R.results||{};
-  const out={};
-  // hits
-  {
-    const played=(R.rows||[]).filter(r=>r.verified&&playedBat(res[r.id]));
-    const tally=t=>{const s=played.filter(r=>tier(r.prob)[0]===t);const h=s.filter(r=>(res[r.id].h||0)>=1).length;return{h,n:s.length};};
-    out.hits={lock:tally('LOCK'),all:{h:played.filter(r=>(res[r.id].h||0)>=1).length,n:played.length}};
+function drawResultsList(){
+  const s=statsCache();
+  const days=s?.daysMap||{};
+  const dates=Object.keys(days).sort().reverse();
+  const cutoff=addDays(todayStr(),-14);
+  const shown=RVIEW==='14d'?dates.filter(d=>d>=cutoff):dates;
+  // aggregate across shown days for the selected market
+  let head='';
+  if(RM==='hits'||RM==='hr'){
+    let h=0,n=0;shown.forEach(d=>{const o=days[d][RM];if(o){h+=o.h;n+=o.n;}});
+    head=n?`<b>${Math.round(h/n*100)}%</b> (${h}/${n})${RM==='hits'?' <span class="goal">· goal 85%</span>':''}`:'no graded picks yet';
+  }else{
+    let w=0,l=0,p=0;shown.forEach(d=>{const o=days[d][RM];if(o){w+=o.w;l+=o.l;p+=o.p;}});
+    head=(w+l)?`<b>${w}-${l}${p?'-'+p+'P':''}</b> (${Math.round(w/(w+l)*100)}%) vs DK`:'no leaned picks yet';
   }
-  // hr
-  {
-    const rows=(R.mk?.hr)||[];
-    const played=rows.filter(r=>r.verified&&playedBat(res[r.id]));
-    const lock=played.filter(r=>(r.prob||0)>=CONFIG.hrLock);
-    out.hr={lock:{h:lock.filter(r=>(res[r.id].hr||0)>=1).length,n:lock.length},
-            all:{h:played.filter(r=>(res[r.id].hr||0)>=1).length,n:played.length}};
-  }
-  // line markets
-  ['kP','kB','bbP','bbB'].forEach(m=>{
-    let w=0,l=0,p=0;
-    ((R.mk?.[m])||[]).forEach(r=>{
-      if(!r.verified)return;
-      const gr=lineGrade(r,MK_ACTUAL[m](res[r.id]));
-      if(gr==='W')w++;else if(gr==='L')l++;else if(gr==='P')p++;
-    });
-    out[m]={w,l,p};
-  });
-  return out;
-}
-
-function renderResultsDay(){
-  const R=RDATA,res=R.results||{};
-  const sm=dayMarketSummary();
-  const pc=(h,n)=>n?Math.round(h/n*1000)/10+'%':'—';
-  const rec=o=>o.w+o.l?`${o.w}-${o.l}${o.p?'-'+o.p+'P':''} (${Math.round(o.w/(o.w+o.l)*100)}%)`:'—';
-  let h=`<div class="sumbox">
-    <div><b>${R.date}</b> ${R.results?(R.graded?'· final':'· partial — regrades on next Load'):'· no results yet'}</div>
-    <div>HITS lock (≥${Math.round(CONFIG.lock*100)}%): <b>${pc(sm.hits.lock.h,sm.hits.lock.n)}</b> (${sm.hits.lock.h}/${sm.hits.lock.n}) <span class="goal">· goal 85%</span> · all verified: ${pc(sm.hits.all.h,sm.hits.all.n)} (${sm.hits.all.h}/${sm.hits.all.n})</div>
-    <div>HR lock (≥${Math.round(CONFIG.hrLock*100)}%): <b>${pc(sm.hr.lock.h,sm.hr.lock.n)}</b> (${sm.hr.lock.h}/${sm.hr.lock.n}) · all verified: ${pc(sm.hr.all.h,sm.hr.all.n)} (${sm.hr.all.h}/${sm.hr.all.n})</div>
-    <div>O/U vs DK — P-K: <b>${rec(sm.kP)}</b> · B-K: <b>${rec(sm.kB)}</b> · P-BB: <b>${rec(sm.bbP)}</b> · B-BB: <b>${rec(sm.bbB)}</b></div>
-    <div style="color:var(--mt2);font-size:.62rem">Confirmed matchups only. O/U records count leaned picks (edge past threshold) with a DK line.</div>
+  const rows=shown.map(d=>{
+    const line=dayLineFor(days[d],RM);
+    if(!line)return '';
+    return `<div class="drow" onclick="expandDay('${d}')">
+      <span style="min-width:64px;color:var(--tx);font-weight:600">${fmtDayDate(d)}</span>
+      <span style="flex:1;font-variant-numeric:tabular-nums;color:var(--mt)">${line}</span>
+      <span style="color:var(--mt2);font-size:.7rem">${REXP===d?'▾':'▸'}</span>
+    </div><div class="dexp" id="dexp-${d}" style="display:${REXP===d?'block':'none'}"></div>`;
+  }).join('');
+  $('rout').innerHTML=`
+  <div class="chips">
+    <span class="chip mk ${RVIEW==='14d'?'on':''}" onclick="RVIEW='14d';REXP=null;drawResultsList()">LAST 14D</span>
+    <span class="chip mk ${RVIEW==='all'?'on':''}" onclick="RVIEW='all';REXP=null;drawResultsList()">ALL-TIME</span>
   </div>
-  <div class="chips">${Object.keys(MK_LABEL).map(m=>`<span class="chip mk ${RM===m?'on':''}" onclick="setRMarket('${m}')">${MK_LABEL[m]}</span>`).join('')}</div>
-  <div id="rlist"></div>`;
-  $('rout').innerHTML=h;
-  drawRList();
+  <div class="chips">${Object.keys(MK_LABEL).map(m=>`<span class="chip mk ${RM===m?'on':''}" onclick="RM='${m}';REXP=null;drawResultsList()">${MK_LABEL[m]}</span>`).join('')}</div>
+  <div class="sumbox">${MK_LABEL[RM]} · ${RVIEW==='14d'?'last 14 days':'all-time'}: ${head}</div>
+  ${rows||'<div class="empty">No graded days in this window yet.</div>'}`;
+  if(REXP)fillDayExpansion(REXP);
 }
-function setRMarket(m){RM=m;renderResultsDay();}
-function drawRList(){
-  const R=RDATA,res=R.results||{};
-  const el=document.getElementById('rlist');
+async function expandDay(date){
+  REXP=REXP===date?null:date;
+  drawResultsList();
+}
+async function fillDayExpansion(date){
+  const el=document.getElementById('dexp-'+date);
   if(!el)return;
-  const note=r=>r.verified?'':' <span class="vbadge">○ matchup not confirmed — result not counted</span>';
+  el.innerHTML='<div style="padding:8px 14px;color:var(--mt2);font-size:.68rem">Loading players…</div>';
+  const data=await loadStoredDay(date);
+  if(!data){el.innerHTML='<div style="padding:8px 14px;color:var(--mt2);font-size:.68rem">Day detail not stored.</div>';return;}
+  if(!data.results&&date<todayStr()){
+    const g=await fetchDayScores(date,t=>{el.firstChild&&(el.firstChild.textContent=t);});
+    if(Object.keys(g.res).length){await storeResults(date,g);data.results=g.res;computeSuccessStats();}
+  }
+  el.innerHTML=dayPlayerRows(data)+`<div style="padding:6px 14px"><span class="glink" onclick="event.stopPropagation();recheckDay('${date}')">↻ Re-check this day</span></div>`;
+}
+async function recheckDay(date){
+  const el=document.getElementById('dexp-'+date);
+  if(el)el.innerHTML='<div style="padding:8px 14px;color:var(--mt2);font-size:.68rem">Re-fetching box scores…</div>';
+  const g=await fetchDayScores(date,t=>{if(el&&el.firstChild)el.firstChild.textContent=t;});
+  if(Object.keys(g.res).length)await storeResults(date,g);
+  await computeSuccessStats();
+  drawResultsList();
+}
+function dayPlayerRows(R){
+  const res=R.results||{};
+  const note=r=>r.verified?'':' <span class="vbadge">○ not confirmed — not counted</span>';
   let rows;
   if(RM==='hits'||RM==='hr'){
     const src=RM==='hits'?(R.rows||[]):((R.mk?.hr)||[]);
@@ -1311,50 +1361,44 @@ function drawRList(){
       return `<div class="rrow"><span class="rres ${cls}">${sym}</span><span style="min-width:46px;font-variant-numeric:tabular-nums;color:var(--mt)">exp ${(r.exp??0).toFixed(1)}</span><span style="min-width:44px;font-variant-numeric:tabular-nums;color:var(--tx)">${act!=null?'act '+act:'—'}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}${note(r)}</span><span style="color:var(--mt2);font-size:.62rem;white-space:nowrap">${dk}</span></div>`;
     });
   }
-  el.innerHTML=rows.join('')||'<div class="empty">No rows for this market.</div>';
+  return rows.join('')||'<div style="padding:8px 14px;color:var(--mt2);font-size:.68rem">No rows for this market.</div>';
 }
 
-/* ── aggregate stats: hits header numbers + per-market all-time records ── */
-async function computeSuccessStats(){
-  if(!FBH.ready)return null;
+/* ── aggregate stats: ONE tiny summary-doc read (no more scanning fat day docs) ── */
+async function rebuildSummary(){
+  // one-time backfill from existing graded day docs
   try{
-    const snap=await withTO(FBH.db.collection('fable_hits').limit(150).get(),12000);
-    const cutoff=addDays(todayStr(),-14);
-    let days=0;
-    const all={h:0,n:0},d14={h:0,n:0};
-    const mkAll={hr:{h:0,n:0},kP:{w:0,l:0,p:0},kB:{w:0,l:0,p:0},bbP:{w:0,l:0,p:0},bbB:{w:0,l:0,p:0}};
+    const snap=await withTO(FBH.db.collection('fable_hits').limit(150).get(),25000);
+    const days={};
     snap.forEach(doc=>{
       const d=doc.data();
       if(!d.rows||!d.results)return;
-      days++;
-      const recent=doc.id>=cutoff;
-      const res=d.results;
-      d.rows.forEach(r=>{
-        if(!r.verified)return;
-        const o=res[r.id]||res[String(r.id)];
-        if(!playedBat(o))return;
-        if(r.prob>=CONFIG.lock){
-          all.n++;if((o.h||0)>=1)all.h++;
-          if(recent){d14.n++;if((o.h||0)>=1)d14.h++;}
-        }
-      });
-      if(d.mk){
-        (d.mk.hr||[]).forEach(r=>{
-          if(!r.verified||(r.prob||0)<CONFIG.hrLock)return;
-          const o=res[r.id]||res[String(r.id)];
-          if(!playedBat(o))return;
-          mkAll.hr.n++;if((o.hr||0)>=1)mkAll.hr.h++;
-        });
-        ['kP','kB','bbP','bbB'].forEach(m=>{
-          (d.mk[m]||[]).forEach(r=>{
-            if(!r.verified)return;
-            const gr=lineGrade(r,MK_ACTUAL[m](res[r.id]||res[String(r.id)]));
-            if(gr==='W')mkAll[m].w++;else if(gr==='L')mkAll[m].l++;else if(gr==='P')mkAll[m].p++;
-          });
-        });
-      }
+      days[doc.id]=dayTallies(d.rows,d.mk,d.results);
     });
-    const stats={ts:Date.now(),days,all,d14,mkAll};
+    if(Object.keys(days).length){
+      await withTO(FBH.db.collection('fable_settings').doc('summary').set({days,updatedAt:Date.now()},{merge:true}),10000);
+    }
+    return days;
+  }catch(e){return null;}
+}
+async function computeSuccessStats(){
+  if(!FBH.ready)return null;
+  try{
+    const doc=await withTO(FBH.db.collection('fable_settings').doc('summary').get(),8000);
+    let days=doc.exists?(doc.data().days||{}):{};
+    if(!Object.keys(days).length&&!computeSuccessStats._rebuilt){
+      computeSuccessStats._rebuilt=true;
+      days=(await rebuildSummary())||{};
+    }
+    const cutoff=addDays(todayStr(),-14);
+    const all={h:0,n:0},d14={h:0,n:0};
+    Object.keys(days).forEach(dt=>{
+      const o=days[dt]?.hits;
+      if(!o)return;
+      all.h+=o.h;all.n+=o.n;
+      if(dt>=cutoff){d14.h+=o.h;d14.n+=o.n;}
+    });
+    const stats={ts:Date.now(),days:Object.keys(days).length,all,d14,daysMap:days};
     try{localStorage.setItem('fablehits_stats',JSON.stringify(stats));}catch(e){}
     renderHeaderStats();
     return stats;
@@ -1373,22 +1417,6 @@ function renderHeaderStats(){
   put(s?.all,'hsAll','hsAllN');
   put(s?.d14,'hs14','hs14N');
 }
-function renderAllTimeBox(){
-  let s=null;
-  try{s=JSON.parse(localStorage.getItem('fablehits_stats')||'null');}catch(e){}
-  if(!s)return;
-  const pc=o=>o&&o.n?Math.round(o.h/o.n*1000)/10+'%':'—';
-  const rec=o=>o&&(o.w+o.l)?`${o.w}-${o.l}${o.p?'-'+o.p+'P':''} (${Math.round(o.w/(o.w+o.l)*100)}%)`:'—';
-  const m=s.mkAll||{};
-  const box=`<div class="sumbox">
-    <div><b>All-time · ${s.days||0} graded day${s.days===1?'':'s'}</b></div>
-    <div>HITS lock: <b>${pc(s.all)}</b> (${s.all?.h||0}/${s.all?.n||0}) <span class="goal">· goal 85%</span> · last 14d: ${pc(s.d14)} (${s.d14?.h||0}/${s.d14?.n||0})</div>
-    <div>HR lock (≥${Math.round(CONFIG.hrLock*100)}%): <b>${pc(m.hr)}</b> (${m.hr?.h||0}/${m.hr?.n||0})</div>
-    <div>O/U vs DK — P-K: <b>${rec(m.kP)}</b> · B-K: <b>${rec(m.kB)}</b> · P-BB: <b>${rec(m.bbP)}</b> · B-BB: <b>${rec(m.bbB)}</b></div>
-  </div>`;
-  const out=$('rout');
-  if(out)out.innerHTML=box+out.innerHTML;
-}
 
 /* ============ RENDER ============ */
 function tier(p){
@@ -1398,6 +1426,20 @@ function tier(p){
   return['PASS','t-pass'];
 }
 
+function todayMark(market,r){
+  if(!DAY_RESULTS)return '';
+  const o=DAY_RESULTS[r.id]||DAY_RESULTS[String(r.id)];
+  if(market==='hits'||market==='hr'){
+    if(!playedBat(o))return '';
+    const yes=((market==='hits'?o.h:o.hr)||0)>=1;
+    return yes?'<span class="rmark Y">✓</span>':'<span class="rmark N">✗</span>';
+  }
+  const gr=lineGrade(r,MK_ACTUAL[market]?MK_ACTUAL[market](o):null);
+  if(gr==='W')return '<span class="rmark Y">✓</span>';
+  if(gr==='L')return '<span class="rmark N">✗</span>';
+  if(gr==='P')return '<span class="rmark P">P</span>';
+  return '';
+}
 function render(msg,cachedAt){
   const out=$('out');
   if(msg){out.innerHTML='<div class="empty"><b>Nothing to show</b>'+msg+'</div>';return;}
@@ -1452,7 +1494,7 @@ function drawList(rows){
       <div class="crow">
         <div class="prob ${pcls}">${pct}%</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${r.locked?' <span title="Verified — score locked" style="font-size:.6rem">🔒</span>':''}</div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${todayMark('hits',r)}${r.locked?' <span title="Verified — score locked" style="font-size:.6rem">🔒</span>':''}</div>
           <div class="meta">${r.team} #${r.slot??''} vs ${r.pit} (${r.pHand||'?'}HP) · ${r.opp}</div>
         </div>
         <span class="tier ${tc}">${tl}</span>
@@ -1476,7 +1518,7 @@ function drawProbList(rows,tierFn,fmt){
       <div class="crow">
         <div class="prob ${r.prob>=0.09?'p-hi':r.prob>=0.06?'p-md':'p-lo'}">${fmt(r)}</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}</div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${todayMark('hr',r)}${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}</div>
           <div class="meta">${r.team}${r.slot?' #'+r.slot:''} vs ${r.pit||r.opp}${r.pHand?' ('+r.pHand+'HP)':''} · ${r.opp}</div>
         </div>
         <span class="tier ${tc}">${tl}</span>
@@ -1504,7 +1546,7 @@ function drawLineList(rows){
       <div class="crow">
         <div class="prob p-md">${(r.exp??0).toFixed(1)}</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}</div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${todayMark(MARKET,r)}${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}</div>
           <div class="meta">${r.team} vs ${r.opp}${r.pit?' · '+r.pit:''}</div>
         </div>
         ${dk}
@@ -1545,7 +1587,10 @@ async function bootLeagueLoad(){
     const remote=await fbPull(date);
     if(remote&&remote.rows&&remote.rows.length&&(!local||((remote.ts||0)>(local.ts||0)))){
       hydrateCompact(remote);
+      DAY_RESULTS=remote.results||null;
       render(null,new Date(remote.ts||Date.now()));
+    }else if(remote&&remote.results){
+      DAY_RESULTS=remote.results;render(null,local?new Date(local.ts):undefined);
     }
     computeSuccessStats();
   }
@@ -1555,7 +1600,6 @@ async function bootLeagueLoad(){
 /* boot: set date only. NOTHING auto-loads. */
 (function(){
   $('dp').value=todayStr();
-  $('rdp').value=addDays(todayStr(),-1);
   renderHeaderStats();
   bootGate();
 })();
