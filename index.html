@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#060810">
-<title>Diamond IQ v6.72 · Prop Intelligence</title>
+<title>Diamond IQ v6.73 · Prop Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -439,7 +439,7 @@ details summary:hover{color:var(--tx)}
   <div class="hdr">
     <div>
       <div class="brand">Diamond <span>IQ</span></div>
-      <div class="bsub">Prop Intelligence · v6.72 · Live API</div>
+      <div class="bsub">Prop Intelligence · v6.73 · Live API</div>
     </div>
     <div class="hr">
       <input type="date" id="dp">
@@ -5619,33 +5619,23 @@ async function loadPremiumStats(){
   if(!FB.ready){premFill(premCache(),'Live refresh unavailable — showing last saved numbers.');return;}
   const TO=(p,ms)=>Promise.race([p,new Promise((_,rj)=>setTimeout(()=>rj(new Error('timeout')),ms))]);
   try{
-    let lock=0.78;
-    try{
-      const cfg=await TO(FB.db.collection('fable_settings').doc('config').get(),6000);
-      if(cfg.exists&&cfg.data().lock)lock=cfg.data().lock;
-    }catch(e){}
-    const snap=await TO(FB.db.collection('fable_hits').limit(150).get(),12000);
+    // One tiny summary doc — no scanning of full day docs anymore.
+    const doc=await TO(FB.db.collection('fable_settings').doc('summary').get(),8000);
+    const days=doc.exists?(doc.data().days||{}):{};
     const cd=new Date();cd.setDate(cd.getDate()-14);
     const cutoff=cd.toISOString().slice(0,10);
-    let days=0;const all={h:0,n:0},d14={h:0,n:0};
-    snap.forEach(doc=>{
-      const d=doc.data();
-      if(!d.rows||!d.results)return;
-      days++;
-      const recent=doc.id>=cutoff;
-      d.rows.forEach(r=>{
-        if(!r.verified)return;
-        const o=d.results[r.id]||d.results[String(r.id)];
-        if(!o||!(o.ab>=1||o.h>=1))return;
-        if(r.prob>=lock){
-          all.n++;if(o.h>=1)all.h++;
-          if(recent){d14.n++;if(o.h>=1)d14.h++;}
-        }
-      });
+    const all={h:0,n:0},d14={h:0,n:0};
+    let nDays=0;
+    Object.keys(days).forEach(dt=>{
+      const o=days[dt]?.hits;
+      if(!o)return;
+      nDays++;
+      all.h+=o.h;all.n+=o.n;
+      if(dt>=cutoff){d14.h+=o.h;d14.n+=o.n;}
     });
-    const stats={ts:Date.now(),days,all,d14};
+    const stats={ts:Date.now(),days:nDays,all,d14,daysMap:days};
     try{localStorage.setItem('fablehits_stats',JSON.stringify(stats));}catch(e){}
-    premFill(stats,days?'Live from '+days+' graded day'+(days===1?'':'s')+' of results.':'No graded days yet — rates appear after the first Premium picks are graded.');
+    premFill(stats,nDays?'Live from '+nDays+' graded day'+(nDays===1?'':'s')+' of results.':'No graded days yet — rates appear after the first Premium picks are graded.');
   }catch(e){
     premFill(premCache(),'Could not refresh — showing last saved numbers.');
   }
