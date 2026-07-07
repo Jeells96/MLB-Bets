@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v1.9</title>
+<title>Diamond IQ Premium v2.0</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -631,6 +631,27 @@ async function fetchTeamLastLineup(teamId,date){
   }catch(e){return[];}
 }
 
+// For completed games: pull the ACTUAL batting orders + starters from the box
+// score. These are confirmed by definition, so retro-loaded days verify properly
+// and count toward the success stats.
+async function retroLineups(gamePk){
+  try{
+    const box=await fetchJSON(`${MLB}/api/v1/game/${gamePk}/boxscore`);
+    if(!box?.teams)return null;
+    const side=k=>{
+      const t=box.teams[k]||{};
+      const lineup=Object.values(t.players||{})
+        .filter(p=>p.battingOrder&&parseInt(p.battingOrder)%100===0)
+        .sort((a,b)=>parseInt(a.battingOrder)-parseInt(b.battingOrder))
+        .slice(0,9).map(p=>({id:p.person.id,fullName:p.person.fullName}));
+      const spId=(t.pitchers||[])[0];
+      const sp=spId?{id:spId,fullName:t.players?.['ID'+spId]?.person?.fullName||''}:null;
+      return{lineup,sp};
+    };
+    return{home:side('home'),away:side('away')};
+  }catch(e){return null;}
+}
+
 // Actual outcomes for a date from every Final box score.
 // Returns {res: playerId -> {h,ab,so,bb,hr,pk,pbb}, finals, total} so callers can
 // tell a fully-final day (graded permanently) from a partial one (regrade later).
@@ -981,14 +1002,26 @@ async function loadDay(){
       const hAb=home?.team?.abbreviation||home?.team?.teamName||'HOME';
       const aAb=away?.team?.abbreviation||away?.team?.teamName||'AWAY';
       const hId=home?.team?.id,aId=away?.team?.id;
-      const hSP=home?.probablePitcher,aSP=away?.probablePitcher;
-      if(hSP)pitcherIds.add(hSP.id);
-      if(aSP)pitcherIds.add(aSP.id);
+      let hSP=home?.probablePitcher,aSP=away?.probablePitcher;
       let hL=(g.lineups?.homePlayers||[]).slice(0,9);
       let aL=(g.lineups?.awayPlayers||[]).slice(0,9);
-      const hPosted=hL.length>=9,aPosted=aL.length>=9;
-      if(!aPosted&&aId){prog(`Projecting ${aAb} from last game…`);aL=await fetchTeamLastLineup(aId,date);}
-      if(!hPosted&&hId){prog(`Projecting ${hAb} from last game…`);hL=await fetchTeamLastLineup(hId,date);}
+      let hPosted=hL.length>=9,aPosted=aL.length>=9;
+      const isPast=date<todayStr();
+      if(isPast){
+        // completed game: box score = confirmed lineups + actual starters
+        prog(`Reading ${aAb} @ ${hAb} box score…`);
+        const retro=await retroLineups(g.gamePk);
+        if(retro){
+          if(retro.home.lineup.length>=9){hL=retro.home.lineup;hPosted=true;}
+          if(retro.away.lineup.length>=9){aL=retro.away.lineup;aPosted=true;}
+          if(retro.home.sp)hSP={id:retro.home.sp.id,fullName:retro.home.sp.fullName};
+          if(retro.away.sp)aSP={id:retro.away.sp.id,fullName:retro.away.sp.fullName};
+        }
+      }
+      if(hSP)pitcherIds.add(hSP.id);
+      if(aSP)pitcherIds.add(aSP.id);
+      if(!isPast&&!aPosted&&aId){prog(`Projecting ${aAb} from last game…`);aL=await fetchTeamLastLineup(aId,date);}
+      if(!isPast&&!hPosted&&hId){prog(`Projecting ${hAb} from last game…`);hL=await fetchTeamLastLineup(hId,date);}
       if(!aL.length)PENDING.push(`${aAb} @ ${hAb} — no ${aAb} lineup available yet`);
       if(!hL.length)PENDING.push(`${aAb} @ ${hAb} — no ${hAb} lineup available yet`);
       // verified = this team's lineup is POSTED and the opposing starter is known
@@ -1125,13 +1158,18 @@ async function loadDay(){
         edge:r.edge!=null?Math.round(r.edge*100)/100:null}));
     });
     await fbPush(date,{rows:compact,mk:mkCompact,ts:Date.now()});
-    await autoGradePriorDays(date,prog);
     DAY_RESULTS=null;
     if(date<todayStr()){
-      const own=await fbPull(date);
-      DAY_RESULTS=own?.results||null;
+      prog('Grading '+date+'…');
+      const g=await fetchDayScores(date,t=>prog('Grading '+date+' — '+t));
+      if(Object.keys(g.res).length){
+        await storeResults(date,g);
+        DAY_RESULTS=g.res;
+      }
     }
-    computeSuccessStats(); // refresh header stats in background
+    await autoGradePriorDays(date,prog);
+    prog('Updating success stats…');
+    await computeSuccessStats(); // awaited: stats are current the moment Load ends
     render(null);
   }catch(e){
     render('Something broke while loading: '+e.message+'. Tap Load to retry.');
@@ -1273,7 +1311,9 @@ async function renderResultsTab(){
     rp('');
     if(!s){$('rout').innerHTML='<div class="empty"><b>No stats yet</b>'+(FBH.ready?'Nothing graded so far — days grade themselves whenever anyone taps Load on the Today tab.':'League server unreachable and nothing cached on this device.')+'</div>';return;}
   }else{
-    computeSuccessStats(); // silent background refresh
+    computeSuccessStats().then(()=>{
+      if(document.getElementById('vRes').style.display!=='none')drawResultsList();
+    });
   }
   drawResultsList();
 }
