@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v2.1</title>
+<title>Diamond IQ Premium v2.2</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -84,6 +84,11 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 .sumbox{margin:8px 16px;padding:12px;background:var(--card);border:1px solid var(--bdr);border-radius:10px;font-size:.78rem;line-height:1.8}
 .sumbox b{font-variant-numeric:tabular-nums}
 .goal{color:var(--warm)}
+#toasts{position:fixed;left:0;right:0;bottom:16px;z-index:12000;display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none;padding:0 12px}
+.toast{background:#11161f;border:1px solid var(--bdr);border-left:4px solid var(--hit);color:var(--tx);font-size:.72rem;padding:9px 13px;border-radius:9px;max-width:520px;width:100%;box-shadow:0 6px 24px rgba(0,0,0,.5);font-variant-numeric:tabular-nums;line-height:1.4;animation:tin .2s ease}
+.toast.err{border-left-color:var(--cold)}
+.toast.warn{border-left-color:var(--warm)}
+@keyframes tin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 #gate{position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px}
 .gcard{max-width:340px;width:100%;background:var(--card);border:1px solid var(--bdr);border-radius:14px;padding:24px;text-align:center}
 .gcard h2{letter-spacing:.14em;margin-bottom:6px}
@@ -131,6 +136,7 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
   <button class="tab" style="margin-left:auto" onclick="openSettings()">⚙</button>
 </div>
 
+<div id="toasts"></div>
 <div id="gate">
   <div class="gcard">
     <h2>DIAMOND IQ <span>PREMIUM</span></h2>
@@ -439,6 +445,17 @@ let MK={hr:[],kP:[],kB:[],bbP:[],bbB:[]};
 let MARKET='hits';
 const MK_LABEL={hits:'HITS',hr:'HR',kP:'PITCHER K',kB:'BATTER K',bbP:'PITCHER BB',bbB:'BATTER BB'};
 
+function toast(msg,kind){
+  const wrap=document.getElementById('toasts');
+  if(!wrap)return;
+  const t=document.createElement('div');
+  t.className='toast'+(kind?' '+kind:'');
+  t.textContent=msg;
+  wrap.appendChild(t);
+  setTimeout(()=>{t.style.transition='opacity .4s';t.style.opacity='0';setTimeout(()=>t.remove(),420);},kind==='err'?7000:4200);
+  console.log('[FH-TOAST]'+(kind?'['+kind+']':''),msg);
+}
+
 const sf=v=>{if(v==null||v==='')return null;const n=parseFloat(v);return isNaN(n)?null:n;};
 const nn=(v,fb=0)=>sf(v)??fb;
 const clampN=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -677,6 +694,7 @@ async function fetchDayScores(date,onProg){
       });
     });
   }
+  toast(`Box scores ${date}: ${Object.keys(out).length} players · ${finals.length}/${games.length} final`,finals.length?null:'warn');
   return {res:out,finals:finals.length,total:games.length};
 }
 
@@ -1195,7 +1213,7 @@ function showCached(){
 // somehow got missed). "graded" is only marked permanent once every scheduled
 // game that day went Final — partial days regrade on the next Load.
 
-function dayTallies(rows,mk,res){
+function dayTallies(rows,mk,res,dbgDate){
   const t={hits:{h:0,n:0},hr:{h:0,n:0},kP:{w:0,l:0,p:0},kB:{w:0,l:0,p:0},bbP:{w:0,l:0,p:0},bbB:{w:0,l:0,p:0}};
   (rows||[]).forEach(r=>{
     if(!r.verified||(r.prob||0)<CONFIG.lock)return;
@@ -1216,6 +1234,7 @@ function dayTallies(rows,mk,res){
       if(gr==='W')t[m].w++;else if(gr==='L')t[m].l++;else if(gr==='P')t[m].p++;
     });
   });
+  toast(`Tallies ${dbgDate||''}: hits ${t.hits.h}/${t.hits.n} · lock thr ${Math.round(CONFIG.lock*100)}%`, t.hits.n?null:'warn');
   return t;
 }
 function localMergeSummary(date,tallies){
@@ -1234,19 +1253,19 @@ function localMergeSummary(date,tallies){
   });
   s.all=all;s.d14=d14;s.days=Object.keys(s.daysMap).length;s.ts=Date.now();
   try{localStorage.setItem('fablehits_stats',JSON.stringify(s));}catch(e){}
+  toast(`Local stats now: all ${all.h}/${all.n} · 14d ${d14.h}/${d14.n} · ${Object.keys(s.daysMap).length} day(s)`,all.n?null:'warn');
   renderHeaderStats();
 }
 async function pushDaySummary(date,tallies){
-  console.log('[FH] tallies '+date,JSON.stringify(tallies));
   localMergeSummary(date,tallies); // this device shows real numbers immediately
-  if(!FBH.ready)return;
+  if(!FBH.ready){toast('Firebase not ready — saved locally only','warn');return;}
   try{
     await withTO(FBH.db.collection('fable_settings').doc('summary').set({days:{[date]:tallies},updatedAt:Date.now()},{merge:true}),8000);
     FBH.lastErr=null;
-    console.log('[FH] summary pushed for '+date);
+    toast('✓ Summary pushed to Firebase for '+date);
   }catch(e){
     FBH.lastErr=e;
-    console.warn('[FH] summary push FAILED',e.message);
+    toast('✗ Firebase summary push FAILED: '+e.message,'err');
   }
 }
 async function storeResults(date,g){
@@ -1267,7 +1286,8 @@ async function storeResults(date,g){
     localStorage.setItem('fablehits_'+date,JSON.stringify(c));
   }catch(e){}
   // tiny summary doc powers every stats display — one small read instead of scanning
-  await pushDaySummary(date,dayTallies(day.rows,day.mk,trimmed));
+  toast(`storeResults ${date}: rows=${(day.rows||[]).length} kept=${Object.keys(trimmed).length}`);
+  await pushDaySummary(date,dayTallies(day.rows,day.mk,trimmed,date));
 }
 
 // Runs inside every Load: sweep the last 5 days, grade anything with predictions
@@ -1491,6 +1511,7 @@ async function computeSuccessStats(){
   });
   const stats={ts:Date.now(),days:Object.keys(days).length,all,d14,daysMap:days};
   try{localStorage.setItem('fablehits_stats',JSON.stringify(stats));}catch(e){}
+  toast(`computeStats: local ${Object.keys(local).length} + remote ${Object.keys(remote).length} = ${Object.keys(days).length} day(s) · all ${all.h}/${all.n}`,(all.n||!FBH.lastErr)?null:'err');
   renderHeaderStats();
   return stats;
 }
