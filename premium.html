@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v2.2</title>
+<title>Diamond IQ Premium v2.3</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -338,6 +338,9 @@ async function bootGate(){
   const gate=document.getElementById('gate');
   let ok=false;
   try{ok=localStorage.getItem('fablehits_access_ok')==='1';}catch(e){}
+  // Even before unlock, paint header from whatever stats are cached, and pull fresh.
+  renderHeaderStats();
+  computeSuccessStats().then(()=>renderHeaderStats());
   if(USER&&ok){gate.style.display='none';bootLeagueLoad();return;}
   gate.style.display='flex';
   if(USER){
@@ -1358,9 +1361,7 @@ async function renderResultsTab(){
     rp('');
     if(!s){$('rout').innerHTML='<div class="empty"><b>No stats yet</b>'+(FBH.ready?'Nothing graded so far — days grade themselves whenever anyone taps Load on the Today tab.':'League server unreachable and nothing cached on this device.')+'</div>';return;}
   }else{
-    computeSuccessStats().then(()=>{
-      if(document.getElementById('vRes').style.display!=='none')drawResultsList();
-    });
+    computeSuccessStats().then(()=>drawResultsList());
   }
   drawResultsList();
 }
@@ -1703,9 +1704,13 @@ async function bootLeagueLoad(){
     }else if(remote&&remote.results){
       DAY_RESULTS=remote.results;render(null,local?new Date(local.ts):undefined);
     }
-    computeSuccessStats();
   }
-  maybeAutoPullDK(); // premium-only DK pull — before-9am, not-yet-pulled rule
+  // Always load success stats on boot (independent of today's board) and paint
+  // the header + Results list once they land — even with no save happening.
+  await computeSuccessStats();
+  renderHeaderStats();
+  if(document.getElementById('vRes')&&document.getElementById('vRes').style.display!=='none')drawResultsList();
+  maybeAutoPullDK();
 }
 
 /* boot: set date only. NOTHING auto-loads. */
