@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v2.3</title>
+<title>Diamond IQ Premium v2.4</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -224,6 +224,7 @@ let SAVANT_OK=null;    // null=untried, true/false after attempt
 // Init is local-only (no network). NOTHING is pulled automatically — every read and
 // write happens inside a user-initiated Load or Grade, wrapped in timeouts.
 const FBH={app:null,db:null,ready:false};
+window.FBH=FBH; // shared with the standalone stats engine at page end
 try{
   if(typeof firebase!=='undefined'){
     FBH.app=firebase.initializeApp({
@@ -260,7 +261,7 @@ function showView(v){
   document.getElementById('vRes').style.display=v==='results'?'':'none';
   document.getElementById('tab-today').classList.toggle('on',v==='today');
   document.getElementById('tab-results').classList.toggle('on',v==='results');
-  if(v==='results')renderResultsTab();
+  if(v==='results'){if(window.__statPaint)window.__statPaint();}
 }
 
 /* ── config (lock threshold), PIN, and access gate ── */
@@ -1718,6 +1719,104 @@ async function bootLeagueLoad(){
   $('dp').value=todayStr();
   renderHeaderStats();
   bootGate();
+})();
+</script>
+<script>
+/* ============================================================================
+   INDEPENDENT STATS ENGINE v2.4 — deliberately standalone.
+   Every prior attempt tied header/Results rendering to boot order, the gate,
+   or tab state, any of which could short-circuit before the numbers painted.
+   This runs on its own heartbeat, reads Firebase directly, and force-writes
+   the DOM. Shares nothing with the rest of the app except the Firebase handle
+   and the summary doc. If this doesn't show numbers, nothing will.
+   ============================================================================ */
+(function(){
+  let SUMMARY=null;
+
+  function daysWindow(all){
+    const keys=Object.keys(all||{}).sort().reverse();
+    const cut=(()=>{const d=new Date();d.setDate(d.getDate()-14);return d.toISOString().slice(0,10);})();
+    return {all:keys, d14:keys.filter(k=>k>=cut)};
+  }
+  function aggHits(keys){
+    let h=0,n=0;
+    keys.forEach(k=>{const o=SUMMARY[k]&&SUMMARY[k].hits;if(o){h+=o.h||0;n+=o.n||0;}});
+    return {h,n};
+  }
+  function setTxt(id,v){const e=document.getElementById(id);if(e)e.textContent=v;}
+
+  function paintHeader(){
+    if(!SUMMARY)return;
+    const w=daysWindow(SUMMARY);
+    const a=aggHits(w.all), d=aggHits(w.d14);
+    if(a.n){setTxt('hsAll',Math.round(a.h/a.n*100)+'%');setTxt('hsAllN',a.h+'/'+a.n);}
+    else {setTxt('hsAll','—');setTxt('hsAllN','no graded picks');}
+    if(d.n){setTxt('hs14',Math.round(d.h/d.n*100)+'%');setTxt('hs14N',d.h+'/'+d.n);}
+    else {setTxt('hs14','—');setTxt('hs14N','no graded picks');}
+  }
+
+  const MKL={hits:'HITS',hr:'HR',kP:'PITCHER K',kB:'BATTER K',bbP:'PITCHER BB',bbB:'BATTER BB'};
+  let VIEW='14d', MKT='hits';
+  window.__stat={setView:v=>{VIEW=v;paintResults();},setMkt:m=>{MKT=m;paintResults();}};
+
+  function fmtDate(d){const dt=new Date(d+'T12:00:00Z');return dt.toLocaleDateString([],{month:'short',day:'numeric',timeZone:'UTC'});}
+  function dayLine(t,m){
+    if(!t||!t[m])return null;
+    const o=t[m];
+    if(m==='hits'||m==='hr')return o.n?`${o.h}/${o.n} · ${Math.round(o.h/o.n*100)}%`:null;
+    const g=o.w+o.l;
+    return (g||o.p)?`${o.w}-${o.l}${o.p?'-'+o.p+'P':''}${g?' · '+Math.round(o.w/g*100)+'%':''}`:null;
+  }
+
+  function paintResults(){
+    const out=document.getElementById('rout');
+    const vRes=document.getElementById('vRes');
+    if(!out||!vRes||vRes.style.display==='none')return;
+    if(!SUMMARY){out.innerHTML='<div class="empty"><b>Loading…</b>Pulling graded results from the league.</div>';return;}
+    const w=daysWindow(SUMMARY);
+    const dates=(VIEW==='14d'?w.d14:w.all);
+    let head;
+    if(MKT==='hits'||MKT==='hr'){
+      let h=0,n=0;dates.forEach(d=>{const o=SUMMARY[d]&&SUMMARY[d][MKT];if(o){h+=o.h||0;n+=o.n||0;}});
+      head=n?`<b>${Math.round(h/n*100)}%</b> (${h}/${n})${MKT==='hits'?' <span class="goal">· goal 85%</span>':''}`:'no graded picks yet';
+    }else{
+      let W=0,L=0,P=0;dates.forEach(d=>{const o=SUMMARY[d]&&SUMMARY[d][MKT];if(o){W+=o.w||0;L+=o.l||0;P+=o.p||0;}});
+      head=(W+L)?`<b>${W}-${L}${P?'-'+P+'P':''}</b> (${Math.round(W/(W+L)*100)}%) vs DK`:'no leaned picks yet';
+    }
+    const rows=dates.map(d=>{
+      const line=dayLine(SUMMARY[d],MKT);
+      if(!line)return '';
+      return `<div class="drow"><span style="min-width:64px;color:var(--tx);font-weight:600">${fmtDate(d)}</span><span style="flex:1;font-variant-numeric:tabular-nums;color:var(--mt)">${line}</span></div>`;
+    }).filter(Boolean).join('');
+    out.innerHTML=`
+      <div class="chips">
+        <span class="chip mk ${VIEW==='14d'?'on':''}" onclick="__stat.setView('14d')">LAST 14D</span>
+        <span class="chip mk ${VIEW==='all'?'on':''}" onclick="__stat.setView('all')">ALL-TIME</span>
+      </div>
+      <div class="chips">${Object.keys(MKL).map(m=>`<span class="chip mk ${MKT===m?'on':''}" onclick="__stat.setMkt('${m}')">${MKL[m]}</span>`).join('')}</div>
+      <div class="sumbox">${MKL[MKT]} · ${VIEW==='14d'?'last 14 days':'all-time'}: ${head}</div>
+      ${rows||'<div class="empty">No graded days in this window yet.</div>'}`;
+  }
+
+  async function pull(){
+    try{
+      const fb=window.FBH;
+      if(!fb||!fb.ready||!fb.db)return;
+      const doc=await fb.db.collection('fable_settings').doc('summary').get();
+      if(doc.exists){
+        SUMMARY=doc.data().days||{};
+        try{localStorage.setItem('fablehits_summary_cache',JSON.stringify(SUMMARY));}catch(e){}
+      }
+    }catch(e){}
+    paintHeader();paintResults();
+  }
+
+  try{const c=JSON.parse(localStorage.getItem('fablehits_summary_cache')||'null');if(c)SUMMARY=c;}catch(e){}
+  function tick(){paintHeader();paintResults();pull();}
+  window.__statPaint=()=>{paintHeader();paintResults();};
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tick);
+  else tick();
+  setInterval(tick,3000);
 })();
 </script>
 </body>
