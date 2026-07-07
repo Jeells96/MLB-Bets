@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v2.0</title>
+<title>Diamond IQ Premium v2.1</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -1218,9 +1218,36 @@ function dayTallies(rows,mk,res){
   });
   return t;
 }
+function localMergeSummary(date,tallies){
+  let s=null;
+  try{s=JSON.parse(localStorage.getItem('fablehits_stats')||'null');}catch(e){}
+  s=s||{ts:0,all:{h:0,n:0},d14:{h:0,n:0},daysMap:{}};
+  s.daysMap=s.daysMap||{};
+  s.daysMap[date]=tallies;
+  const cutoff=addDays(todayStr(),-14);
+  const all={h:0,n:0},d14={h:0,n:0};
+  Object.keys(s.daysMap).forEach(dt=>{
+    const o=s.daysMap[dt]?.hits;
+    if(!o)return;
+    all.h+=o.h;all.n+=o.n;
+    if(dt>=cutoff){d14.h+=o.h;d14.n+=o.n;}
+  });
+  s.all=all;s.d14=d14;s.days=Object.keys(s.daysMap).length;s.ts=Date.now();
+  try{localStorage.setItem('fablehits_stats',JSON.stringify(s));}catch(e){}
+  renderHeaderStats();
+}
 async function pushDaySummary(date,tallies){
+  console.log('[FH] tallies '+date,JSON.stringify(tallies));
+  localMergeSummary(date,tallies); // this device shows real numbers immediately
   if(!FBH.ready)return;
-  try{await withTO(FBH.db.collection('fable_settings').doc('summary').set({days:{[date]:tallies},updatedAt:Date.now()},{merge:true}),8000);}catch(e){}
+  try{
+    await withTO(FBH.db.collection('fable_settings').doc('summary').set({days:{[date]:tallies},updatedAt:Date.now()},{merge:true}),8000);
+    FBH.lastErr=null;
+    console.log('[FH] summary pushed for '+date);
+  }catch(e){
+    FBH.lastErr=e;
+    console.warn('[FH] summary push FAILED',e.message);
+  }
 }
 async function storeResults(date,g){
   // trim box-score map to only players we actually predicted — keeps day docs small
@@ -1341,7 +1368,8 @@ function drawResultsList(){
       <span style="color:var(--mt2);font-size:.7rem">${REXP===d?'▾':'▸'}</span>
     </div><div class="dexp" id="dexp-${d}" style="display:${REXP===d?'block':'none'}"></div>`;
   }).join('');
-  $('rout').innerHTML=`
+  const errNote=FBH.lastErr?`<div class="day-note" style="border-color:var(--cold)">Stats sync error: ${FBH.lastErr.message}${isPermErr(FBH.lastErr)?' — Firestore rules are blocking a write/read.':''} <span class="glink" onclick="manualRebuild()">Rebuild stats from day docs</span></div>`:'';
+  $('rout').innerHTML=`${errNote}
   <div class="chips">
     <span class="chip mk ${RVIEW==='14d'?'on':''}" onclick="RVIEW='14d';REXP=null;drawResultsList()">LAST 14D</span>
     <span class="chip mk ${RVIEW==='all'?'on':''}" onclick="RVIEW='all';REXP=null;drawResultsList()">ALL-TIME</span>
@@ -1374,6 +1402,18 @@ async function recheckDay(date){
   if(Object.keys(g.res).length)await storeResults(date,g);
   await computeSuccessStats();
   drawResultsList();
+}
+async function manualRebuild(){
+  const rp=t=>{$('rprog').textContent=t;};
+  rp('Rebuilding from day docs…');
+  const days=await rebuildSummary();
+  if(days&&Object.keys(days).length){
+    Object.keys(days).forEach(d=>localMergeSummary(d,days[d]));
+    rp('');
+    drawResultsList();
+  }else{
+    rp('Rebuild found nothing or failed — check the console.');
+  }
 }
 function dayPlayerRows(R){
   const res=R.results||{};
@@ -1422,27 +1462,37 @@ async function rebuildSummary(){
   }catch(e){return null;}
 }
 async function computeSuccessStats(){
-  if(!FBH.ready)return null;
-  try{
-    const doc=await withTO(FBH.db.collection('fable_settings').doc('summary').get(),8000);
-    let days=doc.exists?(doc.data().days||{}):{};
-    if(!Object.keys(days).length&&!computeSuccessStats._rebuilt){
-      computeSuccessStats._rebuilt=true;
-      days=(await rebuildSummary())||{};
+  let local={};
+  try{local=(JSON.parse(localStorage.getItem('fablehits_stats')||'null')||{}).daysMap||{};}catch(e){}
+  let remote={};
+  if(FBH.ready){
+    try{
+      const doc=await withTO(FBH.db.collection('fable_settings').doc('summary').get(),8000);
+      remote=doc.exists?(doc.data().days||{}):{};
+      FBH.lastErr=null;
+      if(!Object.keys(remote).length&&!Object.keys(local).length&&!computeSuccessStats._rebuilt){
+        computeSuccessStats._rebuilt=true;
+        remote=(await rebuildSummary())||{};
+      }
+    }catch(e){
+      FBH.lastErr=e;
+      console.warn('[FH] summary read FAILED',e.message);
     }
-    const cutoff=addDays(todayStr(),-14);
-    const all={h:0,n:0},d14={h:0,n:0};
-    Object.keys(days).forEach(dt=>{
-      const o=days[dt]?.hits;
-      if(!o)return;
-      all.h+=o.h;all.n+=o.n;
-      if(dt>=cutoff){d14.h+=o.h;d14.n+=o.n;}
-    });
-    const stats={ts:Date.now(),days:Object.keys(days).length,all,d14,daysMap:days};
-    try{localStorage.setItem('fablehits_stats',JSON.stringify(stats));}catch(e){}
-    renderHeaderStats();
-    return stats;
-  }catch(e){return null;}
+  }
+  const days={...local,...remote}; // remote wins per date; local survives outages
+  console.log('[FH] summary: '+Object.keys(days).length+' day(s)');
+  const cutoff=addDays(todayStr(),-14);
+  const all={h:0,n:0},d14={h:0,n:0};
+  Object.keys(days).forEach(dt=>{
+    const o=days[dt]?.hits;
+    if(!o)return;
+    all.h+=o.h;all.n+=o.n;
+    if(dt>=cutoff){d14.h+=o.h;d14.n+=o.n;}
+  });
+  const stats={ts:Date.now(),days:Object.keys(days).length,all,d14,daysMap:days};
+  try{localStorage.setItem('fablehits_stats',JSON.stringify(stats));}catch(e){}
+  renderHeaderStats();
+  return stats;
 }
 function renderHeaderStats(){
   let s=null;
@@ -1450,7 +1500,7 @@ function renderHeaderStats(){
   const put=(o,v,n)=>{
     const ve=$(v),ne=$(n);
     if(!ve)return;
-    if(!o||!o.n){ve.textContent='—';ne.textContent='no data yet';return;}
+    if(!o||!o.n){ve.textContent='—';ne.textContent=FBH.lastErr?'sync error':'no data yet';return;}
     ve.textContent=Math.round(o.h/o.n*100)+'%';
     ne.textContent=o.h+'/'+o.n;
   };
