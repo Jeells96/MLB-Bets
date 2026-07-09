@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v2.9</title>
+<title>Diamond IQ Premium v3.0</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -397,7 +397,18 @@ async function saveThresholds(){
     (MK[m]||[]).forEach(r=>{if(r.line!=null){r.lean=leanFor(r.exp,r.line,th);}});
   });
   if(ROWS.length)render(null);
-  alert('Thresholds saved league-wide.');
+  // Thresholds define what counts as a lock, so every stored day's tallies must
+  // be recomputed under the new numbers — otherwise the ledger shows old-threshold
+  // counts next to new-threshold pick lists.
+  toast('Re-scoring history at the new thresholds…');
+  const days=await rebuildSummary();
+  if(days&&Object.keys(days).length){
+    Object.keys(days).forEach(d=>localMergeSummary(d,days[d]));
+    if(window.__statSetSummary)window.__statSetSummary(days);
+    toast('✓ Results retallied league-wide under the new thresholds');
+  }else{
+    toast('Retally failed — thresholds saved, but history still shows old counts. Check connection.','err');
+  }
 }
 async function manualPullDK(){
   const el=document.getElementById('dkStatus');
@@ -1931,6 +1942,11 @@ async function bootLeagueLoad(){
   try{const c=JSON.parse(localStorage.getItem('fablehits_summary_cache')||'null');if(c)SUMMARY=c;}catch(e){}
   function tick(){paintHeader();paintResults();pull();}
   window.__statPaint=()=>{paintHeader();paintResults();};
+  window.__statSetSummary=days=>{
+    SUMMARY=days;
+    try{localStorage.setItem('fablehits_summary_cache',JSON.stringify(days));}catch(e){}
+    paintHeader();paintResults();
+  };
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',tick);
   else tick();
   setInterval(tick,3000);
