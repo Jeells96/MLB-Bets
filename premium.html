@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v2.7</title>
+<title>Diamond IQ Premium v2.9</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -271,6 +271,7 @@ try{
   const c=JSON.parse(localStorage.getItem('fablehits_cfg')||'null');
   if(c)['lock','hrLock','kEdge','bbEdge'].forEach(k=>{if(typeof c[k]==='number')CONFIG[k]=c[k];});
 }catch(e){}
+window.CONFIG=CONFIG; // shared with the standalone stats engine
 function cfgSave(){try{localStorage.setItem('fablehits_cfg',JSON.stringify(CONFIG));}catch(e){}}
 async function cfgPull(){
   if(!FBH.ready)return;
@@ -894,13 +895,16 @@ function scoreBatter(b,slot,pitcher,pHand,parkName,verified){
 }
 
 /* ── HR model: P(>=1 HR) from HR rate + xISO proxy, split, form, pitcher, park ── */
-function scoreHR(b,slot,pitcher,pHand,parkName,verified){
+function scoreHR(b,slot,pitcher,pHand,parkName,verified,hitProb){
   const ov=b.overall;const pa=ov.pa||0;const reasons=[];
   const hrPA=pa>0?(ov.hr||0)/pa:null;
   const xIso=(ov.xSLG!=null&&ov.xBA!=null)?Math.max(0,ov.xSLG-ov.xBA):null;
-  const proxy=xIso!=null?LG_HR_PA*(xIso/0.155):null;
-  const base=(hrPA!=null&&proxy!=null)?0.55*hrPA+0.45*proxy:(hrPA??proxy??LG_HR_PA);
-  let p=regressV(base,LG_HR_PA,pa,250);
+  const iso=(ov.slg!=null&&ov.avg!=null)?Math.max(0,ov.slg-ov.avg):null;
+  // power signal: 60% expected ISO, 40% actual ISO — true power separates here
+  const powerIso=(xIso!=null&&iso!=null)?0.6*xIso+0.4*iso:(xIso??iso);
+  const proxy=powerIso!=null?LG_HR_PA*(powerIso/0.155):null;
+  const base=(hrPA!=null&&proxy!=null)?0.65*hrPA+0.35*proxy:(hrPA??proxy??LG_HR_PA);
+  let p=regressV(base,LG_HR_PA,pa,300);
   if(xIso!=null&&xIso>=0.22)reasons.push({t:'Elite raw power — xISO '+xIso.toFixed(3),k:'good'});
   if(hrPA!=null&&hrPA>=0.055&&pa>=100)reasons.push({t:ov.hr+' HR in '+pa+' PA ('+(hrPA*100).toFixed(1)+'% rate)',k:'good'});
   let splitMult=1;
@@ -910,7 +914,7 @@ function scoreHR(b,slot,pitcher,pHand,parkName,verified){
     if(orr>0){
       const w=sp.ab/(sp.ab+150);
       const sr=(sp.hr||0)/sp.ab;
-      splitMult=clampN((sr*w+orr*(1-w))/orr,0.8,1.25);
+      splitMult=clampN((sr*w+orr*(1-w))/orr,0.85,1.2);
       if(splitMult>=1.1)reasons.push({t:'Extra pop vs '+pHand+'HP ('+(sp.hr||0)+' HR in '+sp.ab+' AB)',k:'good'});
       else if(splitMult<=0.9)reasons.push({t:'Power dips vs '+pHand+'HP',k:'bad'});
     }
@@ -923,18 +927,30 @@ function scoreHR(b,slot,pitcher,pHand,parkName,verified){
   let pitMult=1;
   if(pitcher&&(pitcher.overall.bf||0)>0){
     const pr=regressV((pitcher.overall.hr||0)/pitcher.overall.bf,LG_HR_PA,pitcher.overall.bf,200);
-    pitMult=clampN(pr/LG_HR_PA,0.75,1.3);
+    pitMult=clampN(pr/LG_HR_PA,0.8,1.25);
     if(pitMult>=1.12)reasons.push({t:(pitcher.name||'Pitcher')+' is homer-prone ('+(pitcher.overall.hr||0)+' HR allowed)',k:'good'});
     else if(pitMult<=0.85)reasons.push({t:(pitcher.name||'Pitcher')+' rarely allows homers',k:'bad'});
   }
   const parkF=PARK_HR[parkName]||1.0;
   if(parkF>=1.1)reasons.push({t:parkName+' inflates homers ('+parkF.toFixed(2)+'\u00d7)',k:'good'});
   else if(parkF<=0.9)reasons.push({t:parkName+' suppresses homers ('+parkF.toFixed(2)+'\u00d7)',k:'bad'});
-  const pPA=clampN(p*splitMult*pitMult*parkF,0.004,0.12);
+  // Hit-grade coupling: contact ability scales HR odds (±30% cap). Neutral at
+  // ~67.5% hit prob; elite hit profiles boost, weak ones drag.
+  let hitMult=1;
+  if(hitProb!=null){
+    hitMult=clampN(1+1.5*(hitProb-0.72),0.85,1.15);
+    if(hitMult>=1.08)reasons.push({t:'Elite hit profile boosts HR chances (\u00d7'+hitMult.toFixed(2)+')',k:'good'});
+    else if(hitMult<=0.92)reasons.push({t:'Weak hit profile drags HR chances (\u00d7'+hitMult.toFixed(2)+')',k:'bad'});
+  }
+  // stretch around the league anchor: true power pulls away, mediocre pop sinks
+  const pRaw=p*splitMult*pitMult*parkF*hitMult;
+  const pPA=clampN(LG_HR_PA*Math.pow(Math.max(pRaw,0.001)/LG_HR_PA,1.15),0.006,0.085);
   const paEst=PA_BY_SLOT[(slot||5)-1]||4.0;
-  const prob=1-Math.pow(1-pPA,paEst);
+  let prob=1-Math.pow(1-pPA,paEst);
+  // Hard consistency: you can't homer without a hit — P(HR) can never exceed P(hit).
+  if(hitProb!=null&&prob>hitProb*0.95)prob=hitProb*0.95;
   if(!verified)reasons.push({t:"Projected from the last game's lineup — will be overridden when lineups post",k:'info'});
-  return{prob,pPA,paEst,splitMult,pitMult,parkF,reasons};
+  return{prob,pPA,paEst,splitMult,pitMult,parkF,hitMult,reasons};
 }
 function tierHR(p){
   if(p>=CONFIG.hrLock)return['LOCK','t-lock'];
@@ -1116,10 +1132,10 @@ async function loadDay(){
         splitMult:s.splitMult,pitMult:s.pitMult,ptMult:s.ptMult,parkF:s.parkF
       });
       // HR market
-      const hs=scoreHR(b,j.slot,pit,pHand,j.park,j.verified);
+      const hs=scoreHR(b,j.slot,pit,pHand,j.park,j.verified,s.prob);
       MK.hr.push({id:j.pid,name:j.name,team:j.team,opp:j.opp,slot:j.slot,
         pit:j.oppPitName||'TBD',pHand,verified:j.verified,prob:hs.prob,reasons:hs.reasons,
-        math:'per-PA '+(hs.pPA*100).toFixed(2)+'% \u00d7 ~'+hs.paEst.toFixed(1)+' PA \u00b7 split \u00d7'+hs.splitMult.toFixed(2)+' \u00b7 pitcher \u00d7'+hs.pitMult.toFixed(2)+' \u00b7 park \u00d7'+hs.parkF.toFixed(2)});
+        math:'per-PA '+(hs.pPA*100).toFixed(2)+'% \u00d7 ~'+hs.paEst.toFixed(1)+' PA \u00b7 split \u00d7'+hs.splitMult.toFixed(2)+' \u00b7 pitcher \u00d7'+hs.pitMult.toFixed(2)+' \u00b7 hit \u00d7'+(hs.hitMult||1).toFixed(2)+' \u00b7 park \u00d7'+hs.parkF.toFixed(2)});
       // batter K + BB markets with DK lines
       [['k','kB','batter_strikeouts',CONFIG.kEdge],['bb','bbB','batter_walks',CONFIG.bbEdge]].forEach(([kind,mk,mkt,th])=>{
         const bl=batterLine(b,j.slot,pit,kind);
@@ -1373,6 +1389,7 @@ function lineGrade(r,actual){
   return 'P';
 }
 const MK_ACTUAL={kB:o=>o?.so??null,bbB:o=>o?.bb??null,kP:o=>o?.pk??null,bbP:o=>o?.pbb??null};
+window.MK_ACTUAL=MK_ACTUAL;window.playedBat=playedBat;
 
 async function loadStoredDay(date){
   let local=null;
@@ -1805,8 +1822,13 @@ async function bootLeagueLoad(){
   }
 
   const MKL={hits:'HITS',hr:'HR',kP:'PITCHER K',kB:'BATTER K',bbP:'PITCHER BB',bbB:'BATTER BB'};
-  let VIEW='14d', MKT='hits';
-  window.__stat={setView:v=>{VIEW=v;paintResults();},setMkt:m=>{MKT=m;paintResults();}};
+  let VIEW='14d', MKT='hits', EXP=null;
+  const DAYC={};
+  window.__stat={
+    setView:v=>{VIEW=v;EXP=null;paintResults();},
+    setMkt:m=>{MKT=m;EXP=null;paintResults();},
+    expand:d=>{EXP=EXP===d?null:d;paintResults();}
+  };
 
   function fmtDate(d){const dt=new Date(d+'T12:00:00Z');return dt.toLocaleDateString([],{month:'short',day:'numeric',timeZone:'UTC'});}
   function dayLine(t,m){
@@ -1835,7 +1857,7 @@ async function bootLeagueLoad(){
     const rows=dates.map(d=>{
       const line=dayLine(SUMMARY[d],MKT);
       if(!line)return '';
-      return `<div class="drow"><span style="min-width:64px;color:var(--tx);font-weight:600">${fmtDate(d)}</span><span style="flex:1;font-variant-numeric:tabular-nums;color:var(--mt)">${line}</span></div>`;
+      return `<div class="drow" onclick="__stat.expand('${d}')"><span style="min-width:64px;color:var(--tx);font-weight:600">${fmtDate(d)}</span><span style="flex:1;font-variant-numeric:tabular-nums;color:var(--mt)">${line}</span><span style="color:var(--mt2);font-size:.7rem">${EXP===d?'▾':'▸'}</span></div><div class="dexp" id="sexp-${d}" style="display:${EXP===d?'block':'none'}"></div>`;
     }).filter(Boolean).join('');
     out.innerHTML=`
       <div class="chips">
@@ -1845,6 +1867,52 @@ async function bootLeagueLoad(){
       <div class="chips">${Object.keys(MKL).map(m=>`<span class="chip mk ${MKT===m?'on':''}" onclick="__stat.setMkt('${m}')">${MKL[m]}</span>`).join('')}</div>
       <div class="sumbox">${MKL[MKT]} · ${VIEW==='14d'?'last 14 days':'all-time'}: ${head}</div>
       ${rows||'<div class="empty">No graded days in this window yet.</div>'}`;
+    if(EXP)fillExp(EXP);
+  }
+
+  async function fillExp(date){
+    const el=document.getElementById('sexp-'+date);
+    if(!el)return;
+    let D=DAYC[date];
+    if(D===undefined){
+      el.innerHTML='<div style="padding:8px 14px;color:var(--mt2);font-size:.68rem">Loading picks…</div>';
+      try{D=await window.loadStoredDay(date);}catch(e){D=null;}
+      DAYC[date]=D||null;
+      if(EXP!==date)return; // user moved on while loading
+    }
+    el.innerHTML=D?lockRows(D):'<div style="padding:8px 14px;color:var(--mt2);font-size:.68rem">Day detail not stored.</div>';
+  }
+
+  // The picks that MADE that day's number: lock-tier only (or leaned O/U picks
+  // for the line markets), each with its grade and ✓/✗.
+  function lockRows(D){
+    const res=D.results||{};
+    const cfg=window.CONFIG||{lock:0.78,hrLock:0.10};
+    const played=o=>!!o&&((o.ab||0)>=1||(o.h||0)>=1);
+    const lbl=r=>r.gradeFlag?' <span class="vbadge" style="color:var(--warm)">⚠ lineup shift — not counted</span>':(r.verified?'':' <span class="vbadge">○ not confirmed — not counted</span>');
+    let rows;
+    if(MKT==='hits'||MKT==='hr'){
+      const src=MKT==='hits'?(D.rows||[]):((D.mk&&D.mk.hr)||[]);
+      const th=MKT==='hits'?cfg.lock:cfg.hrLock;
+      rows=src.filter(r=>r.prob!=null&&r.prob>=th).sort((a,b)=>b.prob-a.prob).map(r=>{
+        const o=res[r.id];
+        const pd=played(o);
+        const yes=pd&&(((MKT==='hits'?o.h:o.hr)||0)>=1);
+        const sym=!D.results?'—':!pd?'—':(yes?'✓':'✗');
+        const cls=sym==='✓'?'rY':sym==='✗'?'rN':'rD';
+        return `<div class="rrow"><span class="rres ${cls}">${sym}</span><span style="min-width:56px;font-variant-numeric:tabular-nums;color:var(--mt)">${(r.prob*100).toFixed(1)}%</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}${lbl(r)}${(!pd&&D.results)?' <span class="vbadge">— didn\u2019t play</span>':''}</span><span style="color:var(--mt2);font-size:.68rem">${r.team}</span></div>`;
+      });
+    }else{
+      const src=(D.mk&&D.mk[MKT])||[];
+      rows=src.filter(r=>r.line!=null&&r.lean&&r.lean!=='—').sort((a,b)=>Math.abs(b.edge||0)-Math.abs(a.edge||0)).map(r=>{
+        const act=(window.MK_ACTUAL&&window.MK_ACTUAL[MKT])?window.MK_ACTUAL[MKT](res[r.id]):null;
+        const gr=(D.results&&window.lineGrade)?window.lineGrade(r,act):null;
+        const sym=gr==='W'?'✓':gr==='L'?'✗':gr==='P'?'P':'—';
+        const cls=gr==='W'?'rY':gr==='L'?'rN':'rD';
+        return `<div class="rrow"><span class="rres ${cls}">${sym}</span><span style="min-width:52px;font-variant-numeric:tabular-nums;color:var(--mt)">exp ${(r.exp||0).toFixed(1)}</span><span style="min-width:44px;font-variant-numeric:tabular-nums;color:var(--tx)">${act!=null?'act '+act:'—'}</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}${lbl(r)}</span><span style="color:var(--mt2);font-size:.62rem;white-space:nowrap">DK ${r.line} ${r.lean}</span></div>`;
+      });
+    }
+    return rows.join('')||'<div style="padding:8px 14px;color:var(--mt2);font-size:.68rem">No lock-tier picks that day.</div>';
   }
 
   async function pull(){
