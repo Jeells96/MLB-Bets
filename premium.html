@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Diamond IQ Premium v2.4</title>
+<title>Diamond IQ Premium v2.7</title>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
@@ -151,10 +151,10 @@ footer{padding:20px 16px;font-size:.62rem;color:var(--mt2);line-height:1.6;borde
 <div id="setmodal" onclick="if(event.target===this)this.style.display='none'">
   <div class="smcard">
     <div class="smh">LOCK &amp; EDGE THRESHOLDS</div>
-    <div class="setrow"><span>Hits lock (%)</span><span><input id="lockIn" type="number" min="60" max="95" step="1" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
-    <div class="setrow"><span>HR lock (%)</span><span><input id="hrLockIn" type="number" min="4" max="25" step="0.5" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
-    <div class="setrow"><span>Strikeout edge (Ks past DK line to lean)</span><span><input id="kEdgeIn" type="number" min="0.1" max="2" step="0.05" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
-    <div class="setrow"><span>Walk edge (BBs past DK line to lean)</span><span><input id="bbEdgeIn" type="number" min="0.05" max="1.5" step="0.05" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <div class="setrow"><span>Hits lock (%)</span><span><input id="lockIn" type="number" step="1" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <div class="setrow"><span>HR lock (%)</span><span><input id="hrLockIn" type="number" step="0.5" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <div class="setrow"><span>Strikeout edge (Ks past DK line to lean)</span><span><input id="kEdgeIn" type="number" step="0.05" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
+    <div class="setrow"><span>Walk edge (BBs past DK line to lean)</span><span><input id="bbEdgeIn" type="number" step="0.05" style="background:var(--bg);border:1px solid var(--bdr);color:var(--tx);padding:6px 8px;border-radius:6px;width:82px;text-align:right;font-size:.8rem"></span></div>
     <button class="abtn" style="width:100%;margin-top:10px" onclick="saveThresholds()">Save all league-wide</button>
     <div style="font-size:.62rem;color:var(--mt2);margin-top:6px">Locks gate the tier badges and every success stat. Edges decide when a K/BB pick leans OVER or UNDER vs the DK line. Syncs to everyone.</div>
     <div class="smh">DK LINES — PREMIUM-ONLY PULL</div>
@@ -387,10 +387,7 @@ async function openSettings(){
 async function saveThresholds(){
   const g=id=>parseFloat(document.getElementById(id).value);
   const lock=g('lockIn'),hr=g('hrLockIn'),ke=g('kEdgeIn'),be=g('bbEdgeIn');
-  if(isNaN(lock)||lock<60||lock>95){alert('Hits lock: 60–95');return;}
-  if(isNaN(hr)||hr<4||hr>25){alert('HR lock: 4–25');return;}
-  if(isNaN(ke)||ke<0.1||ke>2){alert('K edge: 0.1–2');return;}
-  if(isNaN(be)||be<0.05||be>1.5){alert('BB edge: 0.05–1.5');return;}
+  if([lock,hr,ke,be].some(v=>isNaN(v))){alert('Enter a number in every field');return;}
   CONFIG.lock=lock/100;CONFIG.hrLock=hr/100;CONFIG.kEdge=ke;CONFIG.bbEdge=be;
   cfgSave();
   await cfgPush();
@@ -1005,6 +1002,25 @@ function todayStr(){
   return pt.toISOString().slice(0,10);
 }
 
+// If yesterday was never loaded by anyone (no predictions stored anywhere),
+// run the full retro pipeline for it — predictions from actual box-score lineups,
+// graded immediately — so a plain "load today" always carries the success stats.
+async function backfillYesterday(today){
+  const y=addDays(today,-1);
+  let local=null;
+  try{local=JSON.parse(localStorage.getItem('fablehits_'+y)||'null');}catch(e){}
+  if(local?.rows?.length)return;
+  const remote=await fbPull(y);
+  if(remote?.rows?.length)return;
+  prog('Backfilling '+y+'…');
+  const snap={ROWS,MK,PENDING,DAY_RESULTS,CUR_DATE};
+  $('dp').value=y;
+  await loadDay(); // full retro load: predicts, verifies from box scores, grades, pushes summary
+  ROWS=snap.ROWS;MK=snap.MK;PENDING=snap.PENDING;DAY_RESULTS=snap.DAY_RESULTS;CUR_DATE=snap.CUR_DATE;
+  $('dp').value=today;
+  render(null); // restore today's board on screen
+}
+
 async function loadDay(){
   const date=$('dp').value||todayStr();
   CUR_DATE=date;
@@ -1149,7 +1165,24 @@ async function loadDay(){
       }
     });
     const seen=new Set();
-    ROWS=ROWS.map(r=>{seen.add(r.id);return prior[r.id]?{...prior[r.id],locked:true}:r;});
+    ROWS=ROWS.map(r=>{
+      seen.add(r.id);
+      const p=prior[r.id];
+      if(!p)return r;
+      const merged={...p,locked:true};
+      // Integrity rule: flag ONLY when a background auto-lock was a LOCK and the
+      // confirmed lineup drops the fresh grade BELOW the lock threshold. Flag
+      // re-evaluates every Load, so a recovered grade clears it.
+      merged.gradeFlag=false;
+      const baseReasons=(p.reasons||[]).filter(x=>!(x&&x.t&&x.t.indexOf('⚠ Lineup shift')===0));
+      merged.reasons=baseReasons.length?baseReasons:p.reasons;
+      if(p.autoVerified&&r.prob!=null&&p.prob!=null&&p.prob>=CONFIG.lock&&r.prob<CONFIG.lock){
+        merged.gradeFlag=true;
+        merged.freshProb=Math.round(r.prob*1000)/1000;
+        merged.reasons=[...baseReasons,{t:'⚠ Lineup shift after auto-lock knocked this out of lock tier: locked '+((p.prob||0)*100).toFixed(1)+'% but today\u2019s lineup grades it '+(r.prob*100).toFixed(1)+'% (lock \u2265'+Math.round(CONFIG.lock*100)+'%). Not counted toward stats.',k:'bad'}];
+      }
+      return merged;
+    });
     // keep verified rows whose player dropped out of today's fresh pull (late scratch etc.)
     Object.values(prior).forEach(r=>{if(!seen.has(r.id))ROWS.push({...r,locked:true});});
     // same lock rule for every market: verified rows from earlier runs are kept as-is
@@ -1162,7 +1195,18 @@ async function loadDay(){
     Object.keys(MK).forEach(m=>{
       const pm=priorMk[m]||{};
       const seenM=new Set();
-      MK[m]=MK[m].map(r=>{seenM.add(r.id);return pm[r.id]?{...pm[r.id],locked:true,reasons:pm[r.id].reasons||null}:r;});
+      MK[m]=MK[m].map(r=>{
+        seenM.add(r.id);
+        const p=pm[r.id];
+        if(!p)return r;
+        const merged={...p,locked:true,reasons:p.reasons||null};
+        merged.gradeFlag=false;
+        if(m==='hr'&&p.autoVerified&&r.prob!=null&&p.prob!=null&&p.prob>=CONFIG.hrLock&&r.prob<CONFIG.hrLock){
+          merged.gradeFlag=true;
+          merged.freshProb=Math.round(r.prob*1000)/1000;
+        }
+        return merged;
+      });
       Object.values(pm).forEach(r=>{if(!seenM.has(r.id))MK[m].push({...r,locked:true,reasons:r.reasons||null});});
     });
 
@@ -1170,11 +1214,12 @@ async function loadDay(){
     try{localStorage.setItem('fablehits_'+date,JSON.stringify({ts:Date.now(),rows:ROWS,mk:MK,pending:PENDING}));}catch(e){}
     // push compact snapshot for the league (results field preserved via merge)
     prog('Saving to league…');
-    const compact=ROWS.map(r=>({id:r.id,name:r.name,team:r.team,opp:r.opp,slot:r.slot,pit:r.pit,pHand:r.pHand,verified:!!r.verified,prob:Math.round(r.prob*1000)/1000}));
+    const compact=ROWS.map(r=>({id:r.id,name:r.name,team:r.team,opp:r.opp,slot:r.slot,pit:r.pit,pHand:r.pHand,verified:!!r.verified,prob:r.prob!=null?Math.round(r.prob*1000)/1000:null,autoVerified:!!r.autoVerified,gradeFlag:!!r.gradeFlag,unscored:!!r.unscored}));
     const mkCompact={};
     Object.keys(MK).forEach(m=>{
       mkCompact[m]=MK[m].map(r=>({id:r.id,name:r.name,team:r.team,opp:r.opp,pit:r.pit||'',verified:!!r.verified,
         prob:r.prob!=null?Math.round(r.prob*1000)/1000:null,
+        autoVerified:!!r.autoVerified,gradeFlag:!!r.gradeFlag,
         exp:r.exp!=null?Math.round(r.exp*100)/100:null,
         line:r.line??null,lean:r.lean??null,
         edge:r.edge!=null?Math.round(r.edge*100)/100:null}));
@@ -1193,6 +1238,10 @@ async function loadDay(){
     prog('Updating success stats…');
     await computeSuccessStats(); // awaited: stats are current the moment Load ends
     render(null);
+    if(date===todayStr()&&!loadDay._backfilling){
+      loadDay._backfilling=true;
+      try{await backfillYesterday(date);}finally{loadDay._backfilling=false;}
+    }
   }catch(e){
     render('Something broke while loading: '+e.message+'. Tap Load to retry.');
   }finally{
@@ -1220,20 +1269,20 @@ function showCached(){
 function dayTallies(rows,mk,res,dbgDate){
   const t={hits:{h:0,n:0},hr:{h:0,n:0},kP:{w:0,l:0,p:0},kB:{w:0,l:0,p:0},bbP:{w:0,l:0,p:0},bbB:{w:0,l:0,p:0}};
   (rows||[]).forEach(r=>{
-    if(!r.verified||(r.prob||0)<CONFIG.lock)return;
+    if(!r.verified||r.gradeFlag||r.prob==null||(r.prob||0)<CONFIG.lock)return;
     const o=res[r.id]||res[String(r.id)];
     if(!playedBat(o))return;
     t.hits.n++;if((o.h||0)>=1)t.hits.h++;
   });
   ((mk&&mk.hr)||[]).forEach(r=>{
-    if(!r.verified||(r.prob||0)<CONFIG.hrLock)return;
+    if(!r.verified||r.gradeFlag||(r.prob||0)<CONFIG.hrLock)return;
     const o=res[r.id]||res[String(r.id)];
     if(!playedBat(o))return;
     t.hr.n++;if((o.hr||0)>=1)t.hr.h++;
   });
   ['kP','kB','bbP','bbB'].forEach(m=>{
     ((mk&&mk[m])||[]).forEach(r=>{
-      if(!r.verified)return;
+      if(!r.verified||r.gradeFlag)return;
       const gr=lineGrade(r,MK_ACTUAL[m](res[r.id]||res[String(r.id)]));
       if(gr==='W')t[m].w++;else if(gr==='L')t[m].l++;else if(gr==='P')t[m].p++;
     });
@@ -1439,7 +1488,7 @@ async function manualRebuild(){
 }
 function dayPlayerRows(R){
   const res=R.results||{};
-  const note=r=>r.verified?'':' <span class="vbadge">○ not confirmed — not counted</span>';
+  const note=r=>r.gradeFlag?' <span class="vbadge" style="color:var(--warm)">⚠ lineup shift — not counted</span>':(r.verified?'':' <span class="vbadge">○ not confirmed — not counted</span>');
   let rows;
   if(RM==='hits'||RM==='hr'){
     const src=RM==='hits'?(R.rows||[]):((R.mk?.hr)||[]);
@@ -1607,7 +1656,7 @@ function drawList(rows){
       <div class="crow">
         <div class="prob ${pcls}">${pct}%</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${todayMark('hits',r)}${r.locked?' <span title="Verified — score locked" style="font-size:.6rem">🔒</span>':''}</div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${todayMark('hits',r)}${r.locked?' <span title="Verified — score locked" style="font-size:.6rem">🔒</span>':''}${r.gradeFlag?' <span title="Lineup shifted after auto-lock — not counted" style="color:var(--warm);font-size:.68rem">⚠</span>':''}</div>
           <div class="meta">${r.team} #${r.slot??''} vs ${r.pit} (${r.pHand||'?'}HP) · ${r.opp}</div>
         </div>
         <span class="tier ${tc}">${tl}</span>
@@ -1631,7 +1680,7 @@ function drawProbList(rows,tierFn,fmt){
       <div class="crow">
         <div class="prob ${r.prob>=0.09?'p-hi':r.prob>=0.06?'p-md':'p-lo'}">${fmt(r)}</div>
         <div class="who">
-          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${todayMark('hr',r)}${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}</div>
+          <div class="nm">${r.name} <span class="vbadge ${r.verified?'v':''}">${r.verified?'● Confirmed matchup':'○ Not confirmed'}</span>${todayMark('hr',r)}${r.locked?' <span title="Verified — locked" style="font-size:.6rem">🔒</span>':''}${r.gradeFlag?' <span title="Lineup shifted after auto-lock — not counted" style="color:var(--warm);font-size:.68rem">⚠</span>':''}</div>
           <div class="meta">${r.team}${r.slot?' #'+r.slot:''} vs ${r.pit||r.opp}${r.pHand?' ('+r.pHand+'HP)':''} · ${r.opp}</div>
         </div>
         <span class="tier ${tc}">${tl}</span>
